@@ -12,7 +12,7 @@
 - 🚀 **Движок nfqws2 + Lua:** Полная поддержка сложных стратегий дублирования, фрагментации, подмены SNI и фаззинга пакетов.
 - ⚡ **Нулевой расход батареи (inotifyd watcher):** Автоматическое отслеживание изменений конфигурации в режиме реального времени без демонов-прошивок.
 - 🎯 **Выборочная фильтрация:** Настройка через `apps.list`, `auto_domains.list`, `exclude_domains.list`, `force_tcp_apps.list`.
-- 🌐 **WebUI & Zygisk integration:** Поддержка визуального интерфейса и интеграция с модулями Zygisk.
+- 🌐 **Управление:** Поддержка CLI-панели и локального WebUI без зависимости от Zygisk.
 - 📱 **Кроссплатформенность:** Совместимость с Android 7.0 - 15+ (ARM64, ARMv7, x86_64).
 
 ---
@@ -25,7 +25,7 @@
 - 🚀 **nfqws2 + Lua Engine:** Advanced packet manipulation strategies, including TLS SNI desync, packet fragmentation, and fooling methods.
 - ⚡ **Zero Battery Impact (inotifyd watcher):** Real-time config file updates via inotify watchers without CPU overhead.
 - 🎯 **Selective Splitting:** Highly configurable via `apps.list`, `auto_domains.list`, `exclude_domains.list`, and `force_tcp_apps.list`.
-- 🌐 **WebUI & Zygisk Ready:** Built-in web configuration dashboard and Zygisk module hooks.
+- 🌐 **Management:** CLI control panel and local WebUI without a Zygisk dependency.
 - 📱 **Wide Device Compatibility:** Supports Android 7.0 through Android 15+ (ARM64, ARMv7, x86_64).
 
 ---

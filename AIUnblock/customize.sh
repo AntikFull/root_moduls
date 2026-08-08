@@ -16,22 +16,21 @@ extract_required_file() {
   [ -s "$destination" ]
 }
 
-ui_print "- Установка AI Unblock RU v2.2.1..."
+ui_print "- Установка AI Unblock RU v2.2.2..."
 ui_print "- ПРИМЕЧАНИЕ ПО БЕЗОПАСНОСТИ:"
 ui_print "  • Для Gemini, ChatGPT, Claude и Grok используются шлюзы Smart DNS из proxies.conf."
 ui_print "  • TLS-валидация гарантирует сквозное шифрование и подлинность целевых сертификатов."
 ui_print "  • Шлюзам Smart DNS виден IP клиента, SNI доменов и тайминги подключений."
 
-sed -i 's/\r$//' "$MODPATH/system/etc/hosts" 2>/dev/null
-[ -f "$MODPATH/system/etc/hosts.adblock" ] && sed -i 's/\r$//' "$MODPATH/system/etc/hosts.adblock" 2>/dev/null
+[ -f "$MODPATH/etc/hosts.ai" ] && sed -i 's/\r$//' "$MODPATH/etc/hosts.ai" 2>/dev/null
+[ -f "$MODPATH/etc/hosts.adblock" ] && sed -i 's/\r$//' "$MODPATH/etc/hosts.adblock" 2>/dev/null
 
-# Сохраняем локальное состояние модуля при обновлении
+# Сохраняем локальное состояние модуля при обновлении (кроме install.conf)
 if [ "$OLD_MODPATH" != "$MODPATH" ] && [ -d "$OLD_MODPATH" ]; then
   for state_file in \
     app_locales.state \
     proxies.override \
-    smartdns.user.conf \
-    install.conf; do
+    smartdns.user.conf; do
     [ -f "$OLD_MODPATH/$state_file" ] &&
       cp -f "$OLD_MODPATH/$state_file" "$MODPATH/$state_file"
   done
@@ -46,55 +45,81 @@ fi
 # Временные маркеры миграции больше не используются.
 rm -f "$MODPATH/.global_locale_restored" "$MODPATH/.google_search_unmanaged"
 
-# Функция опроса клавиш громкости (Vol+ = 1, Vol- = 0, дефолт по таймауту = default_val)
+CHOSEN_KEY=1
+
 choosekey() {
   local prompt_text="$1"
-  local default_val="$2"
-  local sel="$default_val"
+  local default_val="${2:-1}"
+  CHOSEN_KEY="$default_val"
 
   ui_print "  $prompt_text"
   ui_print "  [Громкость +] = ДА | [Громкость -] = НЕТ"
-  ui_print "  (Автовыбор через 4 сек: $([ "$default_val" -eq 1 ] && echo "ДА" || echo "НЕТ"))"
 
-  if [ -t 0 ] || [ -c /dev/input/event0 ]; then
-    local timeout=4
-    local start_time=$(date +%s)
-    while [ $(($(date +%s) - start_time)) -lt $timeout ]; do
-      local key_event=$(timeout 1 getevent -l 2>/dev/null | grep -E "KEY_VOLUMEUP|KEY_VOLUMEDOWN")
-      if echo "$key_event" | grep -q "KEY_VOLUMEUP"; then
-        sel=1
-        ui_print "  -> Выбрано: ДА"
-        return $sel
-      elif echo "$key_event" | grep -q "KEY_VOLUMEDOWN"; then
-        sel=0
-        ui_print "  -> Выбрано: НЕТ"
-        return $sel
-      fi
-    done
-  fi
-
-  ui_print "  -> Применено значение по умолчанию: $([ "$sel" -eq 1 ] && echo "ДА" || echo "НЕТ")"
-  return $sel
+  while true; do
+    local key_events
+    key_events=$(timeout 3 getevent -l -c 15 2>/dev/null)
+    if echo "$key_events" | grep -q "KEY_VOLUMEUP"; then
+      CHOSEN_KEY=1
+      ui_print "  -> Выбрано: ДА"
+      return 0
+    elif echo "$key_events" | grep -q "KEY_VOLUMEDOWN"; then
+      CHOSEN_KEY=0
+      ui_print "  -> Выбрано: НЕТ"
+      return 0
+    fi
+    sleep 0.1
+  done
 }
 
-# Если install.conf еще не существует, проводим опрос или применяем дефолты
-if [ ! -f "$MODPATH/install.conf" ]; then
-  ui_print "--------------------------------------------------"
-  ui_print "- Настройка компонентов AI Unblock RU:"
+# Всегда проводим интерактивный опрос кнопок при установке
+ui_print "--------------------------------------------------"
+ui_print "- Настройка компонентов AI Unblock RU:"
 
-  choosekey "1. Монтировать AI-роутинг hosts (гео-разблокировка ИИ)?" 1
-  ENABLE_HOSTS_ROUTING=$?
+choosekey "1. Монтировать AI-роутинг hosts (гео-разблокировка ИИ)?" 1
+ENABLE_HOSTS_ROUTING=$CHOSEN_KEY
 
-  choosekey "2. Включить AdBlock (блокировку рекламы hosts.adblock)?" 1
-  ENABLE_ADBLOCK=$?
+choosekey "2. Включить AdBlock (блокировку рекламы hosts.adblock)?" 1
+ENABLE_ADBLOCK=$CHOSEN_KEY
 
-  echo "ENABLE_HOSTS_ROUTING=$ENABLE_HOSTS_ROUTING" > "$MODPATH/install.conf"
-  echo "ENABLE_ADBLOCK=$ENABLE_ADBLOCK" >> "$MODPATH/install.conf"
-  ui_print "- Конфигурация сохранена в install.conf"
-  ui_print "--------------------------------------------------"
-else
-  ui_print "- Настройки сохранены из предыдущей версии (install.conf)"
-fi
+echo "ENABLE_HOSTS_ROUTING=$ENABLE_HOSTS_ROUTING" > "$MODPATH/install.conf"
+echo "ENABLE_ADBLOCK=$ENABLE_ADBLOCK" >> "$MODPATH/install.conf"
+ui_print "- Конфигурация сохранена в install.conf"
+ui_print "--------------------------------------------------"
+
+# Настройка system/etc/hosts в зависимости от выбора в install.conf
+prepare_hosts_files() {
+  local ai_hosts="$MODPATH/etc/hosts.ai"
+  local adblock_hosts="$MODPATH/etc/hosts.adblock"
+
+  [ -f "$MODPATH/install.conf" ] && . "$MODPATH/install.conf"
+  local enable_routing=${ENABLE_HOSTS_ROUTING:-1}
+  local enable_adblock=${ENABLE_ADBLOCK:-1}
+
+  if [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 0 ]; then
+    ui_print "- Hosts отключен. Очищаем папку system/etc/hosts для предотвращения конфликтов."
+    rm -rf "$MODPATH/system" 2>/dev/null
+  else
+    mkdir -p "$MODPATH/system/etc"
+    local target_hosts="$MODPATH/system/etc/hosts"
+
+    if [ "$enable_routing" -eq 1 ] && [ "$enable_adblock" -eq 0 ]; then
+      [ -f "$ai_hosts" ] && cp -f "$ai_hosts" "$target_hosts"
+    elif [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 1 ]; then
+      [ -f "$adblock_hosts" ] && cp -f "$adblock_hosts" "$target_hosts"
+    elif [ "$enable_routing" -eq 1 ] && [ "$enable_adblock" -eq 1 ]; then
+      if [ -f "$ai_hosts" ] && [ -f "$adblock_hosts" ]; then
+        sed 's/\r$//' "$ai_hosts" > "$target_hosts" 2>/dev/null
+        echo "" >> "$target_hosts"
+        sed 's/\r$//' "$adblock_hosts" >> "$target_hosts" 2>/dev/null
+      elif [ -f "$ai_hosts" ]; then
+        cp -f "$ai_hosts" "$target_hosts"
+      fi
+    fi
+    [ -f "$target_hosts" ] && chmod 0644 "$target_hosts" 2>/dev/null
+  fi
+}
+
+prepare_hosts_files
 
 extract_required_file "bin/aiunblock-router" "$MODPATH/bin/aiunblock-router" ||
   abort "Не удалось извлечь bin/aiunblock-router. ZIP повреждён или распакован не полностью."
@@ -110,27 +135,23 @@ if command -v sha256sum >/dev/null 2>&1 && [ -f "$MODPATH/bin/SHA256SUMS" ]; the
 fi
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
-set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
-set_perm "$MODPATH/service.sh" 0 0 0755
-set_perm "$MODPATH/uninstall.sh" 0 0 0755
-set_perm "$MODPATH/customize.sh" 0 0 0755
+[ -f "$MODPATH/post-fs-data.sh" ] && set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
+[ -f "$MODPATH/service.sh" ] && set_perm "$MODPATH/service.sh" 0 0 0755
+[ -f "$MODPATH/uninstall.sh" ] && set_perm "$MODPATH/uninstall.sh" 0 0 0755
+[ -f "$MODPATH/customize.sh" ] && set_perm "$MODPATH/customize.sh" 0 0 0755
 [ -f "$MODPATH/action.sh" ] && set_perm "$MODPATH/action.sh" 0 0 0755
-set_perm "$MODPATH/skip_mount" 0 0 0644
-set_perm "$MODPATH/bin/aiunblock-router" 0 0 0700
-set_perm "$MODPATH/bin/curl" 0 0 0755
-set_perm "$MODPATH/sni_routes.conf" 0 0 0600
+[ -f "$MODPATH/bin/aiunblock-router" ] && set_perm "$MODPATH/bin/aiunblock-router" 0 0 0700
+[ -f "$MODPATH/bin/curl" ] && set_perm "$MODPATH/bin/curl" 0 0 0755
+[ -f "$MODPATH/sni_routes.conf" ] && set_perm "$MODPATH/sni_routes.conf" 0 0 0600
 [ -f "$MODPATH/proxies.conf" ] && set_perm "$MODPATH/proxies.conf" 0 0 0644
 [ -f "$MODPATH/proxies.override.example" ] && set_perm "$MODPATH/proxies.override.example" 0 0 0644
 [ -f "$MODPATH/smartdns.conf" ] && set_perm "$MODPATH/smartdns.conf" 0 0 0644
 [ -f "$MODPATH/smartdns.user.conf.example" ] && set_perm "$MODPATH/smartdns.user.conf.example" 0 0 0644
 [ -f "$MODPATH/smartdns.user.conf" ] && set_perm "$MODPATH/smartdns.user.conf" 0 0 0600
 [ -f "$MODPATH/install.conf" ] && set_perm "$MODPATH/install.conf" 0 0 0644
-[ -f "$MODPATH/app_locales.state" ] &&
-  set_perm "$MODPATH/app_locales.state" 0 0 0600
-[ -f "$MODPATH/proxies.override" ] &&
-  set_perm "$MODPATH/proxies.override" 0 0 0600
-[ -d "$MODPATH/gateways" ] &&
-  set_perm_recursive "$MODPATH/gateways" 0 0 0700 0600
+[ -f "$MODPATH/app_locales.state" ] && set_perm "$MODPATH/app_locales.state" 0 0 0600
+[ -f "$MODPATH/proxies.override" ] && set_perm "$MODPATH/proxies.override" 0 0 0600
+[ -d "$MODPATH/gateways" ] && set_perm_recursive "$MODPATH/gateways" 0 0 0700 0600
 
 [ -x "$MODPATH/bin/aiunblock-router" ] ||
   abort "bin/aiunblock-router извлечён, но не получил право на запуск."

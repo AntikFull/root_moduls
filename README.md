@@ -6,7 +6,7 @@
 
 ## <a name="русский"></a> 🇷🇺 Описание проекта (Russian)
 
-Коллекция модулей для **Magisk / KernelSU / APatch**, предназначенных для оптимизации Android, разблокировки AI-сервисов, обхода DPI-блокировок, отключения аналитики и рекламы, а также управления системными функциями.
+Коллекция оригинальных модулей для **Magisk / KernelSU / APatch**, предназначенных для разблокировки AI-сервисов, обхода DPI-блокировок, оптимизации системы, отключения аналитики и рекламы.
 
 ### 📦 Список модулей в репозитории:
 
@@ -15,13 +15,12 @@
 3. **[alice-bt-launcher](./alice-bt-launcher)** — Автоматический фоновый запуск и контроль работы сервиса Алиса AI при подключении Bluetooth-наушников.
 4. **[nfqttl-ecubz](./nfqttl-ecubz)** — Коррекция TTL/Hop Limit и замена заголовков для обхода ограничений сотовых операторов на раздачу интернета.
 5. **[zapret2-module](./zapret2-module)** — Автономный обход DPI на базе nfqws2 + Lua с нулевым расходом батареи.
-6. **[Magisk-DNS-Servers](./Magisk-DNS-Servers)** — Настройка публичных и защищенных DNS-серверов (Cloudflare, Google, AdGuard, Quad9 и др.).
 
 ---
 
 ## <a name="english"></a> 🇬🇧 Project Description (English)
 
-Unified collection of **Magisk / KernelSU / APatch** modules for Android optimization, AI services unblocking, DPI bypass, telemetry/ad disabling, and system configuration.
+Unified collection of original **Magisk / KernelSU / APatch** modules for Android optimization, AI services unblocking, DPI bypass, telemetry/ad disabling, and system configuration.
 
 ### 📦 Included Modules:
 
@@ -30,7 +29,6 @@ Unified collection of **Magisk / KernelSU / APatch** modules for Android optimiz
 3. **[alice-bt-launcher](./alice-bt-launcher)** — Automatic background launch and process management for Alice AI assistant upon Bluetooth connection.
 4. **[nfqttl-ecubz](./nfqttl-ecubz)** — TTL / Hop Limit fixing and header spoofing to bypass mobile carrier tethering restrictions.
 5. **[zapret2-module](./zapret2-module)** — Autonomous zero-battery DPI bypass module powered by nfqws2 + Lua engine.
-6. **[Magisk-DNS-Servers](./Magisk-DNS-Servers)** — Collection of custom & secured DNS server modules (Cloudflare, Google, AdGuard, Quad9, etc.).
 
 ---
 

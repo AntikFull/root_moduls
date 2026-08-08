@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# AI Unblock RU v2.2.1 — service.sh
+# AI Unblock RU v2.2.2 — service.sh
 
 MODDIR=${0%/*}
 
@@ -1138,9 +1138,8 @@ next_check_interval() {
 
 mount_hosts() {
   local sys_hosts="/system/etc/hosts"
-  local ai_hosts="$MODDIR/system/etc/hosts"
-  local adblock_hosts="$MODDIR/system/etc/hosts.adblock"
-  local target_hosts=""
+  local ai_hosts="$MODDIR/etc/hosts.ai"
+  local adblock_hosts="$MODDIR/etc/hosts.adblock"
 
   local enable_routing=1
   local enable_adblock=1
@@ -1155,34 +1154,29 @@ mount_hosts() {
   case "$enable_routing" in 0|1) ;; *) enable_routing=1 ;; esac
   case "$enable_adblock" in 0|1) ;; *) enable_adblock=1 ;; esac
 
-  if mount | grep -q "$sys_hosts"; then
-    umount -l "$sys_hosts" 2>/dev/null
-  fi
-
   if [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 0 ]; then
     log "Монтирование hosts отключено пользователем в install.conf"
+    rm -rf "$MODDIR/system" 2>/dev/null
     return 0
-  elif [ "$enable_routing" -eq 1 ] && [ "$enable_adblock" -eq 0 ]; then
-    target_hosts="$ai_hosts"
-  elif [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 1 ]; then
-    target_hosts="$adblock_hosts"
-  elif [ "$enable_routing" -eq 1 ] && [ "$enable_adblock" -eq 1 ]; then
-    target_hosts="$MODDIR/.merged_hosts"
-    if [ -f "$ai_hosts" ] && [ -f "$adblock_hosts" ]; then
-      sed 's/\r$//' "$ai_hosts" > "$target_hosts"
-      echo "" >> "$target_hosts"
-      sed 's/\r$//' "$adblock_hosts" >> "$target_hosts"
-      chmod 0644 "$target_hosts" 2>/dev/null
-    elif [ -f "$ai_hosts" ]; then
-      target_hosts="$ai_hosts"
-    fi
   fi
 
-  [ -n "$target_hosts" ] && [ -f "$target_hosts" ] || return 0
-  [ -f "$sys_hosts" ] || return 0
+  mkdir -p "$MODDIR/system/etc"
+  local target_hosts="$MODDIR/system/etc/hosts"
 
-  mount -o bind "$target_hosts" "$sys_hosts" 2>/dev/null || \
-  mount --bind "$target_hosts" "$sys_hosts" 2>/dev/null
+  if [ "$enable_routing" -eq 1 ] && [ "$enable_adblock" -eq 0 ]; then
+    [ -f "$ai_hosts" ] && cp -f "$ai_hosts" "$target_hosts"
+  elif [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 1 ]; then
+    [ -f "$adblock_hosts" ] && cp -f "$adblock_hosts" "$target_hosts"
+  elif [ "$enable_routing" -eq 1 ] && [ "$enable_adblock" -eq 1 ]; then
+    if [ -f "$ai_hosts" ] && [ -f "$adblock_hosts" ]; then
+      sed 's/\r$//' "$ai_hosts" > "$target_hosts" 2>/dev/null
+      echo "" >> "$target_hosts"
+      sed 's/\r$//' "$adblock_hosts" >> "$target_hosts" 2>/dev/null
+    elif [ -f "$ai_hosts" ]; then
+      cp -f "$ai_hosts" "$target_hosts"
+    fi
+  fi
+  [ -f "$target_hosts" ] && chmod 0644 "$target_hosts" 2>/dev/null
 }
 
 if [ "$1" = "--remount-hosts" ]; then
@@ -1198,7 +1192,7 @@ main_loop() {
   mount_hosts
   secure_permissions
   rotate_log
-  log "AI Unblock v2.2.1: supervisor запущен (PID $$)"
+  log "AI Unblock v2.2.2: supervisor запущен (PID $$)"
 
   acquire_lock || return 0
   trap shutdown_service EXIT

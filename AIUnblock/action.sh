@@ -30,8 +30,6 @@ elif [ "$ENABLE_HOSTS_ROUTING" -eq 1 ] && [ "$ENABLE_ADBLOCK" -eq 0 ]; then
   ENABLE_HOSTS_ROUTING=0
   ENABLE_ADBLOCK=0
   echo "Переключено на: Hosts отключен полностью (только SNI/DNAT)"
-  # Явное отмонтирование hosts при отключении обох опций
-  mount | grep -q "/system/etc/hosts" && umount -l /system/etc/hosts 2>/dev/null
 elif [ "$ENABLE_HOSTS_ROUTING" -eq 0 ] && [ "$ENABLE_ADBLOCK" -eq 0 ]; then
   ENABLE_HOSTS_ROUTING=0
   ENABLE_ADBLOCK=1
@@ -52,3 +50,4 @@ if [ -f "$MODDIR/service.sh" ]; then
 fi
 
 echo "Настройки сохранены в install.conf"
+
