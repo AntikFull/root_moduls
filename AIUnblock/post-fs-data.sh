@@ -4,9 +4,6 @@
 MODDIR=${0%/*}
 MODULE_ID="AIUnblock"
 
-# Очистка кэша мета-оверлеев meta-overlayfs для сброса hosts
-[ -d "/data/adb/modules/meta-overlayfs/mnt/AIUnblock" ] && rm -rf "/data/adb/modules/meta-overlayfs/mnt/AIUnblock" 2>/dev/null
-
 [ -f "$MODDIR/lib/hosts_conflict.sh" ] && . "$MODDIR/lib/hosts_conflict.sh"
 
 mount_hosts() {

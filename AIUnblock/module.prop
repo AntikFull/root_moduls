@@ -1,6 +1,6 @@
 id=AIUnblock
 name=AI Unblock RU
-version=v2.2.6
-versionCode=226
+version=v2.2.7
+versionCode=227
 author=eCubz (https://t.me/eCubz)
 description=Динамический Smart DNS DoH и точный SNI-маршрут Gemini/NotebookLM, независимый failover ChatGPT/Claude/Grok, hosts/AdBlock. t.me/module_ecubz
