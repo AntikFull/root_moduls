@@ -42,8 +42,8 @@ if [ "$OLD_MODPATH" != "$MODPATH" ] && [ -d "$OLD_MODPATH" ]; then
   done
 fi
 
-# Временные маркеры миграции больше не используются.
-rm -f "$MODPATH/.global_locale_restored" "$MODPATH/.google_search_unmanaged"
+# Временные маркеры миграции и старый disable при ручной переустановке
+rm -f "$MODPATH/.global_locale_restored" "$MODPATH/.google_search_unmanaged" "$MODPATH/disable"
 
 CHOSEN_KEY=1
 
