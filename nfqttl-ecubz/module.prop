@@ -3,4 +3,4 @@ name=NFQTTL Stealth Header & TTL Fix
 version=v8.4-fixed
 versionCode=840
 author=eCubz (https://t.me/eCubz)
-description=Автоматическая коррекция TTL/HL и подмена сетевых заголовков для бесплатного обхода ограничений на раздачу мобильного интернета. Поддержка: https://t.me/module_ecubz
+description=Обход ограничений раздачи интернета (TTL/HL fix + NFQUEUE stealth modification). Поддержка: https://t.me/module_ecubz

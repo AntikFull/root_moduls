@@ -1,6 +1,6 @@
 id=zapret2-android
 name=Zapret2 eCubz
-version=v2.0.1
-versionCode=2001
+version=v2.3.4
+versionCode=2340
 author=eCubz (https://t.me/eCubz)
-description=Автономный обход DPI на базе zapret2 (nfqws2 + Lua) с нулевым расходом батареи (inotifyd watcher), мультистратегиями circular, выборочным расщеплением приложений и доменов. Telegram группа: https://t.me/module_ecubz
+description=Обход замедлений и блокировок YouTube/DPI через zapret2 (nfqws2 + Lua). Автонастройка и поддержка: https://t.me/module_ecubz

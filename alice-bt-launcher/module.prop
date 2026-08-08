@@ -3,4 +3,4 @@ name=Alice AI Bluetooth Auto-Launcher
 version=v1.0.0
 versionCode=100
 author=eCubz (https://t.me/eCubz)
-description=Автоматический фоновый запуск и контроль работы Алиса AI при подключении наушников Яндекс Дропс (60:3D:61:B6:8B:00). Поддержка: https://t.me/module_ecubz
+description=Автоматический запуск Яндекс Алисы при подключении к Bluetooth-устройствам. Поддержка: https://t.me/module_ecubz

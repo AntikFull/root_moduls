@@ -1,0 +1,9 @@
+# Python & temporary build artifacts
+__pycache__/
+*.pyc
+*.old
+*.orig
+*.log
+
+# C/C++ build artifacts
+**/obj/

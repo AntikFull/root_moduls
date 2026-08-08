@@ -1,0 +1,87 @@
+name: Automated Module Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Module Version
+        id: get_version
+        run: |
+          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | tr -d '\r\n')
+          VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2 | tr -d '\r\n')
+          if [ -z "$VERSION" ]; then
+            VERSION="v1.0.0"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "Module Version: $VERSION (code: $VERSION_CODE)"
+
+      - name: Convert Line Endings to LF (Unix)
+        run: |
+          sudo apt-get update && sudo apt-get install -y dos2unix
+          find . -type f \( -name "*.sh" -o -name "*.prop" -o -name "*.list" -o -name "*.conf" -o -name "*.json" -o -name "zapret2-control" \) -exec dos2unix {} +
+
+      - name: Pack Magisk / KernelSU / APatch Module Zip
+        run: |
+          ZIP_NAME="zapret2-${VERSION}.zip"
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          
+          # Упаковка модуля в zip со слэшами Unix
+          zip -r9 "$ZIP_NAME" \
+            module.prop \
+            service.sh \
+            action.sh \
+            uninstall.sh \
+            zapret2.conf \
+            apps.list \
+            exclude.list \
+            README.md \
+            system \
+            common \
+            binaries \
+            META-INF \
+            zygisk \
+            update.json \
+            -x "*.git*" "*.github*" "TEMP/*" "module/*"
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: "Zapret 2 for Android ${{ env.VERSION }}"
+          body: |
+            ## 🚀 Релиз модуля Zapret 2 for Android (${{ env.VERSION }})
+            
+            **Автор:** [eCubz](https://t.me/eCubz)
+            **Совместимость:** Magisk, KernelSU, KernelSU-Next, APatch
+            
+            ### ✨ Изменения в этом выпуске:
+            - Автоматический режим **EXCLUDE** по умолчанию с предустановленным `exclude.list` (Госуслуги, Яндекс, Алиса, Банки).
+            - Проверенная и эффективная стратегия **ALT4** (`fake badseq + multisplit`) для обхода замедления YouTube и Discord.
+            - Полная поддержка всех 4-х архитектур (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`).
+            
+            ### 📲 Установка:
+            1. Скачайте прикрепленный файл `${{ env.ZIP_NAME }}`.
+            2. Установите его в **KernelSU / APatch / Magisk**.
+            3. Перезагрузите устройство.
+          draft: false
+          prerelease: false
+          files: ${{ env.ZIP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

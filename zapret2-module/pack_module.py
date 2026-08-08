@@ -2,11 +2,11 @@ import os
 import zipfile
 
 SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_ZIP = os.path.abspath(os.path.join(SOURCE_DIR, "..", "..", "..", "module", "zapret2-v2.0.1-eCubz.zip"))
+OUTPUT_ZIP = os.path.abspath(os.path.join(SOURCE_DIR, "..", "..", "module", "zapret2-v2.3.4-eCubz.zip"))
 
 # Список исключений для упаковки
 EXCLUDE_ITEMS = {
-    ".git", ".github", ".gitignore", ".gitattributes", "pack_module.py", "install.zip", "install.zip.bak", "zygisk"
+    ".git", ".github", ".gitignore", "pack_module.py", "install.zip", "install.zip.bak", "update.json"
 }
 
 def fix_line_endings_and_pack():
@@ -20,7 +20,7 @@ def fix_line_endings_and_pack():
             # Фильтрация директорий
             dirs[:] = [d for d in dirs if d not in EXCLUDE_ITEMS]
             for file in files:
-                if file in EXCLUDE_ITEMS or file.lower().endswith('.zip'):
+                if file in EXCLUDE_ITEMS:
                     continue
                 file_path = os.path.join(root, file)
                 rel_path = os.path.relpath(file_path, SOURCE_DIR).replace('\\', '/')

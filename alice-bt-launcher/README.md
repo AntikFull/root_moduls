@@ -1,53 +1,63 @@
 # Alice AI Bluetooth Auto-Launcher
 
-[🇷🇺 Русский](#русский) | [🇬🇧 English](#english)
+**Кроссплатформенный модуль для Magisk, KernelSU и APatch**
+
+Модуль отслеживает подключение Bluetooth-наушников **Яндекс Дропс** (`60:3D:61:B6:8B:00`), автоматически запускает приложение **Алиса AI** (`com.yandex.aliceapp`) в фоновом режиме, удерживает его в памяти во время использования и корректно выгружает при отключении.
 
 ---
 
-## <a name="русский"></a> 🇷🇺 Описание (Russian)
+## 📌 Авторство и контакты
 
-**Alice AI Bluetooth Auto-Launcher** — модуль для Magisk / KernelSU / APatch, обеспечивающий автоматический фоновый запуск и контроль работы сервиса **Алиса AI** (Яндекс) при подключении Bluetooth-наушников (например, Яндекс Дропс).
-
-### ✨ Основные возможности
-- 🎧 **Автоматическое обнаружение Bluetooth:** Отслеживание подключений по MAC-адресу или названию устройства.
-- 🚀 **Фоновый запуск Алисы:** Автоматический старт ассистента без необходимости открывать приложение вручную.
-- 🔄 **Авто-восстановление:** Перезапуск службы при случайном закрытии или сбое.
-- 🛡️ **Низкое энергопотребление:** Минимальная нагрузка на систему и батарею.
-
-### 🛠️ Установка и настройка
-1. Установите ZIP-архив модуля через **Magisk / KernelSU / APatch**.
-2. Перезагрузите устройство.
-3. Отредактируйте `/data/adb/modules/alice-bt-launcher/config.conf` для указания MAC-адреса ваших наушников (по умолчанию задан адрес `60:3D:61:B6:8B:00`).
+* **Автор:** eCubz ([Telegram профиль](https://t.me/eCubz))
+* **Канал и группа поддержки:** [t.me/module_ecubz](https://t.me/module_ecubz)
 
 ---
 
-## <a name="english"></a> 🇬🇧 Description (English)
+## ⚡ Ключевые особенности
 
-**Alice AI Bluetooth Auto-Launcher** is a Magisk / KernelSU / APatch module designed for automatic background launch and process control of the **Alice AI** assistant (Yandex) when specified Bluetooth headphones (e.g. Yandex Drops) are connected.
-
-### ✨ Features
-- 🎧 **Bluetooth Detection:** Monitors connection state by device MAC address or Bluetooth name.
-- 🚀 **Auto Launch:** Automatically starts the Alice AI assistant upon headset connection.
-- 🔄 **Auto Recovery:** Restores the background service if terminated.
-- 🛡️ **Battery Efficient:** Optimized background execution with zero power draw when idle.
-
-### 🛠️ Installation & Setup
-1. Flash the module ZIP archive via **Magisk / KernelSU / APatch**.
-2. Reboot your device.
-3. Edit `/data/adb/modules/alice-bt-launcher/config.conf` to set your target Bluetooth device MAC address (default: `60:3D:61:B6:8B:00`).
+- 🚀 **Фоновый запуск:** При подключении наушников приложение Алиса AI мгновенно запускается и сворачивается на рабочий стол, не мешая текущей работе на экране.
+- 🔄 **Keep-Alive (Автовосстановление):** Если Android выгрузит приложение из ОЗУ из-за нехватки памяти или вы случайно смахнете его из недавних, модуль автоматически перезапустит его в фоне.
+- 🛡 **5-секундный буфер отсоединения:** При потере связи с наушниками модуль выдерживает 5-секундную паузу и делает контрольную проверку. Кратковременные помехи сигнала не приведут к выгрузке приложения.
+- 🔋 **Энергоэффективность:** Пассивный фильтр `dumpsys` с минимальной задержкой — 0% лишней нагрузки на CPU в режиме ожидания.
+- ⚙️ **Гибкая конфигурация:** Все параметры вынесены в `config.conf`. В любой момент можно изменить MAC-адрес наушников, имя пакета или интервалы.
 
 ---
 
-## 👨‍💻 Автор и Сообщество / Author & Community
-- **Автор / Author:** eCubz ([https://t.me/eCubz](https://t.me/eCubz))
-- **Telegram Чат / Support Group:** [https://t.me/module_ecubz](https://t.me/module_ecubz)
+## ⚙️ Файл конфигурации (`config.conf`)
+
+Конфигурационный файл расположен в директории модуля `/data/adb/modules/alice-bt-launcher/config.conf`:
+
+```ini
+# MAC-адрес целевых Bluetooth наушников
+TARGET_MAC="60:3D:61:B6:8B:00"
+
+# Имя пакета приложения
+TARGET_PKG="com.yandex.aliceapp"
+
+# Главный Activity приложения
+TARGET_ACTIVITY="com.yandex.aliceapp/.ui.MainActivity"
+
+# Задержка подстраховки при отключении наушников (в секундах)
+DISCONNECT_DELAY=5
+
+# Интервал проверки активности приложения при подключенных наушниках (в секундах)
+KEEP_ALIVE_INTERVAL=10
+
+# Сворачивать ли приложение на рабочий стол после запуска (1 - да, 0 - нет)
+MINIMIZE_TO_BACKGROUND=1
+```
 
 ---
 
-## ☕ Донаты и поддержка / Donations
-Ваша поддержка помогает развивать и поддерживать проекты! / Your support helps keep these projects active!
+## 🛠 Установка
 
-- 💳 **СБП:** `+7 923 618-89-93` ⭐
-- 🟨 **Т-Банк:** [Перевод Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
-- 👁️ **Crypto:** [USDT | GRAM (Telegram Crypto Bot)](http://t.me/send?start=IVjCT8LiszJ2)
-- 💎 **TON Wallet (USDT):** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
+1. Скачайте последнюю версию релизного архива `alice-bt-launcher-v1.0.0.zip`.
+2. Установите архив через менеджер **Magisk**, **KernelSU** или **APatch**.
+3. Перезагрузите устройство.
+4. При первом подключении наушников Яндекс Дропс приложение Алиса AI откроется в фоновом режиме.
+
+---
+
+## 📄 Лицензия
+
+Модуль распространяется бесплатно под лицензией MIT. При распространении сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.

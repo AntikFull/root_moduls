@@ -37,7 +37,6 @@ chmod 0755 "$MODPATH/system/bin/zapret2-control" 2>/dev/null
 [ -f "$MODPATH/service.sh" ] && chmod 0755 "$MODPATH/service.sh"
 [ -f "$MODPATH/action.sh" ] && chmod 0755 "$MODPATH/action.sh"
 [ -f "$MODPATH/uninstall.sh" ] && chmod 0755 "$MODPATH/uninstall.sh"
-[ -f "$MODPATH/webroot/cgi-bin/api" ] && chmod 0755 "$MODPATH/webroot/cgi-bin/api" 2>/dev/null
+[ -f "$MODPATH/on_change.sh" ] && chmod 0755 "$MODPATH/on_change.sh"
 
 ui_print "- Установка zapret2 завершена успешно!"
-
