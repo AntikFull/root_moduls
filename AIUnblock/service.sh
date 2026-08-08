@@ -6,9 +6,11 @@ MODULE_ID="AIUnblock"
 
 [ -f "$MODDIR/lib/hosts_conflict.sh" ] && . "$MODDIR/lib/hosts_conflict.sh"
 
-LOG="$MODDIR/dnat.log"
+LOG_DIR="/sdcard/eCubz"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/AIUnblock_debug.log"
 LOG_OLD="$MODDIR/dnat.log.1"
-ROUTER_LOG="$MODDIR/router.log"
+ROUTER_LOG="$LOG_DIR/AIUnblock_router_debug.log"
 ROUTER_LOG_OLD="$MODDIR/router.log.1"
 LOCALE_STATE="$MODDIR/app_locales.state"
 LOCKDIR="$MODDIR/.daemon.lock"

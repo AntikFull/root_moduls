@@ -1,4 +1,4 @@
-**🔓 AI Unblock RU v2.2.1**
+** AI Unblock RU v2.2.1**
 
 Точечный обход региональных ограничений для **Gemini, NotebookLM, ChatGPT, Claude и Grok** через Smart DNS.
 
@@ -13,8 +13,8 @@
 
 **Требования:** Android 10+, arm64, Magisk 20.4+ / KernelSU / APatch.
 
-⚠️ Модуль предназначен только для поддерживаемых AI-сервисов и не заменяет полноценный VPN.
+ Модуль предназначен только для поддерживаемых AI-сервисов и не заменяет полноценный VPN.
 
-📦 **[Скачать v2.2.1](https://github.com/AntikFull/root_moduls/raw/main/AIUnblock/AIUnblock-v2.2.1.zip)**
+ **[Скачать v2.2.1](https://github.com/AntikFull/root_moduls/raw/main/AIUnblock/AIUnblock-v2.2.1.zip)**
 
-💻 [Исходный код](https://github.com/AntikFull/root_moduls/tree/main/AIUnblock) · 💬 [Поддержка](https://t.me/module_ecubz)
+ [Исходный код](https://github.com/AntikFull/root_moduls/tree/main/AIUnblock) ·  [Поддержка](https://t.me/module_ecubz)

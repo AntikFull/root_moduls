@@ -2,7 +2,9 @@
 MODDIR=${0%/*}
 
 # Направление лога в файл для отладки
-LOG_FILE="/data/local/tmp/alice_bt_launcher.log"
+LOG_DIR="/sdcard/eCubz"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/alice_bt_launcher_debug.log"
 exec 2>&1 >> "$LOG_FILE"
 
 echo "=========================================="

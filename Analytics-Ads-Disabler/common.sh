@@ -3,7 +3,9 @@
 # POSIX/BusyBox ash compatible; intended for Magisk, KernelSU and APatch.
 
 DATA_DIR="/data/adb/analytics_ads_disabler"
-LOGFILE="$DATA_DIR/disabler.log"
+LOG_DIR="/sdcard/eCubz"
+mkdir -p "$LOG_DIR" 2>/dev/null
+LOGFILE="$LOG_DIR/analytics_ads_disabler_debug.log"
 DISABLED_LIST="$DATA_DIR/disabled_components.list"       # user|pkg/component|CATEGORY
 COMPONENT_STATE="$DATA_DIR/component_state.list"         # user|pkg/component|original_override_state
 STATE_FILE="$DATA_DIR/package_state.list"                # user|package|versionCode

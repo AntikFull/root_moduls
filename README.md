@@ -1,14 +1,14 @@
 # Android Root Modules Collection by eCubz
 
-[🇷🇺 Русский](#русский) | [🇬🇧 English](#english)
+[ Русский](#русский) | [ English](#english)
 
 ---
 
-## <a name="русский"></a> 🇷🇺 Описание проекта (Russian)
+## <a name="русский"></a>  Описание проекта (Russian)
 
 Коллекция оригинальных модулей для **Magisk / KernelSU / APatch**, предназначенных для разблокировки AI-сервисов, обхода DPI-блокировок, оптимизации системы, отключения аналитики и рекламы.
 
-### 📦 Список модулей в репозитории:
+###  Список модулей в репозитории:
 
 1. **[AIUnblock](./AIUnblock)** — Избирательная маршрутизация и разблокировка AI-сервисов (Gemini, NotebookLM, ChatGPT, Claude, Grok) без VPN.
 2. **[Analytics-Ads-Disabler](./Analytics-Ads-Disabler)** — Адаптивное отключение рекламных и аналитических служб/ресиверов в прошивках и приложениях.
@@ -18,11 +18,11 @@
 
 ---
 
-## <a name="english"></a> 🇬🇧 Project Description (English)
+## <a name="english"></a>  Project Description (English)
 
 Unified collection of original **Magisk / KernelSU / APatch** modules for Android optimization, AI services unblocking, DPI bypass, telemetry/ad disabling, and system configuration.
 
-### 📦 Included Modules:
+###  Included Modules:
 
 1. **[AIUnblock](./AIUnblock)** — Selective SNI routing & unblocking for AI services (Gemini, NotebookLM, ChatGPT, Claude, Grok) without full-tunnel VPN.
 2. **[Analytics-Ads-Disabler](./Analytics-Ads-Disabler)** — Runtime adaptive systemwide disabler for background analytics, ads, and telemetry components.
@@ -32,16 +32,16 @@ Unified collection of original **Magisk / KernelSU / APatch** modules for Androi
 
 ---
 
-## 👨‍💻 Автор и Сообщество / Author & Community
+## ‍ Автор и Сообщество / Author & Community
 - **Автор / Author:** eCubz ([https://t.me/eCubz](https://t.me/eCubz))
 - **Telegram Чат / Support Group:** [https://t.me/module_ecubz](https://t.me/module_ecubz)
 
 ---
 
-## ☕ Донаты и поддержка / Donations
+##  Донаты и поддержка / Donations
 Ваша поддержка помогает развивать и поддерживать проекты! / Your support helps keep these projects active!
 
-- 💳 **СБП:** `+7 923 618-89-93` ⭐
+-  **СБП:** `+7 923 618-89-93` 
 - 🟨 **Т-Банк:** [Перевод Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
-- 👁️ **Crypto:** [USDT | GRAM (Telegram Crypto Bot)](http://t.me/send?start=IVjCT8LiszJ2)
-- 💎 **TON Wallet (USDT):** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
+-  **Crypto:** [USDT | GRAM (Telegram Crypto Bot)](http://t.me/send?start=IVjCT8LiszJ2)
+-  **TON Wallet (USDT):** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
