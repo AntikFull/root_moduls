@@ -4,9 +4,6 @@
 MODDIR=${0%/*}
 MODULE_ID="AIUnblock"
 
-# Защита от принудительного выключения сторонними модулями (например bindhosts)
-[ -f "$MODDIR/disable" ] && rm -f "$MODDIR/disable" 2>/dev/null
-
 [ -f "$MODDIR/lib/hosts_conflict.sh" ] && . "$MODDIR/lib/hosts_conflict.sh"
 
 LOG="$MODDIR/dnat.log"
