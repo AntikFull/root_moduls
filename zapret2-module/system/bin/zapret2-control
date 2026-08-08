@@ -1,0 +1,397 @@
+#!/system/bin/sh
+# CLI and WebUI control backend for zapret2 module on Android
+
+export PATH="/system/bin:/system/xbin:/data/adb/modules/zapret2-android/system/bin:$PATH"
+
+MODDIR="/data/adb/modules/zapret2-android"
+[ -d "$MODDIR" ] || MODDIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
+
+CONF_FILE="$MODDIR/zapret2.conf"
+APPS_LIST="$MODDIR/apps.list"
+EXCLUDE_LIST="$MODDIR/exclude.list"
+AUTO_DOMAINS_FILE="$MODDIR/auto_domains.list"
+LOG_FILE="$MODDIR/zapret2.log"
+WEBROOT="$MODDIR/webroot"
+
+IPT="iptables -w 5"
+IP6T="ip6tables -w 5"
+
+cmd_help() {
+  echo "Утилита управления Zapret 2 для Android"
+  echo "Использование: zapret2-control [команда] [аргументы]"
+  echo ""
+  echo "Команды:"
+  echo "  status                  - Показать текущий статус и режим работы"
+  echo "  json-status             - Статус в формате JSON (для WebUI)"
+  echo "  json-apps               - Список всех приложений системы в формате JSON"
+  echo "  mode [include|exclude|global] - Сменить режим фильтрации"
+  echo "  forcetcp [1|0]          - Включить/выключить принудительный TCP для UDP"
+  echo "  add <package_name>      - Добавить пакет приложения в apps.list"
+  echo "  del <package_name>      - Удалить пакет из apps.list"
+  echo "  add-exclude <pkg>       - Добавить пакет в exclude.list (для режима EXCLUDE)"
+  echo "  del-exclude <pkg>       - Удалить пакет из exclude.list"
+  echo "  autofit <domains>       - Запустить автоподбор дополнительной стратегии"
+  echo "  list                    - Показать текущие списки пакетов"
+  echo "  restart                 - Перезапустить службу zapret2"
+  echo "  webui                   - Запустить WebUI веб-сервер"
+  echo "  log                     - Показать последние 50 строк лога"
+  echo ""
+}
+
+validate_pkg() {
+  local pkg="$1"
+  case "$pkg" in
+    *[!A-Za-z0-9_.]*|"")
+      echo "Ошибка: недопустимое имя пакета '$pkg'"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+get_pkg_uid() {
+  local pkg="$1"
+  local raw_uid=$(pm list packages -U 2>/dev/null | grep -E "package:$pkg uid:" | sed -n 's/.*uid:\([0-9]*\).*/\1/p' | head -n1)
+  if [ -z "$raw_uid" ]; then
+    raw_uid=$(cmd package list packages -U "$pkg" 2>/dev/null | grep -F "$pkg" | sed -n 's/.*uid:\([0-9]*\).*/\1/p' | head -n1)
+  fi
+  echo "$raw_uid"
+}
+
+cmd_status() {
+  if [ -f "$CONF_FILE" ]; then
+    . "$CONF_FILE"
+  fi
+  echo "=== Статус Zapret 2 ==="
+  echo "Режим (MODE): ${MODE:-EXCLUDE}"
+  echo "Перевод UDP->TCP (FORCE_TCP): ${FORCE_TCP:-0}"
+  echo "Порты (PORTS_TCP): ${PORTS_TCP:-80,443}"
+  PID=$(pgrep -f nfqws2 | head -n1)
+  if [ -n "$PID" ]; then
+    echo "Процесс nfqws2: РАБОТАЕТ (PID: $PID)"
+  else
+    echo "Процесс nfqws2: ОСТАНОВЛЕН"
+  fi
+}
+
+cmd_json_status() {
+  if [ -f "$CONF_FILE" ]; then
+    . "$CONF_FILE"
+  fi
+  PID=$(pgrep -f nfqws2 | head -n1)
+  RUNNING="false"
+  if [ -n "$PID" ]; then
+    RUNNING="true"
+  else
+    PID=0
+  fi
+  
+  APPS_COUNT=0
+  if [ -f "$APPS_LIST" ]; then
+    APPS_COUNT=$(grep -v "^#" "$APPS_LIST" 2>/dev/null | grep -v "^$" | wc -l)
+  fi
+
+  EXCLUDE_COUNT=0
+  if [ -f "$EXCLUDE_LIST" ]; then
+    EXCLUDE_COUNT=$(grep -v "^#" "$EXCLUDE_LIST" 2>/dev/null | grep -v "^$" | wc -l)
+  fi
+
+  AUTO_DOMAINS_COUNT=0
+  AUTO_DOMAINS_STR=""
+  if [ -f "$AUTO_DOMAINS_FILE" ]; then
+    AUTO_DOMAINS_COUNT=$(grep -v "^#" "$AUTO_DOMAINS_FILE" 2>/dev/null | grep -v "^$" | wc -l)
+    AUTO_DOMAINS_STR=$(grep -v "^#" "$AUTO_DOMAINS_FILE" 2>/dev/null | grep -v "^$" | tr '\n' ',' | sed 's/,$//')
+  fi
+
+  CLEAN_DESYNC=$(echo "${DESYNC_ARGS:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g')
+  CLEAN_DESYNC_ALT=$(echo "${DESYNC_ARGS_ALT:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g')
+
+  cat <<EOF
+{
+  "mode": "${MODE:-EXCLUDE}",
+  "force_tcp": "${FORCE_TCP:-0}",
+  "ports_tcp": "${PORTS_TCP:-80,443,5222,8443}",
+  "qnum": "${QNUM:-200}",
+  "desync_args": "$CLEAN_DESYNC",
+  "desync_args_alt": "$CLEAN_DESYNC_ALT",
+  "auto_domains": "$AUTO_DOMAINS_STR",
+  "auto_domains_count": $AUTO_DOMAINS_COUNT,
+  "running": $RUNNING,
+  "pid": $PID,
+  "apps_count": $APPS_COUNT,
+  "exclude_count": $EXCLUDE_COUNT
+}
+EOF
+}
+
+cmd_json_apps() {
+  CACHE_FILE="/tmp/zapret2_apps_cache.json"
+
+  if [ -f "$CACHE_FILE" ] && [ $(wc -c < "$CACHE_FILE" 2>/dev/null || echo 0) -gt 100 ]; then
+    cat "$CACHE_FILE"
+    return 0
+  fi
+
+  TMP_OUT="/tmp/zapret2_apps_new.json"
+
+  pm list packages -f -U 2>/dev/null | awk -v apps_f="$APPS_LIST" -v excl_f="$EXCLUDE_LIST" '
+  BEGIN {
+    if (apps_f != "") {
+      while ((getline l < apps_f) > 0) {
+        sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l);
+        if (l !~ /^#/ && l != "") inc_map[l] = 1
+      }
+      close(apps_f)
+    }
+    if (excl_f != "") {
+      while ((getline l < excl_f) > 0) {
+        sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l);
+        if (l !~ /^#/ && l != "") exc_map[l] = 1
+      }
+      close(excl_f)
+    }
+    print "["
+    first = 1
+  }
+  {
+    line = $0
+    idx = index(line, " uid:")
+    if (idx > 0) {
+      raw_uid = substr(line, idx + 5)
+      split(raw_uid, uid_parts, ",")
+      uid = uid_parts[1]
+      line = substr(line, 1, idx - 1)
+
+      eq_idx = 0
+      for (i = length(line); i >= 1; i--) {
+        if (substr(line, i, 1) == "=") {
+          eq_idx = i
+          break
+        }
+      }
+
+      if (eq_idx > 0) {
+        pkg = substr(line, eq_idx + 1)
+        path = substr(line, 1, eq_idx - 1)
+        sub(/^package:/, "", path)
+
+        if (pkg != "") {
+          if (!first) print ","
+          first = 0
+
+          inc = (pkg in inc_map) ? "true" : "false"
+          exc = (pkg in exc_map) ? "true" : "false"
+          sys = (path ~ /^\/system/ || path ~ /^\/product/ || path ~ /^\/vendor/ || path ~ /^\/apex/ || path ~ /^\/system_ext/) ? "true" : "false"
+
+          printf "  {\"pkg\":\"%s\",\"uid\":\"%s\",\"inc\":%s,\"exc\":%s,\"sys\":%s}", pkg, uid, inc, exc, sys
+        }
+      }
+    }
+  }
+  END {
+    print "\n]"
+  }
+  ' > "$TMP_OUT"
+
+  if [ -s "$TMP_OUT" ]; then
+    mv -f "$TMP_OUT" "$CACHE_FILE"
+    cat "$CACHE_FILE"
+  else
+    echo "[]"
+  fi
+}
+
+cmd_autofit() {
+  DOMAINS_RAW="$1"
+  [ -z "$DOMAINS_RAW" ] && DOMAINS_RAW="googlevideo.com,discord.com"
+
+  echo "# Список доменов для дополнительной стратегии zapret2" > "$AUTO_DOMAINS_FILE"
+  echo "$DOMAINS_RAW" | tr ',' '\n' | tr ' ' '\n' | while read -r d; do
+    d=$(echo "$d" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    [ -n "$d" ] && echo "$d" >> "$AUTO_DOMAINS_FILE"
+  done
+
+  P1='--filter-tcp=80,443 --filter-l7=http,tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=2:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up --lua-desync=multisplit'
+  P2='--filter-tcp=80,443 --filter-l7=http,tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=2 --lua-desync=split2'
+  P3='--filter-tcp=80,443 --filter-l7=http,tls --payload=tls_client_hello --lua-desync=multisplit'
+
+  TEST_DOMAIN=$(grep -v "^#" "$AUTO_DOMAINS_FILE" 2>/dev/null | head -n1)
+  [ -z "$TEST_DOMAIN" ] && TEST_DOMAIN="googlevideo.com"
+
+  WINNING_STRATEGY="$P1"
+  STRATEGY_NAME="Fake default TLS + Multisplit"
+
+  if curl -4 -s --connect-timeout 2 -m 4 "https://$TEST_DOMAIN" >/dev/null 2>&1; then
+    WINNING_STRATEGY="$P1"
+    STRATEGY_NAME="Fake 0x00000000 + Multisplit"
+  elif curl -4 -s --connect-timeout 2 -m 4 "https://www.youtube.com" >/dev/null 2>&1; then
+    WINNING_STRATEGY="$P2"
+    STRATEGY_NAME="Fake 0x00000000 + Split2"
+  else
+    WINNING_STRATEGY="$P3"
+    STRATEGY_NAME="Чистый Multisplit"
+  fi
+
+  if grep -q "^DESYNC_ARGS_ALT=" "$CONF_FILE" 2>/dev/null; then
+    sed -i "s|^DESYNC_ARGS_ALT=.*|DESYNC_ARGS_ALT=\"$WINNING_STRATEGY\"|" "$CONF_FILE"
+  else
+    echo "DESYNC_ARGS_ALT=\"$WINNING_STRATEGY\"" >> "$CONF_FILE"
+  fi
+
+  sh "$MODDIR/service.sh" >/dev/null 2>&1
+
+  CLEAN_WIN=$(echo "$WINNING_STRATEGY" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+  cat <<EOF
+{
+  "success": true,
+  "name": "$STRATEGY_NAME",
+  "strategy": "$CLEAN_WIN",
+  "target_domain": "$TEST_DOMAIN"
+}
+EOF
+}
+
+cmd_mode() {
+  NEW_MODE=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+  if [ "$NEW_MODE" = "INCLUDE" ] || [ "$NEW_MODE" = "EXCLUDE" ] || [ "$NEW_MODE" = "GLOBAL" ]; then
+    sed -i "s/^MODE=.*/MODE=\"$NEW_MODE\"/" "$CONF_FILE"
+    echo "Режим изменен на: $NEW_MODE"
+    sh "$MODDIR/service.sh"
+  else
+    echo "Ошибка: Неизвестный режим '$1'. Допустимо: include, exclude, global"
+  fi
+}
+
+cmd_forcetcp() {
+  VAL="$1"
+  if [ "$VAL" = "1" ] || [ "$VAL" = "0" ]; then
+    sed -i "s/^FORCE_TCP=.*/FORCE_TCP=\"$VAL\"/" "$CONF_FILE"
+    echo "FORCE_TCP установлен в: $VAL"
+    sh "$MODDIR/service.sh"
+  else
+    echo "Ошибка: Используйте 1 (включено) или 0 (выключено)"
+  fi
+}
+
+cmd_add() {
+  PKG="$1"
+  validate_pkg "$PKG" || return 1
+  rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
+  if grep -q "^$PKG$" "$APPS_LIST" 2>/dev/null; then
+    echo "Пакет $PKG уже есть в apps.list"
+  else
+    echo "$PKG" >> "$APPS_LIST"
+    echo "Добавлен пакет в apps.list: $PKG"
+    UID_VAL=$(get_pkg_uid "$PKG")
+    if [ -n "$UID_VAL" ]; then
+      PORTS_TCP="80,443,5222,8443"
+      QNUM="200"
+      if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
+      $IPT -t mangle -I ZAPRET2_MANGLE 1 -m owner --uid-owner $UID_VAL -p tcp -m multiport --dports ${PORTS_TCP:-80,443} -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num ${QNUM:-200} --queue-bypass 2>/dev/null
+      $IP6T -t mangle -I ZAPRET2_MANGLE 1 -m owner --uid-owner $UID_VAL -p tcp -m multiport --dports ${PORTS_TCP:-80,443} -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num ${QNUM:-200} --queue-bypass 2>/dev/null
+    fi
+  fi
+}
+
+cmd_del() {
+  PKG="$1"
+  validate_pkg "$PKG" || return 1
+  rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
+  if [ -f "$APPS_LIST" ]; then
+    sed -i "/^$PKG$/d" "$APPS_LIST"
+    echo "Удален пакет из apps.list: $PKG"
+    UID_VAL=$(get_pkg_uid "$PKG")
+    if [ -n "$UID_VAL" ]; then
+      PORTS_TCP="80,443,5222,8443"
+      QNUM="200"
+      if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
+      $IPT -t mangle -D ZAPRET2_MANGLE -m owner --uid-owner $UID_VAL -p tcp -m multiport --dports ${PORTS_TCP:-80,443} -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num ${QNUM:-200} --queue-bypass 2>/dev/null
+      $IP6T -t mangle -D ZAPRET2_MANGLE -m owner --uid-owner $UID_VAL -p tcp -m multiport --dports ${PORTS_TCP:-80,443} -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num ${QNUM:-200} --queue-bypass 2>/dev/null
+    fi
+  fi
+}
+
+cmd_add_exclude() {
+  PKG="$1"
+  validate_pkg "$PKG" || return 1
+  rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
+  if grep -q "^$PKG$" "$EXCLUDE_LIST" 2>/dev/null; then
+    echo "Пакет $PKG уже есть в exclude.list"
+  else
+    echo "$PKG" >> "$EXCLUDE_LIST"
+    echo "Добавлен пакет в exclude.list: $PKG"
+    UID_VAL=$(get_pkg_uid "$PKG")
+    if [ -n "$UID_VAL" ]; then
+      $IPT -t mangle -I ZAPRET2_MANGLE 1 -m owner --uid-owner $UID_VAL -j RETURN 2>/dev/null
+      $IP6T -t mangle -I ZAPRET2_MANGLE 1 -m owner --uid-owner $UID_VAL -j RETURN 2>/dev/null
+    fi
+  fi
+}
+
+cmd_del_exclude() {
+  PKG="$1"
+  validate_pkg "$PKG" || return 1
+  rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
+  if [ -f "$EXCLUDE_LIST" ]; then
+    sed -i "/^$PKG$/d" "$EXCLUDE_LIST"
+    echo "Удален пакет из exclude.list: $PKG"
+    UID_VAL=$(get_pkg_uid "$PKG")
+    if [ -n "$UID_VAL" ]; then
+      $IPT -t mangle -D ZAPRET2_MANGLE -m owner --uid-owner $UID_VAL -j RETURN 2>/dev/null
+      $IP6T -t mangle -D ZAPRET2_MANGLE -m owner --uid-owner $UID_VAL -j RETURN 2>/dev/null
+    fi
+  fi
+}
+
+cmd_list() {
+  echo "=== Список пакетов в apps.list (Режим INCLUDE) ==="
+  [ -f "$APPS_LIST" ] && grep -v "^#" "$APPS_LIST" | grep -v "^$"
+  echo ""
+  echo "=== Список пакетов в exclude.list (Режим EXCLUDE) ==="
+  [ -f "$EXCLUDE_LIST" ] && grep -v "^#" "$EXCLUDE_LIST" | grep -v "^$"
+}
+
+cmd_log() {
+  if [ -f "$LOG_FILE" ]; then
+    tail -n 50 "$LOG_FILE"
+  else
+    echo "Лог файл пуст"
+  fi
+}
+
+cmd_webui() {
+  PID=$(pgrep -f "httpd -p 127.0.0.1:8080" | head -n1)
+  if [ -z "$PID" ]; then
+    PID=$(pgrep -f "httpd -p 8080" | head -n1)
+  fi
+
+  if [ -z "$PID" ] && [ -d "$WEBROOT" ]; then
+    if command -v busybox >/dev/null 2>&1; then
+      busybox httpd -p 127.0.0.1:8080 -h "$WEBROOT" -c /dev/null
+    else
+      httpd -p 127.0.0.1:8080 -h "$WEBROOT" -c /dev/null 2>/dev/null
+    fi
+    sleep 1
+    PID=$(pgrep -f "httpd -p" | head -n1)
+  fi
+
+  echo "WebUI запущен на http://127.0.0.1:8080 (PID: ${PID:-активен})"
+}
+
+case "$1" in
+  status) cmd_status ;;
+  json-status) cmd_json_status ;;
+  json-apps) cmd_json_apps ;;
+  autofit) cmd_autofit "$2" ;;
+  mode) cmd_mode "$2" ;;
+  forcetcp) cmd_forcetcp "$2" ;;
+  add) cmd_add "$2" ;;
+  del) cmd_del "$2" ;;
+  add-exclude) cmd_add_exclude "$2" ;;
+  del-exclude) cmd_del_exclude "$2" ;;
+  list) cmd_list ;;
+  restart) sh "$MODDIR/service.sh" ;;
+  webui) cmd_webui ;;
+  log) cmd_log ;;
+  *) cmd_help ;;
+esac

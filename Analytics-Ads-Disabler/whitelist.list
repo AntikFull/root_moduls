@@ -1,0 +1,10 @@
+# Белый список пакетов (модуль гарантированно пропускает эти приложения)
+# Банки, платежные системы, навигация, госуслуги
+ru.sberbankmobile
+com.tinkoff.android
+ru.nspk.mirpay
+ru.vtb.mobile.android
+ru.alfa.mobile.android
+ru.gpu.gosuslugi
+ru.yandex.yandexnavi
+com.google.android.apps.maps

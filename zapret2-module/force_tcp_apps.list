@@ -1,0 +1,12 @@
+# Список пакетов приложений Zapret2 eCubz для принудительного перевода на TCP
+# Автор: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
+# (Применяется при FORCE_TCP="1" в zapret2.conf: блокирует UDP пакеты приложения)
+
+
+# --- Мессенджеры Telegram ---
+org.telegram.messenger
+com.telegram.messenger
+org.telegram.messenger.web
+com.exteragram.messenger
+com.ayugram.messenger
+com.ayugram.messenger.beta

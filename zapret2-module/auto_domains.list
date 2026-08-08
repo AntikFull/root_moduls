@@ -1,0 +1,69 @@
+# Список доменов для DPI-десинка Zapret2 eCubz (--hostlist)
+# Автор: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
+# Поддомены включаются автоматически (youtube.com включает *.youtube.com).
+
+
+# --- YouTube и Google Video ---
+youtube.com
+youtu.be
+googlevideo.com
+ggpht.com
+ggpht.cn
+gvt1.com
+gvt2.com
+gvt3.com
+gstatic.com
+youtube-nocookie.com
+withyoutube.com
+youtubekids.com
+returnyoutubedislikeapi.com
+googleapis.com
+googleusercontent.com
+
+# --- Discord ---
+discord.com
+discord.gg
+discordapp.com
+discord.media
+discordapp.net
+
+# --- Meta (Instagram, Facebook) ---
+instagram.com
+cdninstagram.com
+facebook.com
+fbcdn.net
+facebook.net
+fb.com
+fbsbx.com
+threads.net
+
+# --- X (Twitter) ---
+twitter.com
+x.com
+twimg.com
+t.co
+twitpic.com
+
+# --- Другие сервисы ---
+github.com
+githubusercontent.com
+github.io
+medium.com
+reddit.com
+redd.it
+redditstatic.com
+redditmedia.com
+spotify.com
+scdn.co
+soundcloud.com
+twitch.tv
+ttvnw.net
+jtvnw.net
+viber.com
+signal.org
+
+# --- Прочие CDN и сервисы ---
+akamaized.net
+cloudflare.com
+cloudflare-dns.com
+fastly.net
