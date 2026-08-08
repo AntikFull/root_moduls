@@ -19,6 +19,15 @@ echo "=== AI Unblock RU Configuration ==="
 echo "Текущее состояние:"
 echo "1. AI Hosts Routing: $ENABLE_HOSTS_ROUTING (1 - вкл, 0 - выкл)"
 echo "2. AdBlock: $ENABLE_ADBLOCK (1 - вкл, 0 - выкл)"
+if [ -f "$MODDIR/lib/hosts_conflict.sh" ]; then
+  . "$MODDIR/lib/hosts_conflict.sh"
+  CONFLICT_ID=$(hosts_conflict_detected "AIUnblock" 2>/dev/null)
+  if [ -n "$CONFLICT_ID" ]; then
+    echo "! Внимание: модуль '$CONFLICT_ID' тоже меняет /system/etc/hosts."
+    echo "! Даже при включении hosts здесь overlay будет автоматически"
+    echo "! пропущен при следующей загрузке во избежание конфликта."
+  fi
+fi
 echo "-----------------------------------"
 
 # Переключение режима при каждом запуске action.sh

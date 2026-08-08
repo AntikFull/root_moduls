@@ -16,7 +16,7 @@ extract_required_file() {
   [ -s "$destination" ]
 }
 
-ui_print "- Установка AI Unblock RU v2.2.3..."
+ui_print "- Установка AI Unblock RU v2.2.2..."
 ui_print "- ПРИМЕЧАНИЕ ПО БЕЗОПАСНОСТИ:"
 ui_print "  • Для Gemini, ChatGPT, Claude и Grok используются шлюзы Smart DNS из proxies.conf."
 ui_print "  • TLS-валидация гарантирует сквозное шифрование и подлинность целевых сертификатов."
@@ -45,15 +45,15 @@ fi
 # Временные маркеры миграции больше не используются.
 rm -f "$MODPATH/.global_locale_restored" "$MODPATH/.google_search_unmanaged"
 
-CHOSEN_KEY=0
+CHOSEN_KEY=1
 
 choosekey() {
   local prompt_text="$1"
-  local default_val="${2:-0}"
+  local default_val="${2:-1}"
   CHOSEN_KEY="$default_val"
 
   ui_print "  $prompt_text"
-  ui_print "  [Громкость +] = ДА | [Громкость -] = НЕТ (Рекомендуется)"
+  ui_print "  [Громкость +] = ДА | [Громкость -] = НЕТ"
 
   while true; do
     local key_events
@@ -75,33 +75,41 @@ choosekey() {
 ui_print "--------------------------------------------------"
 ui_print "- Настройка компонентов AI Unblock RU:"
 
-choosekey "1. Монтировать AI-роутинг hosts (гео-разблокировка ИИ)?" 0
+choosekey "1. Монтировать AI-роутинг hosts (гео-разблокировка ИИ)?" 1
 ENABLE_HOSTS_ROUTING=$CHOSEN_KEY
 
-choosekey "2. Включить AdBlock (блокировку рекламы hosts.adblock)?" 0
+choosekey "2. Включить AdBlock (блокировку рекламы hosts.adblock)?" 1
 ENABLE_ADBLOCK=$CHOSEN_KEY
+
+MODULE_ID="AIUnblock"
+HOSTS_CONFLICT=0
+
+if [ "$ENABLE_HOSTS_ROUTING" -eq 1 ] || [ "$ENABLE_ADBLOCK" -eq 1 ]; then
+  [ -f "$MODPATH/lib/hosts_conflict.sh" ] && . "$MODPATH/lib/hosts_conflict.sh"
+
+  CONFLICT_ID=""
+  if command -v hosts_conflict_detected >/dev/null 2>&1; then
+    CONFLICT_ID=$(hosts_conflict_detected "$MODULE_ID")
+  fi
+
+  if [ -n "$CONFLICT_ID" ]; then
+    ui_print "--------------------------------------------------"
+    ui_print "! Обнаружен модуль '$CONFLICT_ID', уже изменяющий /system/etc/hosts."
+    ui_print "! Чтобы избежать конфликта монтирования (и авто-отключения модуля"
+    ui_print "! менеджером рут-доступа), hosts-компоненты AI Unblock не устанавливаются."
+    ui_print "! SNI/DNAT-роутинг (Gemini/ChatGPT/Claude/Grok) продолжит работать в обычном режиме."
+    ui_print "--------------------------------------------------"
+    ENABLE_HOSTS_ROUTING=0
+    ENABLE_ADBLOCK=0
+    HOSTS_CONFLICT=1
+  fi
+fi
 
 echo "ENABLE_HOSTS_ROUTING=$ENABLE_HOSTS_ROUTING" > "$MODPATH/install.conf"
 echo "ENABLE_ADBLOCK=$ENABLE_ADBLOCK" >> "$MODPATH/install.conf"
+echo "HOSTS_CONFLICT=$HOSTS_CONFLICT" >> "$MODPATH/install.conf"
 ui_print "- Конфигурация сохранена в install.conf"
 ui_print "--------------------------------------------------"
-
-check_hosts_conflict() {
-  local modules_dir="/data/adb/modules"
-  [ -d "$modules_dir" ] || return 1
-  for mod in "$modules_dir"/*; do
-    [ -d "$mod" ] || continue
-    local mod_name="${mod##*/}"
-    case "$mod_name" in
-      AIUnblock|AIUnblock*) continue ;;
-    esac
-    if [ -f "$mod/system/etc/hosts" ] || [ -f "$mod/etc/hosts" ] || [ -f "$mod/mode" ] || [ "$mod_name" = "bindhosts" ] || [ "$mod_name" = "Systemless_Hosts" ]; then
-      ui_print "- Обнаружен сторонний модуль hosts/AdBlock ($mod_name)!"
-      return 0
-    fi
-  done
-  return 1
-}
 
 # Настройка system/etc/hosts в зависимости от выбора в install.conf
 prepare_hosts_files() {
@@ -109,17 +117,11 @@ prepare_hosts_files() {
   local adblock_hosts="$MODPATH/etc/hosts.adblock"
 
   [ -f "$MODPATH/install.conf" ] && . "$MODPATH/install.conf"
-  local enable_routing=${ENABLE_HOSTS_ROUTING:-0}
-  local enable_adblock=${ENABLE_ADBLOCK:-0}
-
-  if check_hosts_conflict; then
-    ui_print "- Монтирование system/etc/hosts отменено во избежание конфликтов со сторонним модулем."
-    rm -rf "$MODPATH/system" 2>/dev/null
-    return 0
-  fi
+  local enable_routing=${ENABLE_HOSTS_ROUTING:-1}
+  local enable_adblock=${ENABLE_ADBLOCK:-1}
 
   if [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 0 ]; then
-    ui_print "- Hosts отключен пользователем. Очищаем папку system/etc/hosts."
+    ui_print "- Hosts отключен. Очищаем папку system/etc/hosts для предотвращения конфликтов."
     rm -rf "$MODPATH/system" 2>/dev/null
   else
     mkdir -p "$MODPATH/system/etc"
@@ -138,6 +140,7 @@ prepare_hosts_files() {
         cp -f "$ai_hosts" "$target_hosts"
       fi
     fi
+    [ -f "$target_hosts" ] && chmod 0644 "$target_hosts" 2>/dev/null
   fi
 }
 
@@ -162,6 +165,7 @@ set_perm_recursive "$MODPATH" 0 0 0755 0644
 [ -f "$MODPATH/uninstall.sh" ] && set_perm "$MODPATH/uninstall.sh" 0 0 0755
 [ -f "$MODPATH/customize.sh" ] && set_perm "$MODPATH/customize.sh" 0 0 0755
 [ -f "$MODPATH/action.sh" ] && set_perm "$MODPATH/action.sh" 0 0 0755
+[ -f "$MODPATH/lib/hosts_conflict.sh" ] && set_perm "$MODPATH/lib/hosts_conflict.sh" 0 0 0755
 [ -f "$MODPATH/bin/aiunblock-router" ] && set_perm "$MODPATH/bin/aiunblock-router" 0 0 0700
 [ -f "$MODPATH/bin/curl" ] && set_perm "$MODPATH/bin/curl" 0 0 0755
 [ -f "$MODPATH/sni_routes.conf" ] && set_perm "$MODPATH/sni_routes.conf" 0 0 0600

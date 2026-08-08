@@ -2,50 +2,45 @@
 # AI Unblock RU — post-fs-data.sh
 
 MODDIR=${0%/*}
+MODULE_ID="AIUnblock"
 
-check_hosts_conflict() {
-  local modules_dir="/data/adb/modules"
-  [ -d "$modules_dir" ] || return 1
-  for mod in "$modules_dir"/*; do
-    [ -d "$mod" ] || continue
-    local mod_name="${mod##*/}"
-    case "$mod_name" in
-      AIUnblock|AIUnblock*) continue ;;
-    esac
-    if [ -f "$mod/system/etc/hosts" ] || [ -f "$mod/etc/hosts" ] || [ -f "$mod/mode" ] || [ "$mod_name" = "bindhosts" ] || [ "$mod_name" = "Systemless_Hosts" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
+[ -f "$MODDIR/lib/hosts_conflict.sh" ] && . "$MODDIR/lib/hosts_conflict.sh"
 
 mount_hosts() {
   local sys_hosts="/system/etc/hosts"
   local ai_hosts="$MODDIR/etc/hosts.ai"
   local adblock_hosts="$MODDIR/etc/hosts.adblock"
 
-  local enable_routing=0
-  local enable_adblock=0
+  local enable_routing=1
+  local enable_adblock=1
 
   if [ -f "$MODDIR/install.conf" ]; then
     . "$MODDIR/install.conf"
-    enable_routing=${ENABLE_HOSTS_ROUTING:-0}
-    enable_adblock=${ENABLE_ADBLOCK:-0}
+    enable_routing=${ENABLE_HOSTS_ROUTING:-1}
+    enable_adblock=${ENABLE_ADBLOCK:-1}
   fi
 
   # Валидация значений из install.conf
-  case "$enable_routing" in 0|1) ;; *) enable_routing=0 ;; esac
-  case "$enable_adblock" in 0|1) ;; *) enable_adblock=0 ;; esac
-
-  if check_hosts_conflict; then
-    rm -rf "$MODDIR/system" 2>/dev/null
-    return 0
-  fi
+  case "$enable_routing" in 0|1) ;; *) enable_routing=1 ;; esac
+  case "$enable_adblock" in 0|1) ;; *) enable_adblock=1 ;; esac
 
   if [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 0 ]; then
     # Если хосты отключены пользователем — полностью удаляем папку system, чтобы Root-менеджер не включал оверлей hosts
     rm -rf "$MODDIR/system" 2>/dev/null
     return 0
+  fi
+
+  # Пересчёт конфликта на каждой загрузке: другой hosts-модуль мог быть
+  # установлен уже ПОСЛЕ инсталляции AI Unblock, разовой проверки в
+  # customize.sh недостаточно.
+  if command -v hosts_conflict_detected >/dev/null 2>&1; then
+    local conflict_id
+    conflict_id=$(hosts_conflict_detected "$MODULE_ID")
+    if [ -n "$conflict_id" ]; then
+      echo "[$(date)] hosts: конфликт с модулем '$conflict_id' — overlay пропущен" >> "$MODDIR/dnat.log" 2>/dev/null
+      rm -rf "$MODDIR/system" 2>/dev/null
+      return 0
+    fi
   fi
 
   mkdir -p "$MODDIR/system/etc"
