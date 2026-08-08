@@ -16,7 +16,7 @@ extract_required_file() {
   [ -s "$destination" ]
 }
 
-ui_print "- Установка AI Unblock RU v2.2.5..."
+ui_print "- Установка AI Unblock RU v2.2.6..."
 ui_print "- ПРИМЕЧАНИЕ ПО БЕЗОПАСНОСТИ:"
 ui_print "  • Для Gemini, ChatGPT, Claude и Grok используются шлюзы Smart DNS из proxies.conf."
 ui_print "  • TLS-валидация гарантирует сквозное шифрование и подлинность целевых сертификатов."

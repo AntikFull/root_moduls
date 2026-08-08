@@ -16,6 +16,17 @@ hosts_conflict_detected() {
   local own_id="$1"
   local dir id
 
+  # Прямая и быстрая проверка известных модулей hosts во избежание проблем с раскрытием маски
+  if [ -d "/data/adb/modules/bindhosts" ] && [ ! -f "/data/adb/modules/bindhosts/disable" ] && [ ! -f "/data/adb/modules/bindhosts/remove" ]; then
+    echo "bindhosts"
+    return 0
+  fi
+  if [ -d "/data/adb/modules/Systemless_Hosts" ] && [ ! -f "/data/adb/modules/Systemless_Hosts/disable" ] && [ ! -f "/data/adb/modules/Systemless_Hosts/remove" ]; then
+    echo "Systemless_Hosts"
+    return 0
+  fi
+
+  # Универсальный сканер для остальных модулей
   for dir in /data/adb/modules/*/; do
     [ -d "$dir" ] || continue
 
@@ -23,11 +34,12 @@ hosts_conflict_detected() {
     id="${id##*/}"
 
     [ "$id" = "$own_id" ] && continue
+    [ "$id" = "meta-overlayfs" ] && continue
     [ -f "${dir}disable" ] && continue
     [ -f "${dir}remove" ] && continue
     [ -f "${dir}skip_mount" ] && continue
 
-    if [ -s "${dir}system/etc/hosts" ]; then
+    if [ -s "${dir}system/etc/hosts" ] || [ -f "${dir}mode" ]; then
       echo "$id"
       return 0
     fi
