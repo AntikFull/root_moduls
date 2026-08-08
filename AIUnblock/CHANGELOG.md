@@ -1,5 +1,11 @@
 # AI Unblock RU
 
+## Версия v2.2.5
+
+- **Очистка кэша мета-оверлеев `meta-overlayfs`**:
+  - Добавлена очистка кэшированных точек монтирования `/data/adb/modules/meta-overlayfs/mnt/AIUnblock`.
+  - Предотвращает удержание старой структуры `system/etc/hosts` при использовании экспериментального режима Hybrid Mount (metainstall) в KernelSU Next.
+
 ## Версия v2.2.4
 
 - **Безопасная адаптация под `bindhosts` без нарушения антибутлупа**:

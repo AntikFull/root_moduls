@@ -16,7 +16,7 @@ extract_required_file() {
   [ -s "$destination" ]
 }
 
-ui_print "- Установка AI Unblock RU v2.2.2..."
+ui_print "- Установка AI Unblock RU v2.2.5..."
 ui_print "- ПРИМЕЧАНИЕ ПО БЕЗОПАСНОСТИ:"
 ui_print "  • Для Gemini, ChatGPT, Claude и Grok используются шлюзы Smart DNS из proxies.conf."
 ui_print "  • TLS-валидация гарантирует сквозное шифрование и подлинность целевых сертификатов."
@@ -42,8 +42,9 @@ if [ "$OLD_MODPATH" != "$MODPATH" ] && [ -d "$OLD_MODPATH" ]; then
   done
 fi
 
-# Временные маркеры миграции и старый disable при ручной переустановке
+# Временные маркеры миграции, старый disable и кэш meta-overlayfs
 rm -f "$MODPATH/.global_locale_restored" "$MODPATH/.google_search_unmanaged" "$MODPATH/disable"
+rm -rf "/data/adb/modules/meta-overlayfs/mnt/AIUnblock" 2>/dev/null
 
 CHOSEN_KEY=1
 
