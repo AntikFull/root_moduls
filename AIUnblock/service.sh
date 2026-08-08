@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# AI Unblock RU v2.1.0 — service.sh
+# AI Unblock RU v2.2.1 — service.sh
 
 MODDIR=${0%/*}
 
@@ -16,6 +16,8 @@ SNI_ROUTES="$MODDIR/sni_routes.conf"
 GATEWAY_DIR="$MODDIR/gateways"
 ROUTER_PID_FILE="$MODDIR/.router.pid"
 PROXY_OVERRIDE="$MODDIR/proxies.override"
+SMARTDNS_CONF="$MODDIR/smartdns.conf"
+SMARTDNS_USER_CONF="$MODDIR/smartdns.user.conf"
 ROUTER_PORT=15359
 
 CHECK_INTERVAL=1800
@@ -23,6 +25,7 @@ FAST_RETRY_INTERVAL=30
 WATCHDOG_INTERVAL=15
 LOG_MAX_BYTES=262144
 CURL_MAX_TIME=8
+DOH_MAX_TIME=12
 XTABLES_WAIT=10
 INIT_RETRIES=5
 INIT_RETRY_DELAY=2
@@ -37,6 +40,9 @@ else
   PUBLIC_AI_PROXIES="87.228.47.204 185.246.223.127 103.27.157.38 103.27.157.100 62.133.62.97 45.155.204.190 37.230.192.51 95.182.120.241 95.216.204.218 80.253.249.40"
   AUTH_DNS="80.253.249.40 103.27.157.38 103.27.157.100 95.216.204.218 111.88.96.50 111.88.96.51"
 fi
+
+DOH_RESOLVERS=""
+DOT_RESOLVERS=""
 
 PROXIES="$PUBLIC_PROXIES"
 AI_PROXIES="$PUBLIC_AI_PROXIES"
@@ -126,6 +132,66 @@ load_proxy_override() {
     AI_PROXIES="$override $PUBLIC_AI_PROXIES"
     log "Загружен приватный override адресов без публикации значений в лог"
   fi
+}
+
+append_unique() {
+  local current="$1"
+  local value="$2"
+  case " $current " in
+    *" $value "*) echo "$current" ;;
+    *) echo "$current $value" ;;
+  esac
+}
+
+load_smartdns_file() {
+  local file="$1"
+  local protocol address extra
+  [ -r "$file" ] || return 0
+
+  while read -r protocol address extra; do
+    case "$protocol" in
+      ""|'#'*) continue ;;
+    esac
+    [ -n "$address" ] || continue
+    [ -z "$extra" ] || {
+      log "Smart DNS: пропущена некорректная строка в $file"
+      continue
+    }
+
+    case "$protocol" in
+      DOH)
+        case "$address" in
+          https://*) DOH_RESOLVERS=$(append_unique "$DOH_RESOLVERS" "$address") ;;
+          *) log "Smart DNS: DoH должен начинаться с https:// ($address)" ;;
+        esac
+        ;;
+      DOT)
+        case "$address" in
+          *[!A-Za-z0-9._:-]*) log "Smart DNS: некорректный DoT endpoint ($address)" ;;
+          *) DOT_RESOLVERS=$(append_unique "$DOT_RESOLVERS" "$address") ;;
+        esac
+        ;;
+      DNS)
+        if is_ipv4 "$address"; then
+          AUTH_DNS=$(append_unique "$AUTH_DNS" "$address")
+        else
+          log "Smart DNS: некорректный IPv4 DNS ($address)"
+        fi
+        ;;
+      *) log "Smart DNS: неизвестный протокол $protocol в $file" ;;
+    esac
+  done < "$file"
+}
+
+load_smartdns_resolvers() {
+  load_smartdns_file "$SMARTDNS_CONF"
+  load_smartdns_file "$SMARTDNS_USER_CONF"
+
+  if [ -z "$DOH_RESOLVERS" ]; then
+    DOH_RESOLVERS="https://dns.malw.link/dns-query https://xbox-dns.ru/dns-query"
+    log "Smart DNS: smartdns.conf недоступен или не содержит DoH; включён встроенный резерв"
+  fi
+  log "Smart DNS: загружено DoH=$(echo $DOH_RESOLVERS | wc -w), DoT=$(echo $DOT_RESOLVERS | wc -w), DNS=$(echo $AUTH_DNS | wc -w)"
 }
 
 configure_xtables_wait() {
@@ -653,6 +719,57 @@ check_proxy_domains() {
   done
 }
 
+# Получает актуальные IPv4-шлюзы непосредственно от Smart DNS через DoH.
+# curl одновременно выполняет DNS-запрос и проверяет TLS-соединение с доменом.
+# Запросы к независимым резолверам идут параллельно, поэтому один медленный
+# провайдер не задерживает переключение на сумму всех таймаутов.
+discover_doh_gateways() {
+  local domain="$1"
+  local tmp_base="$GATEWAY_DIR/.doh.$$"
+  local resolver index pid pids file ip discovered
+
+  [ -n "$DOH_RESOLVERS" ] || return 0
+  mkdir -p "$GATEWAY_DIR"
+  index=0
+  pids=""
+
+  for resolver in $DOH_RESOLVERS; do
+    index=$((index + 1))
+    file="$tmp_base.$index"
+    (
+      ip=$(timeout "$DOH_MAX_TIME" "$CURL_BIN" -4 -sS \
+        --doh-url "$resolver" \
+        --connect-timeout 5 \
+        --max-time "$DOH_MAX_TIME" \
+        "https://$domain/" \
+        -o /dev/null \
+        -w '%{remote_ip}' 2>/dev/null) || exit 1
+      is_ipv4 "$ip" || exit 1
+      printf '%s|%s\n' "$ip" "$resolver" > "$file"
+    ) &
+    pids="$pids $!"
+  done
+
+  for pid in $pids; do
+    wait "$pid" 2>/dev/null
+  done
+
+  discovered=""
+  for file in "$tmp_base".*; do
+    [ -f "$file" ] || continue
+    IFS='|' read -r ip resolver < "$file"
+    rm -f "$file"
+    is_ipv4 "$ip" || continue
+    case " $discovered " in
+      *" $ip "*) continue ;;
+    esac
+    discovered="$discovered $ip"
+    log "Smart DNS DoH $resolver выдал для $domain шлюз $ip"
+  done
+
+  echo "$discovered"
+}
+
 send_udp_dns_packet() {
   local dns="$1"
   local packet="$2"
@@ -675,12 +792,12 @@ send_udp_dns_packet() {
 }
 
 
-# Механизм "прогрева" / авторизации IP-адресов прокси:
-# Некоторые серверы-прокси (из AUTH_DNS / proxies.conf) требуют предварительной авторизации или "прогрева"
-# перед тем, как начать проксировать TLS-трафик от клиента.
+# Механизм "прогрева" / авторизации шлюзов Smart DNS:
+# Некоторые Smart DNS (из AUTH_DNS / proxies.conf) требуют предварительного DNS-запроса
+# перед тем, как их шлюз начнёт принимать TLS-трафик от клиента.
 # Функция authorize_ips() отправляет сырой UDP DNS-пакет (запрос chatgpt.com по UDP/53) на целевые IP.
-# Это активирует сокет/сессию на прокси-узлах и гарантирует, что последующие TCP/TLS подключения
-# к прокси через DNAT не будут сбрасываться по таймауту.
+# Это авторизует внешний IP клиента у Smart DNS и позволяет последующим TCP/TLS-подключениям
+# к выданному шлюзу через DNAT работать без сброса по таймауту.
 authorize_ips() {
   local packet="\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07chatgpt\x03com\x00\x00\x01\x00\x01"
   local dns pid pids successes
@@ -756,12 +873,16 @@ select_proxy() {
   local current="$1"
   local domains="$2"
   local candidates="$3"
-  local ip
+  local discovery_domain="${4:-${domains%% *}}"
+  local discovered ip
 
   if [ -n "$current" ] && check_proxy_domains "$current" "$domains"; then
     echo "$current"
     return 0
   fi
+
+  discovered=$(discover_doh_gateways "$discovery_domain")
+  candidates="$discovered $candidates"
 
   for ip in $candidates; do
     [ "$ip" = "$current" ] && continue
@@ -837,7 +958,7 @@ refresh_proxy_rules() {
   if [ -n "$BARD_UIDS$GOOGLE_UIDS" ]; then
     selected=$(select_proxy "$CURRENT_GEMINI" \
       "gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com" \
-      "$PROXIES")
+      "$PROXIES" "gemini.google.com")
     if [ -n "$selected" ]; then
       if [ "$selected" != "$CURRENT_GEMINI" ]; then
         if activate_gemini_gateway "$selected"; then
@@ -1077,7 +1198,7 @@ main_loop() {
   mount_hosts
   secure_permissions
   rotate_log
-  log "AI Unblock v2.1.2: supervisor запущен (PID $$)"
+  log "AI Unblock v2.2.1: supervisor запущен (PID $$)"
 
   acquire_lock || return 0
   trap shutdown_service EXIT
@@ -1089,6 +1210,7 @@ main_loop() {
   }
 
   configure_xtables_wait
+  load_smartdns_resolvers
   load_proxy_override
   init_chains_with_retry || {
     log "КРИТИЧЕСКАЯ ОШИБКА: цепочки firewall не созданы"

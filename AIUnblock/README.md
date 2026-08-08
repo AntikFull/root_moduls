@@ -1,45 +1,70 @@
-# AI Unblock RU (Magisk / KernelSU / APatch Module)
+# AI Unblock RU
 
-[🇷🇺 Русский](#русский) | [🇬🇧 English](#english)
+Модуль для Magisk, KernelSU и APatch с выборочной маршрутизацией Gemini, NotebookLM, ChatGPT, Claude и Grok через шлюзы Smart DNS. Обычный трафик устройства не перенаправляется.
+
+## Возможности
+
+- динамическое получение актуальных шлюзов через DoH;
+- независимый failover для поддерживаемых AI-сервисов;
+- точная SNI-маршрутизация Gemini и NotebookLM;
+- отдельные правила по UID приложений;
+- блокировка QUIC и IPv6 только для управляемых приложений;
+- резервный статический список шлюзов;
+- опциональные hosts и AdBlock;
+- сохранение пользовательской конфигурации при обновлении.
+
+## Конфигурация Smart DNS
+
+Штатные резолверы находятся в `smartdns.conf`:
+
+```text
+DOH https://dns.malw.link/dns-query
+DOT dns.malw.link
+DNS 95.216.204.218
+```
+
+Для собственных серверов скопируйте `smartdns.user.conf.example` в `smartdns.user.conf` и добавьте строки того же формата. Штатный и пользовательский списки объединяются, дубли удаляются. `smartdns.user.conf` сохраняется установщиком при обновлении.
+
+- `DOH` используется для динамического получения и TLS-проверки шлюза.
+- `DOT` хранит опубликованную защищённую точку сервиса и учитывается диагностикой.
+- `DNS` используется для обычного DNS-запроса и авторизации Smart DNS.
+
+Системный DNS Android модуль не изменяет.
+
+## Установка
+
+Установите `AIUnblock-v2.2.1.zip` через Magisk, KernelSU или APatch и перезагрузите устройство.
+
+## Журналы
+
+Основной журнал:
+
+```text
+/data/adb/modules/AIUnblock/dnat.log
+```
+
+Журнал SNI-router:
+
+```text
+/data/adb/modules/AIUnblock/router.log
+```
+
+## Автор и поддержка
+
+- Автор: eCubz — https://t.me/eCubz
+- Группа модуля: https://t.me/module_ecubz
+
+## Донаты и поддержка
+
+- СБП: `+7 923 618-89-93`
+- Т-Банк: https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131
+- USDT / GRAM: http://t.me/send?start=IVjCT8LiszJ2
+- TON Wallet (USDT): `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
 
 ---
 
-## <a name="русский"></a> 🇷🇺 Описание (Russian)
+## English
 
-**AI Unblock RU** — высокоэффективный модуль для Magisk / KernelSU / APatch, обеспечивающий выборочную маршрутизацию трафика и разблокировку AI-сервисов (Gemini, NotebookLM, ChatGPT, Claude, Grok, Copilot и др.) без необходимости проксирования всего интернет-трафика устройства.
+AI Unblock RU is a Magisk, KernelSU and APatch module that selectively routes Gemini, NotebookLM, ChatGPT, Claude and Grok through Smart DNS gateways without redirecting all device traffic.
 
-### ✨ Основные возможности
-- 🎯 **Точная маршрутизация SNI:** Разблокировка веб-версий и мобильных приложений Gemini, NotebookLM, ChatGPT, Claude, Grok.
-- ⚡ **Низкий ping и высокая скорость:** Напрямую пропускает обычный трафик, перенаправляя только необходимые домены AI.
-- 🔄 **Автоматический Failover:** Автоматическое переключение резервных серверов при сбоях.
-- 🛡️ **Интеграция с hosts / AdBlock:** Совместимость с блокерами рекламы и системным файлом hosts.
-- 📱 **Поддержка Root-менеджеров:** Полная совместимость с Magisk, KernelSU и APatch.
-
----
-
-## <a name="english"></a> 🇬🇧 Description (English)
-
-**AI Unblock RU** is a high-performance Magisk / KernelSU / APatch module providing selective traffic routing and unblocking for AI services (Gemini, NotebookLM, ChatGPT, Claude, Grok, Copilot, etc.) without routing your entire device Internet traffic through a VPN/Proxy.
-
-### ✨ Features
-- 🎯 **Selective SNI Routing:** Seamless access to Gemini, NotebookLM, ChatGPT, Claude, Grok apps and web endpoints.
-- ⚡ **Zero Speed Impact:** Passes normal traffic directly, routing only targeted AI domain queries.
-- 🔄 **Smart Failover:** Automatic fallback server switching upon connection drops.
-- 🛡️ **Hosts & AdBlock Compatible:** Coexists peacefully with system ad-blockers and custom hosts.
-- 📱 **Cross-Platform Root Support:** Compatible with Magisk, KernelSU, and APatch.
-
----
-
-## 👨‍💻 Автор и Сообщество / Author & Community
-- **Автор / Author:** eCubz ([https://t.me/eCubz](https://t.me/eCubz))
-- **Telegram Чат / Support Group:** [https://t.me/module_ecubz](https://t.me/module_ecubz)
-
----
-
-## ☕ Донаты и поддержка / Donations
-Ваша поддержка помогает развивать и поддерживать проекты! / Your support helps keep these projects active!
-
-- 💳 **СБП:** `+7 923 618-89-93` ⭐
-- 🟨 **Т-Банк:** [Перевод Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
-- 👁️ **Crypto:** [USDT | GRAM (Telegram Crypto Bot)](http://t.me/send?start=IVjCT8LiszJ2)
-- 💎 **TON Wallet (USDT):** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
+Version 2.2.1 adds dynamic DoH gateway discovery and separate `smartdns.conf` / persistent `smartdns.user.conf` configuration files. Supported record formats are `DOH URL`, `DOT HOST`, and `DNS IPv4`.

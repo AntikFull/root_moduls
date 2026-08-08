@@ -41,7 +41,7 @@ def pack_zip(project_dir, output_zip, file_list):
 
 if __name__ == '__main__':
     proj = r"f:\Antigravity\MagiskModuls\module\AIUnblock"
-    out = r"f:\Antigravity\MagiskModuls\module\AIUnblock-v2.1.4.zip"
+    out = r"f:\Antigravity\MagiskModuls\module\AIUnblock-v2.2.1.zip"
     
     bin_path = os.path.join(proj, "bin")
     if os.path.exists(bin_path):
@@ -58,6 +58,8 @@ if __name__ == '__main__':
         "sni_routes.conf",
         "proxies.conf",
         "proxies.override.example",
+        "smartdns.conf",
+        "smartdns.user.conf.example",
         "bin",
         "system",
         "META-INF",

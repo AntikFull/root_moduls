@@ -16,11 +16,11 @@ extract_required_file() {
   [ -s "$destination" ]
 }
 
-ui_print "- Установка AI Unblock RU v2.1.4..."
+ui_print "- Установка AI Unblock RU v2.2.1..."
 ui_print "- ПРИМЕЧАНИЕ ПО БЕЗОПАСНОСТИ:"
-ui_print "  • Трафик Gemini, ChatGPT, Claude и Grok проксируется через узлы из proxies.conf."
+ui_print "  • Для Gemini, ChatGPT, Claude и Grok используются шлюзы Smart DNS из proxies.conf."
 ui_print "  • TLS-валидация гарантирует сквозное шифрование и подлинность целевых сертификатов."
-ui_print "  • Узлам прокси виден IP клиента, SNI доменов и тайминги подключений."
+ui_print "  • Шлюзам Smart DNS виден IP клиента, SNI доменов и тайминги подключений."
 
 sed -i 's/\r$//' "$MODPATH/system/etc/hosts" 2>/dev/null
 [ -f "$MODPATH/system/etc/hosts.adblock" ] && sed -i 's/\r$//' "$MODPATH/system/etc/hosts.adblock" 2>/dev/null
@@ -30,6 +30,7 @@ if [ "$OLD_MODPATH" != "$MODPATH" ] && [ -d "$OLD_MODPATH" ]; then
   for state_file in \
     app_locales.state \
     proxies.override \
+    smartdns.user.conf \
     install.conf; do
     [ -f "$OLD_MODPATH/$state_file" ] &&
       cp -f "$OLD_MODPATH/$state_file" "$MODPATH/$state_file"
@@ -120,6 +121,9 @@ set_perm "$MODPATH/bin/curl" 0 0 0755
 set_perm "$MODPATH/sni_routes.conf" 0 0 0600
 [ -f "$MODPATH/proxies.conf" ] && set_perm "$MODPATH/proxies.conf" 0 0 0644
 [ -f "$MODPATH/proxies.override.example" ] && set_perm "$MODPATH/proxies.override.example" 0 0 0644
+[ -f "$MODPATH/smartdns.conf" ] && set_perm "$MODPATH/smartdns.conf" 0 0 0644
+[ -f "$MODPATH/smartdns.user.conf.example" ] && set_perm "$MODPATH/smartdns.user.conf.example" 0 0 0644
+[ -f "$MODPATH/smartdns.user.conf" ] && set_perm "$MODPATH/smartdns.user.conf" 0 0 0600
 [ -f "$MODPATH/install.conf" ] && set_perm "$MODPATH/install.conf" 0 0 0644
 [ -f "$MODPATH/app_locales.state" ] &&
   set_perm "$MODPATH/app_locales.state" 0 0 0600
@@ -132,5 +136,3 @@ set_perm "$MODPATH/sni_routes.conf" 0 0 0600
   abort "bin/aiunblock-router извлечён, но не получил право на запуск."
 [ -x "$MODPATH/bin/curl" ] ||
   abort "bin/curl извлечён, но не получил право на запуск."
-
-
