@@ -2,7 +2,6 @@
 # Автор: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
 # Приложения из этого списка работают напрямую через iptables UID bypass.
 
-
 # --- Мессенджеры Telegram (прямой доступ без задержек NFQUEUE) ---
 org.telegram.messenger
 com.telegram.messenger
@@ -83,6 +82,3 @@ ru.starlinex.app
 com.google.android.apps.bard
 com.google.android.googlequicksearchbox
 com.google.android.apps.labs.language.tailwind
-
-
-

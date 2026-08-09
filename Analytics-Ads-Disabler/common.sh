@@ -554,7 +554,6 @@ cleanup_stale_records() {
     mv "$tmp" "$DISABLED_LIST"
 }
 
-
 retry_orphan_restores() {
     [ -f "$COMPONENT_STATE" ] || return
     work="$COMPONENT_STATE.orphans.$$"

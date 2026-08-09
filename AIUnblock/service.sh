@@ -52,7 +52,6 @@ DOT_RESOLVERS=""
 PROXIES="$PUBLIC_PROXIES"
 AI_PROXIES="$PUBLIC_AI_PROXIES"
 
-
 LOCALE_PACKAGES="com.google.android.apps.bard com.google.android.apps.labs.language.tailwind com.openai.chatgpt com.anthropic.claude ai.x.grok"
 GOOGLE_PACKAGE="com.google.android.googlequicksearchbox"
 BARD_PACKAGE="com.google.android.apps.bard"
@@ -572,7 +571,6 @@ install_hooks() {
     ipt -t nat -I OUTPUT 1 -p tcp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_OUT || return 1
 }
 
-
 apply_uid_rules() {
   router_running || return 1
 
@@ -796,7 +794,6 @@ send_udp_dns_packet() {
   return 1
 }
 
-
 # Механизм "прогрева" / авторизации шлюзов Smart DNS:
 # Некоторые Smart DNS (из AUTH_DNS / proxies.conf) требуют предварительного DNS-запроса
 # перед тем, как их шлюз начнёт принимать TLS-трафик от клиента.
@@ -822,7 +819,6 @@ authorize_ips() {
   log "UDP-авторизация завершена: успешных DNS-запросов $successes"
   [ "$successes" -gt 0 ]
 }
-
 
 authorize_ips_with_retry() {
   local attempt=1
@@ -1047,7 +1043,6 @@ refresh_proxy_rules() {
     fi
   fi
 
-
   if [ -n "$GROK_UIDS" ]; then
     selected=$(select_proxy "$CURRENT_GROK" "grok.com" "$AI_PROXIES")
     if [ -n "$selected" ]; then
@@ -1231,7 +1226,6 @@ main_loop() {
   CURRENT_CHATGPT=$(read_gateway chatgpt)
   CURRENT_CLAUDE=$(read_gateway claude)
   CURRENT_GROK=$(read_gateway grok)
-
 
   maintain_router || {
     log "КРИТИЧЕСКАЯ ОШИБКА: SNI-router не запущен"

@@ -59,4 +59,3 @@ if [ -f "$MODDIR/service.sh" ]; then
 fi
 
 echo "Настройки сохранены в install.conf"
-

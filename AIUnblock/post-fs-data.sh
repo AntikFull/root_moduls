@@ -63,4 +63,3 @@ mount_hosts() {
 }
 
 mount_hosts
-

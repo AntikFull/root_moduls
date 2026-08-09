@@ -184,7 +184,6 @@ Smart DNS DoH https://xbox-dns.ru/dns-query выдал для gemini.google.com 
 
 [b][color=blue][size=2]Скачать v2.1.0:[/size][/color][/b] [attachment="35946087:AIUnblock-v2.2.1.zip"]
 
-
 [spoiler=[b][color=teal]Прошлые версии:[/color][/b]][list]
 [b][color=blue][size=2]Скачать v2.1.0:[/size][/color][/b] [attachment="35913638:AIUnblock-v2.1.0.zip"]
 [b][color=blue][size=2]Скачать v2.0.1:[/size][/color][/b] [attachment="35907365:AIUnblock-v2.0.1.zip"]

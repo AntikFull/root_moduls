@@ -37,7 +37,7 @@ echo "$(date '+%Y-%m-%d %H:%M:%S'): Система загружена, служ�
 is_bt_connected() {
     local status
     status=$(dumpsys bluetooth_manager 2>/dev/null)
-    
+
 # 1. Проверка строки состояния уровня громкости/подключения (должно содержать ": Connected" и НЕ содержать "NotConnected")
     if echo "$status" | grep -iE "$MAC_UPPER|$MAC_LOWER" | grep -v "NotConnected" | grep -q ": Connected"; then
         return 0
@@ -66,7 +66,7 @@ launch_alice() {
     if [ "$MINIMIZE_TO_BACKGROUND" -eq 1 ]; then
         sleep 0.5
         input keyevent 3
-        
+
 # Подстраховка: если окно Алисы все еще находится в фокусе, отправляем повторный сигнал HOME
         sleep 0.5
         if dumpsys window 2>/dev/null | grep -i "mCurrentFocus" | grep -q "$TARGET_PKG"; then
@@ -101,7 +101,7 @@ while true; do
         if [ "$CONNECTED" -eq 1 ]; then
             echo "$(date '+%Y-%m-%d %H:%M:%S'): Зафиксировано отключение наушников. Ожидание $DISCONNECT_DELAY сек для проверки..."
             sleep "$DISCONNECT_DELAY"
-            
+
 # Повторная проверка подстраховки от кратковременных сбоев
             if ! is_bt_connected; then
                 echo "$(date '+%Y-%m-%d %H:%M:%S'): Отключение подтверждено. Завершение работы $TARGET_PKG..."

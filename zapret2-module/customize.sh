@@ -1,11 +1,8 @@
-
-
 #MINAPI=21
 #MAXAPI=25
 #DYNLIB=true
 #PARTOVER=true
 #PARTITIONS=""
-
 
 REPLACE="
 "
