@@ -1,8 +1,4 @@
-##########################################################################################
-#
 # MMT Extended Utility Functions
-#
-##########################################################################################
 
 require_new_ksu() {
   ui_print "**********************************"
@@ -293,7 +289,7 @@ if $DYNLIB; then
     mv -f $MODPATH/system/$FILE $MODPATH/system/vendor/$FILE
     [ "$(ls -A `dirname $MODPATH/system/$FILE`)" ] || rm -rf `dirname $MODPATH/system/$FILE`
   done
-  # Delete empty lib folders (busybox find doesn't have this capability)
+# Delete empty lib folders (busybox find doesn't have this capability)
   toybox find $MODPATH/system/lib* -type d -empty -delete >/dev/null 2>&1
 fi
 

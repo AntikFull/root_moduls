@@ -18,7 +18,7 @@ cap_device_signature() {
     fp=$(getprop ro.build.fingerprint 2>/dev/null)
     sdk=$(getprop ro.build.version.sdk 2>/dev/null)
     abi=$(getprop ro.product.cpu.abi 2>/dev/null)
-    # No sourcing/eval is used for this value; it is only compared as plain text.
+# No sourcing/eval is used for this value; it is only compared as plain text.
     printf '%s|sdk=%s|abi=%s\n' "$fp" "$sdk" "$abi"
 }
 
@@ -56,8 +56,8 @@ cap_backend_has_verb() {
         return 0
     fi
 
-    # Non-destructive parser probe: invoke the verb without a package/component.
-    # A recognized state command reaches a "missing target" error; an unsupported verb says unknown command.
+# Non-destructive parser probe: invoke the verb without a package/component.
+# A recognized state command reaches a "missing target" error; an unsupported verb says unknown command.
     out=$(cap_pkg_exec_no_target "$backend" "$verb")
     printf '%s\n' "$out" | grep -Eiq 'no package( or component)? specified|package or component.*specified|no package.*component' && return 0
     return 1
@@ -98,8 +98,8 @@ cap_exec_probe_target() {
 }
 
 cap_runtime_hard_failure() {
-    # Errors proving that the command path itself is unusable. Target-specific
-    # "component does not exist" errors are intentionally NOT included here.
+# Errors proving that the command path itself is unusable. Target-specific
+# "component does not exist" errors are intentionally NOT included here.
     printf '%s\n' "$1" | grep -Eiq \
         'Failed transaction|Transaction failed|binder[^[:alnum:]]*.*fail|DeadObjectException|RemoteException|SecurityException|Unknown command|Unknown option|not supported|unsupported operation|invalid new component state|Failed setComponentEnabledSetting'
 }
@@ -108,12 +108,12 @@ cap_runtime_reached_pm() {
     out="$1"; rc="$2"
     cap_runtime_hard_failure "$out" && return 1
 
-    # Expected safe result for the synthetic component: PackageManager reached
-    # the real state-change path and rejected only the nonexistent target.
+# Expected safe result for the synthetic component: PackageManager reached
+# the real state-change path and rejected only the nonexistent target.
     printf '%s\n' "$out" | grep -Eiq \
         'does not exist|Unknown component|Unknown package|not found|not installed|new state:' && return 0
 
-    # Some OEMs return success with terse/no output after validating the command.
+# Some OEMs return success with terse/no output after validating the command.
     [ "$rc" -eq 0 ] 2>/dev/null && return 0
     return 1
 }
@@ -131,7 +131,7 @@ cap_probe_action_candidate() {
         fi
     fi
 
-    # A ROM may expose the verb but not --user. Probe the user-0-only form too.
+# A ROM may expose the verb but not --user. Probe the user-0-only form too.
     out=$(cap_exec_probe_target "$backend" "$verb" 0)
     rc=$?
     if cap_runtime_reached_pm "$out" "$rc"; then
@@ -142,9 +142,9 @@ cap_probe_action_candidate() {
 }
 
 cap_pick_action() {
-    # args: action-key candidate-verb...
-    # Candidate order is policy. Each candidate must also pass a real,
-    # non-destructive runtime/Binder probe; help text alone is insufficient.
+# args: action-key candidate-verb...
+# Candidate order is policy. Each candidate must also pass a real,
+# non-destructive runtime/Binder probe; help text alone is insufficient.
     key="$1"; shift
     for verb in "$@"; do
         for backend in cmd pm; do
@@ -233,14 +233,14 @@ probe_capabilities() {
     mkdir -p "$DATA_DIR" 2>/dev/null
     tmp="$CAPABILITIES_FILE.tmp.$$"
 
-    # Operational blocking prefers the per-user verb. Android 16 devices have
-    # been observed advertising both verbs while `disable` can fail at Binder runtime.
+# Operational blocking prefers the per-user verb. Android 16 devices have
+# been observed advertising both verbs while `disable` can fail at Binder runtime.
     disable_spec=$(cap_pick_action block disable-user disable)
     enable_spec=$(cap_pick_action enable enable-user enable)
     default_spec=$(cap_pick_action default default-state)
 
-    # Keep a separate path for restoring an original explicit `disabled` state.
-    # Prefer the exact verb, but gracefully fall back if this ROM cannot execute it.
+# Keep a separate path for restoring an original explicit `disabled` state.
+# Prefer the exact verb, but gracefully fall back if this ROM cannot execute it.
     state_disabled_spec=$(cap_pick_action state_disabled disable disable-user)
     disable_user_spec=$(cap_pick_action disable_user disable-user disable)
     disable_until_spec=$(cap_pick_action disable_until disable-until-used disable-user disable)
@@ -378,8 +378,8 @@ cap_exec_pm_action_resilient() {
     out=$(cap_exec_pm_action "$backend" "$verb" "$has_user" "$user" "$target" 2>&1)
     rc=$?
 
-    # Self-heal only on a transport/parser/backend failure, never on ordinary
-    # target-specific failures. This does NOT create a per-component fallback chain.
+# Self-heal only on a transport/parser/backend failure, never on ordinary
+# target-specific failures. This does NOT create a per-component fallback chain.
     if [ "$rc" -ne 0 ] && cap_runtime_hard_failure "$out" && [ "${CAP_REPROBED_ON_FAILURE:-0}" != "1" ]; then
         CAP_REPROBED_ON_FAILURE=1
         rm -f "$CAPABILITIES_FILE" 2>/dev/null
@@ -415,7 +415,7 @@ cap_set_component_state() {
     cap_exec_pm_action_resilient "$b" "$v" "$u" "$user" "$target"
     rc=$?
     if [ "$rc" -eq 125 ]; then
-        # Refresh local selection after the one-time re-probe.
+# Refresh local selection after the one-time re-probe.
         case "$state" in
             enabled) b="$CAP_PM_ENABLE_BACKEND"; v="$CAP_PM_ENABLE_VERB"; u="$CAP_PM_ENABLE_HAS_USER" ;;
             disabled) b="$CAP_PM_STATE_DISABLED_BACKEND"; v="$CAP_PM_STATE_DISABLED_VERB"; u="$CAP_PM_STATE_DISABLED_HAS_USER" ;;

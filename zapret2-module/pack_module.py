@@ -17,7 +17,7 @@ def fix_line_endings_and_pack():
 
     with zipfile.ZipFile(OUTPUT_ZIP, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for root, dirs, files in os.walk(SOURCE_DIR):
-            # Фильтрация директорий
+# Фильтрация директорий
             dirs[:] = [d for d in dirs if d not in EXCLUDE_ITEMS]
             for file in files:
                 if file in EXCLUDE_ITEMS:
@@ -25,7 +25,7 @@ def fix_line_endings_and_pack():
                 file_path = os.path.join(root, file)
                 rel_path = os.path.relpath(file_path, SOURCE_DIR).replace('\\', '/')
 
-                # Преобразование окончаний строк LF для текстовых файлов
+# Преобразование окончаний строк LF для текстовых файлов
                 if file.endswith(('.sh', '.prop', '.rule', '.conf', '.list', '.json', '.html', '.css', '.js')):
                     with open(file_path, 'rb') as f:
                         content = f.read()

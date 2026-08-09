@@ -47,7 +47,7 @@ read_setting() {
     if [ -f "$SETTINGS_FILE" ]; then
         val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$SETTINGS_FILE" | head -n1 | tr -d '\r')
     fi
-    # Backward compatibility with v3 rules.conf settings.
+# Backward compatibility with v3 rules.conf settings.
     if [ -z "$val" ] && [ -f "$RULES_FILE" ]; then
         val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$RULES_FILE" | head -n1 | tr -d '\r')
     fi
@@ -497,7 +497,7 @@ process_package_user() {
     fi
     sort -u "$desired" > "$desired.sorted" 2>/dev/null && mv "$desired.sorted" "$desired"
 
-    # Remove obsolete memberships first. Restoration happens only when no other category still needs the component.
+# Remove obsolete memberships first. Restoration happens only when no other category still needs the component.
     existing="$DATA_DIR/.existing.$$"
     awk -F'|' -v u="$user" -v p="$pkg/" '$1==u && index($2,p)==1' "$DISABLED_LIST" 2>/dev/null > "$existing"
     while IFS='|' read -r eu ec ek; do

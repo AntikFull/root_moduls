@@ -20,19 +20,19 @@ mount_hosts() {
     enable_adblock=${ENABLE_ADBLOCK:-1}
   fi
 
-  # Валидация значений из install.conf
+# Валидация значений из install.conf
   case "$enable_routing" in 0|1) ;; *) enable_routing=1 ;; esac
   case "$enable_adblock" in 0|1) ;; *) enable_adblock=1 ;; esac
 
   if [ "$enable_routing" -eq 0 ] && [ "$enable_adblock" -eq 0 ]; then
-    # Если хосты отключены пользователем — полностью удаляем папку system, чтобы Root-менеджер не включал оверлей hosts
+# Если хосты отключены пользователем — полностью удаляем папку system, чтобы Root-менеджер не включал оверлей hosts
     rm -rf "$MODDIR/system" 2>/dev/null
     return 0
   fi
 
-  # Пересчёт конфликта на каждой загрузке: другой hosts-модуль мог быть
-  # установлен уже ПОСЛЕ инсталляции AI Unblock, разовой проверки в
-  # customize.sh недостаточно.
+# Пересчёт конфликта на каждой загрузке: другой hosts-модуль мог быть
+# установлен уже ПОСЛЕ инсталляции AI Unblock, разовой проверки в
+# customize.sh недостаточно.
   if command -v hosts_conflict_detected >/dev/null 2>&1; then
     local conflict_id
     conflict_id=$(hosts_conflict_detected "$MODULE_ID")

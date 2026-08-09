@@ -1155,7 +1155,7 @@ mount_hosts() {
     enable_adblock=${ENABLE_ADBLOCK:-1}
   fi
 
-  # Валидация значений из install.conf на 0/1
+# Валидация значений из install.conf на 0/1
   case "$enable_routing" in 0|1) ;; *) enable_routing=1 ;; esac
   case "$enable_adblock" in 0|1) ;; *) enable_adblock=1 ;; esac
 

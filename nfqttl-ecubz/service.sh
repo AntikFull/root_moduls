@@ -120,10 +120,10 @@ done
 
 # 5. ГЛОБАЛЬНАЯ НАСТРОЙКА TTL (IPv4) И HOP LIMIT (IPv6)
 if grep -q TTL /proc/net/ip_tables_targets 2>/dev/null; then
-    # РЕЖИМ 1: Нативный Kernel TTL (0% нагрузки)
+# РЕЖИМ 1: Нативный Kernel TTL (0% нагрузки)
     iptables -t mangle -I FORWARD 1 -j TTL --ttl-set 64 2>/dev/null || true
 else
-    # РЕЖИМ 2: NFQUEUE Daemon
+# РЕЖИМ 2: NFQUEUE Daemon
     if ! nfqttl_alive; then
         "$MODDIR/nfqttl" -d
         sleep 1
@@ -135,10 +135,10 @@ else
 fi
 
 if grep -q HL /proc/net/ip6_tables_targets 2>/dev/null; then
-    # РЕЖИМ 1 (IPv6): Нативный Kernel HL
+# РЕЖИМ 1 (IPv6): Нативный Kernel HL
     ip6tables -t mangle -I FORWARD 1 -j HL --hl-set 64 2>/dev/null || true
 else
-    # РЕЖИМ 2 (IPv6): NFQUEUE Daemon - ВСТАВКА В САМУЮ ПЕРВУЮ СТРОКУ FORWARD!
+# РЕЖИМ 2 (IPv6): NFQUEUE Daemon - ВСТАВКА В САМУЮ ПЕРВУЮ СТРОКУ FORWARD!
     if ! nfqttl_alive; then
         "$MODDIR/nfqttl" -d
         sleep 1
@@ -236,7 +236,7 @@ watchdog() {
         echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
         echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
 
-        # Убеждаемся, что ip6tables nfqttlo правило держится в строке 1 FORWARD
+# Убеждаемся, что ip6tables nfqttlo правило держится в строке 1 FORWARD
         if ! grep -q HL /proc/net/ip6_tables_targets 2>/dev/null; then
             ip6tables -t mangle -C FORWARD -j nfqttlo 2>/dev/null || ip6tables -t mangle -I FORWARD 1 -j nfqttlo 2>/dev/null || true
         fi

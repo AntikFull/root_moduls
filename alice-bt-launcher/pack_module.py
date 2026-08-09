@@ -9,10 +9,10 @@ def pack_module():
     
     zip_path = os.path.join(output_dir, 'alice-bt-launcher-v1.0.0.zip')
     
-    # Расширения файлов для нормализации LF
+# Расширения файлов для нормализации LF
     text_extensions = ('.sh', '.prop', '.conf', '.rule', '.json', '.md')
     
-    # Перечень исключаемых файлов
+# Перечень исключаемых файлов
     exclude_files = {'pack_module.py', '.git', '.gitignore'}
     
     print(f"Сборка модуля из: {module_dir}")
@@ -27,14 +27,14 @@ def pack_module():
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, module_dir)
                 
-                # Позикс-нормализация путей в архиве (ОБЯЗАТЕЛЬНОЕ ПРАВИЛО ПРОЕКТА)
+# Позикс-нормализация путей в архиве (ОБЯЗАТЕЛЬНОЕ ПРАВИЛО ПРОЕКТА)
                 arcname = rel_path.replace('\\', '/')
                 
-                # Нормализация окончаний строк LF для текстовых файлов
+# Нормализация окончаний строк LF для текстовых файлов
                 if file.endswith(text_extensions):
                     with open(full_path, 'rb') as f:
                         content = f.read()
-                    # Замена CRLF на LF
+# Замена CRLF на LF
                     content = content.replace(b'\r\n', b'\n')
                     zipf.writestr(arcname, content)
                     print(f"  + Добавлен (LF normalized): {arcname}")
