@@ -1,4 +1,4 @@
-# Systemwide Analytics & Ads Disabler
+# Analytics & Ads Disabler
 
 [ Русский](#русский) | [ English](#english)
 
@@ -6,7 +6,7 @@
 
 ## <a name="русский"></a>  Описание (Russian)
 
-**Systemwide Analytics & Ads Disabler** — адаптивный системный модуль для Magisk / KernelSU / APatch, отключающий встроенные сервисы аналитики, телеметрии и рекламные компоненты (Services, Receivers, Providers) в установленных приложениях и прошивке Android.
+**Analytics & Ads Disabler** — адаптивный системный модуль для Magisk / KernelSU / APatch, отключающий встроенные сервисы аналитики, телеметрии и рекламные компоненты (Services, Receivers, Providers) в установленных приложениях и прошивке Android.
 
 ###  Основные возможности
 -  **Runtime Adaptive Engine:** Автоматическая адаптация под версию Android и оболочку (MIUI, HyperOS, OneUI, ColorOS, Pixel и др.).
@@ -19,7 +19,7 @@
 
 ## <a name="english"></a>  Description (English)
 
-**Systemwide Analytics & Ads Disabler** is an adaptive Magisk / KernelSU / APatch system module designed to disable built-in analytics, telemetry, and advertising components (Services, Receivers, Providers) across user applications and system firmware.
+**Analytics & Ads Disabler** is an adaptive Magisk / KernelSU / APatch system module designed to disable built-in analytics, telemetry, and advertising components (Services, Receivers, Providers) across user applications and system firmware.
 
 ###  Features
 -  **Runtime Adaptive Engine:** Automatically adjusts behavior based on Android version and OEM ROM (MIUI, HyperOS, OneUI, ColorOS, Pixel, etc.).

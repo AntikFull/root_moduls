@@ -6,7 +6,7 @@ CAPABILITIES_FILE="$DATA_DIR/capabilities.conf"
 [ -f "$MODPATH/compat.sh" ] && . "$MODPATH/compat.sh"
 
 ui_print "***********************************************"
-ui_print "* Systemwide Analytics & Ads Disabler        *"
+ui_print "* Analytics & Ads Disabler        *"
 ui_print "* v4.2.0 Runtime Adaptive Edition             *"
 ui_print "* Author: eCubz (https://t.me/eCubz)         *"
 ui_print "***********************************************"
