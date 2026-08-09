@@ -1,4 +1,15 @@
+# AI Unblock RU
+
+**Кроссплатформенный модуль для Magisk, KernelSU и APatch**
+
+Модуль обеспечивает автоматическую избирательную разблокировку AI-сервисов (ChatGPT, Gemini, Claude, Copilot, Grok, NotebookLM) через технологии Smart DNS DoH и SNI routing без полнотуннельного VPN.
+
 ---
+
+## Авторство и контакты
+
+- **Автор:** eCubz ([Telegram](https://t.me/eCubz))
+- **Канал и группа поддержки:** [t.me/module_ecubz](https://t.me/module_ecubz)
 
 ---
 
