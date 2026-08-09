@@ -41,7 +41,7 @@ def pack_zip(project_dir, output_zip, file_list):
 
 if __name__ == '__main__':
     proj = r"f:\Antigravity\MagiskModuls\module\AIUnblock"
-    out = r"f:\Antigravity\MagiskModuls\module\AIUnblock-v2.2.1.zip"
+    out = r"f:\Antigravity\MagiskModuls\module\AIUnblock_v2.2.7_229.zip"
     
     bin_path = os.path.join(proj, "bin")
     if os.path.exists(bin_path):
