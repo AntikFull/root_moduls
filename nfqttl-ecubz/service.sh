@@ -2,11 +2,11 @@
 MODDIR=${0%/*}
 
 # ============================================================================
-# Nfqttl eCubz v8.4-fixed - Ultimate IPv6 Hop Limit Lock & Zero-Leak Forward
+# Nfqttl eCubz v8.4 - Ultimate IPv6 Hop Limit Lock & Zero-Leak Forward
 # Compatible with: OnePlus 13 (Android 15/16), OxygenOS, Xiaomi, Samsung, All
 # ============================================================================
 
-VERSION="v8.4-fixed"
+VERSION="v8.4"
 VERSION_CODE="840"
 
 # Фиксация примененной версии для предотвращения путаницы логов без перезагрузки

@@ -1,6 +1,6 @@
 id=nfqttl-ecubz
 name=NFQTTL Stealth Header & TTL Fix
-version=v8.4-fixed
+version=v8.4
 versionCode=841
 author=eCubz (https://t.me/eCubz)
 description=Обход ограничений раздачи интернета (TTL/HL fix + NFQUEUE stealth modification). Поддержка: https://t.me/module_ecubz
