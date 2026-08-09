@@ -1,7 +1,7 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v4.2.0 (Runtime Adaptive)
-versionCode=420
+version=v4.2.0
+versionCode=421
 author=eCubz (https://t.me/eCubz)
 description=Адаптивное отключение системной аналитики, рекламы и трекеров на уровнях Services/Receivers в Android. Поддержка: https://t.me/module_ecubz
 minMagisk=20400
