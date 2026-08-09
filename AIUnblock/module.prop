@@ -1,6 +1,6 @@
 id=AIUnblock
 name=AI Unblock RU
 version=v2.2.7
-versionCode=228
+versionCode=229
 author=eCubz (https://t.me/eCubz)
-description=Автоматическая разблокировка ChatGPT, Gemini, Claude, Copilot и OpenAI через Smart DNS DoH & SNI. Поддержка: https://t.me/module_ecubz
+description=Избирательная разблокировка AI-сервисов (ChatGPT, Gemini, Claude, Grok, NotebookLM) через per-UID SNI-роутер и DoH без смены системного DNS. Поддержка: https://t.me/module_ecubz

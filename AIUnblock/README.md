@@ -2,7 +2,7 @@
 
 **Кроссплатформенный модуль для Magisk, KernelSU и APatch**
 
-Модуль обеспечивает автоматическую избирательную разблокировку AI-сервисов (ChatGPT, Gemini, Claude, Copilot, Grok, NotebookLM) через технологии Smart DNS DoH и SNI routing без полнотуннельного VPN.
+Модуль обеспечивает автоматическую избирательную разблокировку AI-сервисов (ChatGPT, Gemini, Claude, Copilot, Grok, NotebookLM) через локальный per-UID SNI-роутер и параллельные DoH-резолверы без смены системного Private DNS и без полнотуннельного VPN.
 
 ---
 
