@@ -1,7 +1,7 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v4.2.0
-versionCode=421
+version=v4.6.1
+versionCode=601
 author=eCubz (https://t.me/eCubz)
-description=Адаптивное отключение системной аналитики, рекламы и трекеров на уровнях Services/Receivers в Android. Поддержка: https://t.me/module_ecubz
+description=Адаптивное отключение аналитики, рекламы и трекеров: точный откат PM, SAFE/BALANCED и опциональный HYBRID IFW+PM для проверенных Activity/Receiver/Service. Логи: /data/adb/analytics_ads_disabler/logs. Поддержка: https://t.me/module_ecubz
 minMagisk=20400
