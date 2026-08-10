@@ -79,6 +79,60 @@ ask_yes_no() {
 mkdir -p "$DATA_DIR"
 chmod 700 "$DATA_DIR" 2>/dev/null
 
+# При обновлении сначала полностью останавливаем runtime старой версии. Иначе
+# config watcher может начать полный пересчёт на частично обновлённых настройках
+# одновременно с PM-пробами установщика. На некоторых HyperOS это перегружает
+# Binder Package Manager и приводит к Failed transaction/Broken pipe.
+stop_previous_worker() {
+  pf="$1"
+  [ -f "$pf" ] || return 0
+  oldpid=$(cat "$pf" 2>/dev/null)
+  case "$oldpid" in ''|*[!0-9]*) rm -f "$pf" 2>/dev/null; return 0 ;; esac
+  if kill -0 "$oldpid" 2>/dev/null; then
+    kill "$oldpid" 2>/dev/null
+    n=0
+    while kill -0 "$oldpid" 2>/dev/null && [ "$n" -lt 20 ]; do
+      sleep 0.1 2>/dev/null || sleep 1
+      n=$((n + 1))
+    done
+    kill -9 "$oldpid" 2>/dev/null || true
+    ui_print "- Stopped previous runtime worker pid=$oldpid"
+  fi
+  rm -f "$pf" 2>/dev/null
+}
+for pf in "$DATA_DIR/config_watch.pid" "$DATA_DIR/config_inotify.pid" "$DATA_DIR/inotify.pid" "$DATA_DIR/category_watch.pid" "$DATA_DIR/log_mirror.pid"; do
+  stop_previous_worker "$pf"
+done
+
+# Полный boot/action-скан может владеть operation lock до запуска watcher'ов и
+# поэтому не иметь отдельного pid-файла. Завершаем только проверенный процесс
+# именно этого модуля; чужой или переиспользованный PID никогда не трогаем.
+operation_owner=$(cat "$DATA_DIR/.operation.lock/pid" 2>/dev/null)
+case "$operation_owner" in
+  ''|*[!0-9]*) ;;
+  *)
+    if [ "$operation_owner" != "$$" ] && kill -0 "$operation_owner" 2>/dev/null; then
+      operation_cmdline=$(tr '\000' ' ' < "/proc/$operation_owner/cmdline" 2>/dev/null)
+      case "$operation_cmdline" in
+        *analytics_ads_disabler*)
+          kill "$operation_owner" 2>/dev/null
+          n=0
+          while kill -0 "$operation_owner" 2>/dev/null && [ "$n" -lt 20 ]; do
+            sleep 0.1 2>/dev/null || sleep 1
+            n=$((n + 1))
+          done
+          kill -9 "$operation_owner" 2>/dev/null || true
+          ui_print "- Stopped previous active scan pid=$operation_owner"
+          ;;
+        *)
+          ui_print "! Preserving unrecognized operation-lock owner pid=$operation_owner"
+          ;;
+      esac
+    fi
+    ;;
+esac
+rm -rf "$DATA_DIR/.operation.lock" "$DATA_DIR/.state_db.lock" "$DATA_DIR/.membership_db.lock" 2>/dev/null
+
 # Installation-time diagnostics. This is intentionally lightweight and mostly
 # read-only; the only optional write probe re-applies DISABLED to a component
 # that is already verified disabled by this module.
@@ -252,31 +306,6 @@ SCAN_ALL_USERS_EFFECTIVE=$(sed -n 's/^[[:space:]]*SCAN_ALL_USERS[[:space:]]*=[[:
 if [ "$SCAN_ALL_USERS_EFFECTIVE" = "1" ] && { [ "$CAP_PM_DISABLE_HAS_USER" != "1" ] || [ "$CAP_PM_ENABLE_HAS_USER" != "1" ] || [ "$CAP_PM_DEFAULT_HAS_USER" != "1" ] || [ "$CAP_PACKAGE_LIST_HAS_USER" != "1" ]; }; then
   ui_print "! This ROM lacks complete --user support; runtime will safely use user 0 only."
 fi
-
-# Stop runtime workers from the currently active module before touching the
-# persistent state DB during an update. On KernelSU/Magisk the old service can
-# otherwise stay alive until reboot and race the installer/new policy files.
-stop_previous_worker() {
-  pf="$1"
-  [ -f "$pf" ] || return 0
-  oldpid=$(cat "$pf" 2>/dev/null)
-  case "$oldpid" in ''|*[!0-9]*) rm -f "$pf" 2>/dev/null; return 0 ;; esac
-  if kill -0 "$oldpid" 2>/dev/null; then
-    kill "$oldpid" 2>/dev/null
-    n=0
-    while kill -0 "$oldpid" 2>/dev/null && [ "$n" -lt 20 ]; do
-      sleep 0.1 2>/dev/null || sleep 1
-      n=$((n + 1))
-    done
-    kill -9 "$oldpid" 2>/dev/null || true
-    ui_print "- Stopped previous runtime worker pid=$oldpid"
-  fi
-  rm -f "$pf" 2>/dev/null
-}
-for pf in "$DATA_DIR/config_watch.pid" "$DATA_DIR/config_inotify.pid" "$DATA_DIR/inotify.pid" "$DATA_DIR/category_watch.pid" "$DATA_DIR/log_mirror.pid"; do
-  stop_previous_worker "$pf"
-done
-rm -rf "$DATA_DIR/.operation.lock" "$DATA_DIR/.state_db.lock" "$DATA_DIR/.membership_db.lock" 2>/dev/null
 
 # Preserve user configuration across module updates. Defaults are copied only on first install.
 for f in rules.conf whitelist.list white_ads.list white_analytics.list; do
