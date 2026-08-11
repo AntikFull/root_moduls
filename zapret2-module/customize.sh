@@ -43,6 +43,7 @@ set_permissions() {
     "$MODPATH/bin/mdig" \
     "$MODPATH/bin/zapret2-control" \
     "$MODPATH/service.sh" \
+    "$MODPATH/boot-completed.sh" \
     "$MODPATH/action.sh" \
     "$MODPATH/uninstall.sh" \
     "$MODPATH/on_change.sh" \
@@ -82,6 +83,47 @@ ilog "installer=start manager=$(manager_name)"
 ilog "device=$(getprop ro.product.manufacturer 2>/dev/null) $(getprop ro.product.model 2>/dev/null) sdk=$(getprop ro.build.version.sdk 2>/dev/null) abi=$(getprop ro.product.cpu.abi 2>/dev/null)"
 ilog "modpath=$MODPATH zipfile=$ZIPFILE"
 
+# Preserve user-owned configuration on update. With SKIPUNZIP=1 the new archive
+# may be unpacked into modules_update or directly over the active path depending
+# on the manager. Back up before extraction, keep selections/host lists exactly
+# as the user left them, and merge only still-supported config keys into new defaults.
+ACTIVE_MODDIR="/data/adb/modules/zapret2-android"
+UPGRADE_BACKUP="/data/local/tmp/zapret2-upgrade.$$"
+UPGRADE_FROM=""
+if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
+  mkdir -p "$UPGRADE_BACKUP" 2>/dev/null || fail_install "Не удалось создать временную копию настроек"
+  for keep in zapret2.conf apps.list exclude.list auto_domains.list exclude_domains.list; do
+    [ -f "$ACTIVE_MODDIR/$keep" ] && cp -f "$ACTIVE_MODDIR/$keep" "$UPGRADE_BACKUP/$keep" 2>/dev/null
+  done
+  UPGRADE_FROM="$ACTIVE_MODDIR"
+  ilog "upgrade_backup=$UPGRADE_BACKUP source=$ACTIVE_MODDIR"
+fi
+
+merge_previous_config() {
+  old="$1" new="$2" tmp="$2.merge.$$"
+  [ -f "$old" ] && [ -f "$new" ] || return 0
+  awk '
+    NR==FNR {
+      if ($0 ~ /^[A-Z][A-Z0-9_]*=/) { key=$0; sub(/=.*/, "", key); old[key]=$0 }
+      next
+    }
+    {
+      if ($0 ~ /^[A-Z][A-Z0-9_]*=/) { key=$0; sub(/=.*/, "", key); if (key in old) { print old[key]; next } }
+      print
+    }
+  ' "$old" "$new" > "$tmp" && mv -f "$tmp" "$new"
+  rm -f "$tmp" 2>/dev/null
+}
+
+restore_upgrade_data() {
+  [ -n "$UPGRADE_FROM" ] || return 0
+  merge_previous_config "$UPGRADE_BACKUP/zapret2.conf" "$MODPATH/zapret2.conf"
+  for keep in apps.list exclude.list auto_domains.list exclude_domains.list; do
+    [ -f "$UPGRADE_BACKUP/$keep" ] && cp -f "$UPGRADE_BACKUP/$keep" "$MODPATH/$keep" 2>/dev/null
+  done
+  ilog "upgrade_preserved=config,apps,exclude,auto_domains,exclude_domains"
+}
+
 # Extract ourselves so behavior does not depend on manager-specific unzip order.
 [ -n "$MODPATH" ] || fail_install "MODPATH не задан установщиком"
 mkdir -p "$MODPATH" 2>/dev/null || fail_install "Не удалось создать $MODPATH"
@@ -94,6 +136,7 @@ else
   ilog "archive=pre-extracted"
 fi
 rm -rf "$MODPATH/META-INF" "$MODPATH/common" 2>/dev/null
+restore_upgrade_data
 
 ABI=$(getprop ro.product.cpu.abi 2>/dev/null)
 [ -n "$ABI" ] || ABI="$ARCH"
@@ -118,7 +161,7 @@ rm -rf "$MODPATH/binaries" 2>/dev/null
 
 for f in \
   "$MODPATH/bin/nfqws2" "$MODPATH/bin/ip2net" "$MODPATH/bin/mdig" "$MODPATH/bin/zapret2-control" \
-  "$MODPATH/service.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
+  "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
   "$MODPATH/network-event.sh" "$MODPATH/diagnostics.sh"
 do
@@ -198,12 +241,17 @@ fi
 
 sed -i "s/^ENABLE_HOTSPOT=.*/ENABLE_HOTSPOT=\"$ENABLE_HOTSPOT_VAL\"/" "$CONF_TARGET"
 sed -i "s/^ENABLE_VPN_HOTSPOT=.*/ENABLE_VPN_HOTSPOT=\"$ENABLE_VPN_HOTSPOT_VAL\"/" "$CONF_TARGET"
-sed -i "s/^VPN_FALLBACK_MODE=.*/VPN_FALLBACK_MODE=\"ANTIDPI\"/" "$CONF_TARGET"
+if [ -z "$UPGRADE_FROM" ]; then
+  sed -i "s/^VPN_FALLBACK_MODE=.*/VPN_FALLBACK_MODE=\"ANTIDPI\"/" "$CONF_TARGET"
+fi
 sed -i "s/^VPN_HOTSPOT_KILLSWITCH=.*/VPN_HOTSPOT_KILLSWITCH=\"0\"/" "$CONF_TARGET"
 sed -i "s/^FORCE_TCP_HOTSPOT=.*/FORCE_TCP_HOTSPOT=\"$FORCE_TCP_HOTSPOT_VAL\"/" "$CONF_TARGET"
 sed -i "s/^DNS_FORWARD_HOTSPOT=.*/DNS_FORWARD_HOTSPOT=\"$DNS_FORWARD_HOTSPOT_VAL\"/" "$CONF_TARGET"
 
-ilog "choices hotspot=$ENABLE_HOTSPOT_VAL vpn_hotspot=$ENABLE_VPN_HOTSPOT_VAL vpn_fallback=ANTIDPI quic_hotspot=$FORCE_TCP_HOTSPOT_VAL dns_hotspot=$DNS_FORWARD_HOTSPOT_VAL"
+VPN_FALLBACK_LOG=$(sed -n 's/^VPN_FALLBACK_MODE=//p' "$CONF_TARGET" | head -n1 | tr -d '"')
+[ -n "$VPN_FALLBACK_LOG" ] || VPN_FALLBACK_LOG=ANTIDPI
+ilog "choices hotspot=$ENABLE_HOTSPOT_VAL vpn_hotspot=$ENABLE_VPN_HOTSPOT_VAL vpn_fallback=$VPN_FALLBACK_LOG quic_hotspot=$FORCE_TCP_HOTSPOT_VAL dns_hotspot=$DNS_FORWARD_HOTSPOT_VAL"
+rm -rf "$UPGRADE_BACKUP" 2>/dev/null
 ilog "installer=success"
 flush_install_log
 

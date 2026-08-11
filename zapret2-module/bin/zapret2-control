@@ -1,8 +1,10 @@
 #!/system/bin/sh
 # Zapret2 eCubz control backend for WebUI / terminal.
 
-MODDIR="/data/adb/modules/zapret2-android"
-[ -d "$MODDIR" ] || MODDIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
+SELF_DIR="${0%/*}"
+case "$SELF_DIR" in /*) ;; *) SELF_DIR="$(pwd)/$SELF_DIR" ;; esac
+MODDIR="${SELF_DIR%/bin}"
+[ -f "$MODDIR/module.prop" ] || MODDIR="/data/adb/modules/zapret2-android"
 CONF_FILE="$MODDIR/zapret2.conf"
 APPS_LIST="$MODDIR/apps.list"
 EXCLUDE_LIST="$MODDIR/exclude.list"
@@ -13,7 +15,10 @@ LOG_FILE="$LOG_DIR/zapret2_debug.log"
 NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
 RUN_DIR="$MODDIR/run"
 HEALTH_FILE="$RUN_DIR/health.env"
+START_STATE_FILE="$RUN_DIR/startup.env"
+PACKAGE_UID_CACHE="$RUN_DIR/package_uids.cache"
 CONTROL_WRITE_MARK="$RUN_DIR/control-write.ts"
+LATE_START_PID_FILE="$RUN_DIR/late-start.pid"
 
 load_conf() { [ -f "$CONF_FILE" ] && . "$CONF_FILE"; }
 reload_service() { sh "$MODDIR/service.sh" reload; }
@@ -51,6 +56,7 @@ list_file() {
 }
 
 health_value() { sed -n "s/^$1=//p" "$HEALTH_FILE" 2>/dev/null | head -n1; }
+startup_value() { sed -n "s/^$1=//p" "$START_STATE_FILE" 2>/dev/null | head -n1; }
 
 cmd_status() {
   load_conf
@@ -65,7 +71,7 @@ cmd_status() {
 
 cmd_json_status() {
   load_conf
-  local pid=0 running=false apps=0 excluded=0 scope health warnings source compat compat_notes effective acct connbytes4 connmark4 nfq4 owner4
+  local pid=0 running=false apps=0 excluded=0 scope health warnings source compat compat_notes effective acct connbytes4 connmark4 nfq4 owner4 startup_state startup_phase startup_progress startup_updated now age late_start_pid late_start_waiting=false
   [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
   [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null && running=true || pid=0
   [ -f "$APPS_LIST" ] && apps=$(grep -cv '^[[:space:]]*\(#\|$\)' "$APPS_LIST")
@@ -78,8 +84,24 @@ cmd_json_status() {
   acct=$(health_value CONNTRACK_ACCT); connbytes4=$(health_value CONNBYTES4); connmark4=$(health_value CONNMARK4); nfq4=$(health_value NFQUEUE4); owner4=$(health_value OWNER4)
   [ -n "$effective" ] || effective=${STRATEGY_MODE:-UNKNOWN}
   [ -n "$compat" ] || compat=NATIVE
-  printf '{"running":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","compat_status":"%s","compat_notes":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s"}\n' \
-    "$running" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$apps" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-UNKNOWN}")" "$(json_escape "$effective")" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}"
+  startup_state=$(startup_value STATE); startup_phase=$(startup_value PHASE); startup_progress=$(startup_value PROGRESS); startup_updated=$(startup_value UPDATED)
+  [ -n "$startup_state" ] || startup_state=IDLE
+  [ -n "$startup_progress" ] || startup_progress=0
+  [ -n "$startup_updated" ] || startup_updated=0
+  now=$(date +%s 2>/dev/null); case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  case "$startup_updated" in ''|*[!0-9]*) startup_updated=0 ;; esac
+  age=$((now-startup_updated))
+  late_start_pid=$(cat "$LATE_START_PID_FILE" 2>/dev/null)
+  case "$late_start_pid" in ''|0|*[!0-9]*) ;; *) kill -0 "$late_start_pid" 2>/dev/null && late_start_waiting=true ;; esac
+  if [ "$running" = true ]; then
+    startup_state=READY; startup_phase="Служба работает"; startup_progress=100
+  elif [ "$startup_state" = WAITING ] && [ "$late_start_waiting" = true ]; then
+    startup_phase="Ожидание завершения загрузки Android"
+  elif { [ "$startup_state" = STARTING ] || [ "$startup_state" = WAITING ]; } && [ "$age" -gt 390 ] 2>/dev/null; then
+    startup_state=STALE; startup_phase="Автозапуск не завершился за 6 минут"
+  fi
+  printf '{"running":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","compat_status":"%s","compat_notes":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s}\n' \
+    "$running" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$apps" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-UNKNOWN}")" "$(json_escape "$effective")" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}" "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated"
 }
 
 cmd_scope_preset() {
@@ -137,6 +159,12 @@ package_list_raw() {
     awk 'NF>=1 {print "package:"$1}' /data/system/packages.list >> "$out" 2>/dev/null
     got=1
   fi
+  # The running service already maintains a root-resolved package/UID cache.
+  # It is a final fallback when vendor PackageManager Binder calls are broken.
+  if [ -r "$PACKAGE_UID_CACHE" ]; then
+    awk 'NF>=1 {print "package:"$1}' "$PACKAGE_UID_CACHE" >> "$out" 2>/dev/null
+    got=1
+  fi
   [ "$got" = 1 ] || return 1
   # Normalize to package:<name>; remove UID/path decorations and duplicates.
   awk '/^package:/ {line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
@@ -157,6 +185,28 @@ system_package_list_raw() {
   return 0
 }
 
+
+json_pkg_array_from_file() {
+  local file="$1" first=1 line
+  printf '['
+  [ -f "$file" ] && while IFS= read -r line || [ -n "$line" ]; do
+    line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    case "$line" in \#*|'') continue ;; esac
+    validate_pkg "$line" || continue
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '"%s"' "$line"
+  done < "$file"
+  printf ']'
+}
+
+cmd_json_app_lists() {
+  printf '{"include":'
+  json_pkg_array_from_file "$APPS_LIST"
+  printf ',"exclude":'
+  json_pkg_array_from_file "$EXCLUDE_LIST"
+  printf '}\n'
+}
 cmd_json_apps() {
   mkdir -p "$RUN_DIR" 2>/dev/null
   local raw="$RUN_DIR/.packages.$$" sys_tmp="$RUN_DIR/.system-packages.$$" rc=0
@@ -184,12 +234,38 @@ cmd_json_apps() {
 }
 
 cmd_add_del() {
-  local list="$1" op="$2" pkg="$3" file
+  local list="$1" op="$2" pkg="$3" file tmp
   validate_pkg "$pkg" || { echo "Недопустимое имя пакета"; return 1; }
   file=$(list_file "$list") || return 1
   mark_control_write
-  if [ "$op" = add ]; then grep -qxF "$pkg" "$file" 2>/dev/null || echo "$pkg" >> "$file"; else sed -i "\|^$pkg$|d" "$file"; fi
+  if [ "$op" = add ]; then
+    grep -qxF "$pkg" "$file" 2>/dev/null || echo "$pkg" >> "$file"
+  else
+    tmp="$file.tmp.$$"
+    awk -v p="$pkg" '$0 != p { print }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+  fi
   reload_service
+}
+
+remove_pkg_exact() {
+  local file="$1" pkg="$2" tmp="$file.tmp.$$"
+  [ -f "$file" ] || : > "$file"
+  awk -v p="$pkg" '{ raw=$0; t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if (t != p) print raw }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+}
+
+cmd_app_state() {
+  local pkg="$2" state="$3"
+  validate_pkg "$pkg" || { echo "Недопустимое имя пакета"; return 1; }
+  case "$state" in include|exclude|none) ;; *) echo "Недопустимое состояние приложения"; return 1 ;; esac
+  mark_control_write
+  remove_pkg_exact "$APPS_LIST" "$pkg" || return 1
+  remove_pkg_exact "$EXCLUDE_LIST" "$pkg" || return 1
+  case "$state" in
+    include) echo "$pkg" >> "$APPS_LIST" || return 1 ;;
+    exclude) echo "$pkg" >> "$EXCLUDE_LIST" || return 1 ;;
+  esac
+  reload_service || return 1
+  echo "OK $pkg $state"
 }
 
 cmd_replace_list() {
@@ -228,6 +304,7 @@ case "$1" in
   json-hotspot-settings) cmd_json_hotspot_settings ;;
   json-strategies) cmd_json_strategies ;;
   json-apps) cmd_json_apps ;;
+  json-app-lists) cmd_json_app_lists ;;
   json-diagnostics) cmd_json_diagnostics ;;
   mode) case "$2" in include|exclude|global) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
   forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; set_conf SCOPE_PRESET CUSTOM; reload_service ;;
@@ -236,6 +313,7 @@ case "$1" in
   scope) cmd_scope_preset "$@" ;;
   hotspot-settings) cmd_hotspot_settings "$@" ;;
   save-strategies) cmd_save_strategies "$@" ;;
+  app-state) cmd_app_state "$@" ;;
   add) cmd_add_del apps add "$2" ;;
   del) cmd_add_del apps del "$2" ;;
   add-exclude) cmd_add_del exclude add "$2" ;;
@@ -247,5 +325,5 @@ case "$1" in
   webui) cmd_webui ;;
   log) tail -n "${2:-150}" "$LOG_FILE" 2>/dev/null ;;
   nfqws-log) tail -n "${2:-150}" "$NFQWS_LOG" 2>/dev/null ;;
-  *) echo "Команды: status, json-status, json-apps, restart, diag, nfqws-debug 0|1, log, nfqws-log" ;;
+  *) echo "Команды: status, json-status, json-apps, json-app-lists, app-state <pkg> include|exclude|none, restart, diag, nfqws-debug 0|1, log, nfqws-log" ;;
 esac

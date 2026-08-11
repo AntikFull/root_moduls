@@ -22,8 +22,39 @@ SERVICE_LOCK="$RUN_DIR/service.lock"
 PACKAGE_UID_CACHE="$RUN_DIR/package_uids.cache"
 PACKAGE_SOURCE_FILE="$RUN_DIR/package_source"
 HEALTH_FILE="$RUN_DIR/health.env"
+START_STATE_FILE="$RUN_DIR/startup.env"
+LATE_START_PID_FILE="$RUN_DIR/late-start.pid"
+BOOT_TRACE_FILE="$RUN_DIR/boot-trace.log"
 
 mkdir -p "$LOG_DIR" "$RUN_DIR" 2>/dev/null
+
+boot_trace() {
+  # Keep an internal /data trace because /sdcard may not be mounted yet during late_start.
+  local size
+  if [ -f "$BOOT_TRACE_FILE" ]; then
+    size=$(wc -c < "$BOOT_TRACE_FILE" 2>/dev/null)
+    case "$size" in ''|*[!0-9]*) size=0 ;; esac
+    [ "$size" -gt 65536 ] 2>/dev/null && mv -f "$BOOT_TRACE_FILE" "$BOOT_TRACE_FILE.1" 2>/dev/null
+  fi
+  printf '[%s] pid=%s ppid=%s action=%s boot_completed=%s %s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$$" "$(awk '{print $4}' /proc/$$/stat 2>/dev/null)" \
+    "${SERVICE_ACTION:-late_start}" "$(getprop sys.boot_completed 2>/dev/null)" "$*" >> "$BOOT_TRACE_FILE" 2>/dev/null
+}
+boot_trace "service entry"
+
+write_start_state() {
+  local state="$1" phase="$2" progress="$3"
+  case "$progress" in ''|*[!0-9]*) progress=0 ;; esac
+  [ "$progress" -gt 100 ] 2>/dev/null && progress=100
+  [ "$progress" -lt 0 ] 2>/dev/null && progress=0
+  phase=$(printf '%s' "$phase" | tr '\r\n' '  ')
+  {
+    printf 'STATE=%s\n' "$state"
+    printf 'PHASE=%s\n' "$phase"
+    printf 'PROGRESS=%s\n' "$progress"
+    printf 'UPDATED=%s\n' "$(date +%s 2>/dev/null)"
+  } > "$START_STATE_FILE" 2>/dev/null
+}
 
 rotate_file() {
   local file="$1" max_kb="$2" size
@@ -228,8 +259,25 @@ build_package_cache_once() {
   return 1
 }
 
+seed_package_cache_fast() {
+  # /data/system/packages.list is root-readable very early and contains package->UID
+  # mappings. Use it as the fast boot path; a richer pm/cmd refresh can happen later.
+  if [ -r /data/system/packages.list ]; then
+    awk 'NF>=2 && $2 ~ /^[0-9]+$/ {print $1, $2, 0}' /data/system/packages.list 2>/dev/null | sort -u > "$PACKAGE_UID_CACHE.fast"
+    if [ -s "$PACKAGE_UID_CACHE.fast" ]; then
+      mv -f "$PACKAGE_UID_CACHE.fast" "$PACKAGE_UID_CACHE"
+      echo "packages.list-fast" > "$PACKAGE_SOURCE_FILE"
+      log_i "Package UID cache: быстрый boot source=packages.list, UID-записей=$(wc -l < "$PACKAGE_UID_CACHE" 2>/dev/null | tr -d ' ')"
+      return 0
+    fi
+    rm -f "$PACKAGE_UID_CACHE.fast"
+  fi
+  return 1
+}
+
 prepare_package_cache() {
   local elapsed=0 wait_max="${PACKAGE_WAIT_SECONDS:-60}"
+  seed_package_cache_fast && return 0
   case "$wait_max" in ''|*[!0-9]*) wait_max=60 ;; esac
   while [ "$elapsed" -le "$wait_max" ]; do
     build_package_cache_once && return 0
@@ -293,7 +341,7 @@ get_app_uids() {
       continue
     fi
     found=$(awk -v p="$app" '$1==p {print $2}' "$PACKAGE_UID_CACHE" 2>/dev/null | sort -nu)
-    if [ -z "$found" ]; then
+    if [ -z "$found" ] && [ "${PACKAGE_DIRECT_LOOKUP:-0}" = "1" ]; then
       resolve_pkg_direct "$app" >/dev/null 2>&1 || true
       found=$(awk -v p="$app" '$1==p {print $2}' "$PACKAGE_UID_CACHE" 2>/dev/null | sort -nu)
       [ -n "$found" ] && log_i "UID resolver direct fallback: $app -> $(echo $found | tr '\n' ',')"
@@ -444,18 +492,55 @@ ensure_conntrack_accounting() {
   [ "$CONNTRACK_ACCT" = "1" ]
 }
 
-if [ "$SERVICE_ACTION" != "reload" ]; then
-  until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
+# Keep the late_start process itself alive until Android finishes booting.
+# KernelSU Next executes module service.sh hooks independently; detaching another
+# child from that hook is less reliable on some builds because descendants can be
+# reaped with the lifecycle process. boot-completed.sh remains a second trigger.
+if [ -z "$SERVICE_ACTION" ]; then
+  write_start_state "WAITING" "Ожидание завершения загрузки Android" 5
+  rm -f "$RUN_DIR/boot-wait.pid" 2>/dev/null  # stale file from v2.6.18 and older
+  echo $$ > "$LATE_START_PID_FILE" 2>/dev/null
+  cleanup_late_start_pid() {
+    [ "$(cat "$LATE_START_PID_FILE" 2>/dev/null)" = "$$" ] && rm -f "$LATE_START_PID_FILE" 2>/dev/null
+  }
+  trap cleanup_late_start_pid EXIT HUP INT TERM
+  boot_trace "late_start waiting in foreground"
+
+  wait_ticks=0
+  while [ "$(getprop sys.boot_completed 2>/dev/null)" != "1" ]; do
+    sleep 2
+    wait_ticks=$((wait_ticks + 1))
+    if [ "$wait_ticks" -ge 180 ]; then
+      boot_trace "late_start timeout waiting for sys.boot_completed"
+      write_start_state "ERROR" "Android не завершил загрузку за 6 минут" 100
+      exit 1
+    fi
+  done
+
+  SERVICE_ACTION="boot"
+  boot_trace "late_start observed boot_completed=1; continuing in same process"
+  cleanup_late_start_pid
+  trap - EXIT HUP INT TERM
+  write_start_state "STARTING" "Android загружен · подготовка службы" 10
+  # Small settle delay for netd/PackageManager/vendor services.
   sleep 2
+fi
+
+# Explicit boot/reload paths continue immediately. A non-standard direct action
+# keeps compatibility with other root managers and waits on the same property.
+if [ "$SERVICE_ACTION" != "reload" ] && [ "$SERVICE_ACTION" != "boot" ]; then
+  write_start_state "WAITING" "Ожидание sys.boot_completed" 5
+  boot_trace "non-standard action waiting for boot completion"
+  until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 2; done
+  SERVICE_ACTION="boot"
+  write_start_state "STARTING" "Android загружен · подготовка службы" 10
+  sleep 1
 fi
 [ -f "$CONF_FILE" ] && . "$CONF_FILE"
 : "${MODE:=INCLUDE}" "${STRATEGY_MODE:=AUTO}" "${FORCE_TCP:=1}" "${QUIC_MODE:=SELECTED}" "${PORTS_TCP:=80,443}" "${QNUM:=200}" "${ENABLE_HOTSPOT:=1}" "${DNS_FORWARD_HOTSPOT:=0}" "${DNS_FORWARD_SERVER:=1.1.1.1}"
-: "${FORCE_TCP_HOTSPOT:=1}" "${VPN_FALLBACK_MODE:=ANTIDPI}" "${NFQWS_DEBUG:=0}" "${LOG_VERBOSE:=1}" "${PACKAGE_WAIT_SECONDS:=60}"
+: "${FORCE_TCP_HOTSPOT:=1}" "${VPN_FALLBACK_MODE:=ANTIDPI}" "${NFQWS_DEBUG:=0}" "${LOG_VERBOSE:=1}" "${PACKAGE_WAIT_SECONDS:=60}" "${PACKAGE_DIRECT_LOOKUP:=0}"
 : "${TETHER_IFACES:=ap+ swlan+ softap+ ap_br_wlan+ ap_br_softap+ rndis+ usb+ ncm+ bnep+ bt-pan+ pan+ tether+ wlan1 wlan2 wlan3 wlan4 wifi1 wifi2 wifi3 wifi4}" "${VPN_WATCH_INTERVAL:=2}" "${VPN_RETRY_INTERVAL:=1}" "${VPN_STATE_RECHECK:=10}"
 : "${AUTO_REPLY_PACKETS:=12}" "${FLOW_CONNMARK:=0x10000000/0x10000000}"
-
-log_environment "$SERVICE_ACTION"
-log_network_modules
 
 acquire_lock() {
   local lock_attempt=0 lock_pid
@@ -477,10 +562,18 @@ acquire_lock() {
 release_service_lock() {
   [ "$(cat "$SERVICE_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$SERVICE_LOCK" 2>/dev/null
 }
-acquire_lock || exit 0
+if ! acquire_lock; then
+  boot_trace "service lock busy; another trigger owns startup"
+  exit 0
+fi
 trap 'release_service_lock; exit 1' HUP INT TERM
 trap release_service_lock EXIT
 
+boot_trace "service lock acquired"
+log_environment "$SERVICE_ACTION"
+log_network_modules
+write_start_state "STARTING" "$([ "$SERVICE_ACTION" = "reload" ] && echo "Перезапуск службы" || echo "Подготовка после загрузки Android")" 12
+write_start_state "STARTING" "Чтение списка приложений и UID" 22
 prepare_package_cache || true
 
 stop_pid "$NFQWS_PID_FILE" "nfqws2"
@@ -491,9 +584,10 @@ cleanup_iptables
 # Remove policy/NAT state from previous releases even if VPN Hotspot is now disabled.
 "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
 
+write_start_state "STARTING" "Проверка netfilter и возможностей ядра" 38
 CONNTRACK_ACCT=0
 [ "$STRATEGY_MODE" = "AUTO" ] && ensure_conntrack_accounting || true
-probe_firewall || { write_health; exit 1; }
+probe_firewall || { write_health; write_start_state "ERROR" "Netfilter/NFQUEUE недоступен" 100; exit 1; }
 
 STRATEGY_EFFECTIVE="$STRATEGY_MODE"
 if [ "$STRATEGY_MODE" = "AUTO" ] && { [ "$CONNTRACK_ACCT" != "1" ] || [ "$CONNBYTES4" != "1" ] || [ "$CONNMARK4" != "1" ]; }; then
@@ -512,6 +606,7 @@ case "$STRATEGY_EFFECTIVE" in
 esac
 log_i "Config: MODE=$MODE strategy=$STRATEGY_MODE effective=$STRATEGY_EFFECTIVE QUIC_MODE=$QUIC_MODE FORCE_TCP=$FORCE_TCP HOTSPOT=$ENABLE_HOTSPOT VPN_HOTSPOT=${ENABLE_VPN_HOTSPOT:-0} VPN_FALLBACK=${VPN_FALLBACK_MODE:-ANTIDPI} QNUM=$QNUM TCP_PORTS=$PORTS_TCP NFQWS_DEBUG=$NFQWS_DEBUG"
 
+write_start_state "STARTING" "Подготовка правил приложений" 50
 APP_UIDS=$(get_app_uids "$APPS_LIST" 1)
 EXCLUDE_UIDS=$(get_app_uids "$EXCLUDE_LIST" 0)
 APP_UID_COUNT=$(echo "$APP_UIDS" | wc -w | tr -d ' ')
@@ -519,6 +614,7 @@ EXCLUDE_UID_COUNT=$(echo "$EXCLUDE_UIDS" | wc -w | tr -d ' ')
 log_i "Resolved UIDs: apps.list=$APP_UID_COUNT exclude.list=$EXCLUDE_UID_COUNT source=$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
 [ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из apps.list не разрешён"
 
+write_start_state "STARTING" "Установка AntiDPI/NFQUEUE правил" 62
 ipt4 -t mangle -N ZAPRET2_MANGLE || health_error "Не удалось создать IPv4 mangle chain"
 ipt4 -t filter -N ZAPRET2_FILTER || health_error "Не удалось создать IPv4 filter chain"
 [ "$NFQ6" = "1" ] && ipt6 -t mangle -N ZAPRET2_MANGLE || true
@@ -582,6 +678,7 @@ fi
 # Hotspot/Tethering is scoped to interfaces Android is currently using as
 # downstream. v2.6.12 resolves the role strictly/dynamically instead of assuming wlan2,
 # tun0 or a fixed vendor naming scheme.
+write_start_state "STARTING" "Настройка раздачи и VPN-маршрутизации" 74
 if [ "$ENABLE_HOTSPOT" = "1" ]; then
   echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || health_warn "Не удалось включить IPv4 forwarding"
   log_i "Tether scope: dynamic role detection (Android tether state/config + network fallback)"
@@ -655,8 +752,9 @@ ALT_ARGS=""
 NFQWS_DEBUG_ARG=""
 [ "$NFQWS_DEBUG" = "1" ] && NFQWS_DEBUG_ARG="--debug=@$NFQWS_LOG"
 
-cd "$BIN_DIR" || { health_error "BIN_DIR недоступен: $BIN_DIR"; write_health; exit 1; }
-[ -x ./nfqws2 ] || { health_error "nfqws2 отсутствует/не исполняемый: $BIN_DIR/nfqws2"; write_health; exit 1; }
+write_start_state "STARTING" "Запуск nfqws2" 86
+cd "$BIN_DIR" || { health_error "BIN_DIR недоступен: $BIN_DIR"; write_health; write_start_state "ERROR" "Не удалось открыть каталог nfqws2" 100; exit 1; }
+[ -x ./nfqws2 ] || { health_error "nfqws2 отсутствует/не исполняемый: $BIN_DIR/nfqws2"; write_health; write_start_state "ERROR" "nfqws2 отсутствует или не исполняемый" 100; exit 1; }
 log_i "nfqws2 command: qnum=$QNUM debug=$NFQWS_DEBUG hostlist=$([ -s "$AUTO_DOMAINS_FILE" ] && echo yes || echo no) exclude-hostlist=$([ -s "$EXCLUDE_DOMAINS_FILE" ] && echo yes || echo no)"
 if command -v nohup >/dev/null 2>&1; then
   nohup ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
@@ -670,10 +768,12 @@ fi
 echo $! > "$NFQWS_PID_FILE"
 sleep 1
 nfqws_pid=$(cat "$NFQWS_PID_FILE" 2>/dev/null)
+write_start_state "STARTING" "Проверка процесса и NFQUEUE" 94
 if ! kill -0 "$nfqws_pid" 2>/dev/null; then
   health_error "nfqws2 завершился сразу после запуска"
   rm -f "$NFQWS_PID_FILE"
   write_health
+  write_start_state "ERROR" "nfqws2 завершился сразу после запуска" 100
   exit 1
 fi
 
@@ -719,4 +819,7 @@ if [ "${ENABLE_HOTSPOT:-0}" = "1" ]; then
 else
   stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher"
 fi
+write_start_state "READY" "Служба работает" 100
+boot_trace "service READY nfqws2_pid=$nfqws_pid health=$HEALTH"
 log_i "Служба запущена: nfqws2 PID=$nfqws_pid health=$HEALTH"
+

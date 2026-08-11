@@ -3,7 +3,7 @@
 
 MODDIR=${0%/*}
 RUN_DIR="$MODDIR/run"
-for pid_file in "$RUN_DIR/nfqws2.pid" "$RUN_DIR/watcher.pid" "$RUN_DIR/vpn-watcher.pid"; do
+for pid_file in "$RUN_DIR/nfqws2.pid" "$RUN_DIR/watcher.pid" "$RUN_DIR/vpn-watcher.pid" "$RUN_DIR/late-start.pid" "$RUN_DIR/boot-wait.pid"; do
   pid=$(cat "$pid_file" 2>/dev/null)
   case "$pid" in ''|0|*[!0-9]*) continue ;; esac
   kill -TERM "$pid" 2>/dev/null
@@ -20,7 +20,12 @@ $IPT -t mangle -X ZAPRET2_MANGLE_FORWARD 2>/dev/null
 $IPT -t mangle -F ZAPRET2_MANGLE 2>/dev/null
 $IPT -t mangle -X ZAPRET2_MANGLE 2>/dev/null
 
-$IPT -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null
+# AUTO/circular uses ZAPRET2_MANGLE_IN. Remove every hook instance first;
+# keep legacy ZAPRET2_INPUT cleanup for upgrades from older builds.
+while $IPT -t mangle -D INPUT -j ZAPRET2_MANGLE_IN 2>/dev/null; do :; done
+$IPT -t mangle -F ZAPRET2_MANGLE_IN 2>/dev/null
+$IPT -t mangle -X ZAPRET2_MANGLE_IN 2>/dev/null
+while $IPT -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null; do :; done
 $IPT -t mangle -F ZAPRET2_INPUT 2>/dev/null
 $IPT -t mangle -X ZAPRET2_INPUT 2>/dev/null
 
@@ -42,7 +47,10 @@ $IP6T -t mangle -X ZAPRET2_MANGLE_FORWARD 2>/dev/null
 $IP6T -t mangle -F ZAPRET2_MANGLE 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_MANGLE 2>/dev/null
 
-$IP6T -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null
+while $IP6T -t mangle -D INPUT -j ZAPRET2_MANGLE_IN 2>/dev/null; do :; done
+$IP6T -t mangle -F ZAPRET2_MANGLE_IN 2>/dev/null
+$IP6T -t mangle -X ZAPRET2_MANGLE_IN 2>/dev/null
+while $IP6T -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null; do :; done
 $IP6T -t mangle -F ZAPRET2_INPUT 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_INPUT 2>/dev/null
 

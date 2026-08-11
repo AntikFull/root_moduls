@@ -56,6 +56,13 @@ run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
   section "HEALTH"
   cat "$RUN_DIR/health.env" 2>&1
   echo "package_source=$(cat "$RUN_DIR/package_source" 2>/dev/null)"
+  section "STARTUP STATE"
+  cat "$RUN_DIR/startup.env" 2>&1
+  late_start_pid=$(cat "$RUN_DIR/late-start.pid" 2>/dev/null)
+  echo "late_start_pid=${late_start_pid:-none}"
+  if [ -n "$late_start_pid" ] && kill -0 "$late_start_pid" 2>/dev/null; then echo "late_start_alive=1"; else echo "late_start_alive=0"; fi
+  echo "-- boot trace --"
+  tail -n 80 "$RUN_DIR/boot-trace.log" 2>/dev/null || true
 
   section "PACKAGE UID RESOLUTION"
   echo "cache_lines=$(wc -l < "$RUN_DIR/package_uids.cache" 2>/dev/null | tr -d ' ')"
