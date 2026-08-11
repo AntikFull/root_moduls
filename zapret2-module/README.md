@@ -72,17 +72,6 @@
 
 ---
 
-## Поддержать проект / Донаты
-
-Если вам нравится модуль и вы хотите поддержать дальнейшую разработку, обновления и улучшение функционала:
-
-- **Telegram канал поддержки:** [https://t.me/module_ecubz](https://t.me/module_ecubz)
-- **Связаться с автором:** [https://t.me/eCubz](https://t.me/eCubz)
-
-Ваша поддержка помогает проекту активно развиваться, выходить частым обновлениям и поддерживать совместимость с новыми версиями Android и прошивок.
-
----
-
 # Zapret2 eCubz (English Version)
 
 **Developer:** [eCubz (4PDA)](https://4pda.to/forum/index.php?showuser=1266125)  
@@ -152,11 +141,12 @@ This is a Magisk / KernelSU / APatch module powered by the high-performance `nfq
 
 ---
 
-## Support the Project / Donations
+## Донаты и поддержка / Donations
 
-If you find this module helpful and wish to support its ongoing development, bug fixes, and feature updates:
+Ваша поддержка помогает развивать и поддерживать проекты! / Your support helps keep these projects active!
 
-- **Telegram Channel & Support:** [https://t.me/module_ecubz](https://t.me/module_ecubz)
-- **Contact Developer:** [https://t.me/eCubz](https://t.me/eCubz)
-
-Your support helps keep the project active, updated, and compatible with the latest Android releases and custom ROMs.
+- **СБП:** `+7 923 618-89-93`
+- **Т-Банк:** [Перевод Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
+- **Ю.Money (Яндекс):** [Перевод Ю.Money](https://yoomoney.ru/to/410011494875904)
+- **Crypto:** [USDT | GRAM (Telegram Crypto Bot)](http://t.me/send?start=IVjCT8LiszJ2)
+- **TON Wallet (USDT):** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
