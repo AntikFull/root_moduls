@@ -8,7 +8,15 @@
 
 ## <a name="русский"></a>  Описание (Russian)
 
-**Analytics & Ads Disabler** — адаптивный systemless-модуль для Magisk / KernelSU / KernelSU Next / APatch. Режим `SAFE` отключает совпавшие Services/Receivers, `BALANCED` дополнительно обрабатывает только точные Provider-правила. Backend `PM` остаётся стандартным, а опциональный `HYBRID` добавляет IFW-защиту для управляемых Services/Receivers и точных рекламных Activities. Неоднозначные Activity/Provider остаются только в аудите.
+**Analytics & Ads Disabler** — адаптивный systemless-модуль для Magisk / KernelSU / KernelSU Next / APatch. Режим `SAFE` отключает совпавшие Services/Receivers, `BALANCED` дополнительно обрабатывает только точные безопасные Provider-правила, а `AGGRESSIVE` добавляет отдельный allowlist точных рекламных Provider/Activity для более сильного подавления рекламы. Backend `PM` остаётся стандартным, а опциональный `HYBRID` добавляет IFW-защиту для управляемых Services/Receivers и точных рекламных Activities. Неоднозначные Activity/Provider остаются только в аудите.
+
+### Режимы компонентов
+- `SAFE` — только совпавшие рекламные/аналитические Service и Receiver.
+- `BALANCED` — SAFE + точные Provider из `*_PROVIDER_SAFE`; поведение прежнего BALANCED не изменено.
+- `AGGRESSIVE` — BALANCED + отдельный allowlist точных рекламных Provider; с backend `PM` также отключаются только точные рекламные Activity из `ADS_ACTIVITY_IFW`.
+- `HYBRID` — это отдельный backend: точные рекламные Activity блокируются IFW вместо PM.
+
+`AGGRESSIVE` повышает шанс убрать встроенную рекламу, но и риск несовместимости выше. Неоднозначные analytics-init Provider (`FirebaseInitProvider`, `FacebookInitProvider`, `Sentry` и т.п.) даже здесь остаются `REPORT_ONLY`. Exact-state rollback сохраняется.
 
 ### Основные возможности
 -  **Runtime Adaptive Engine:** Автоматическая адаптация под версию Android и оболочку (MIUI, HyperOS, OneUI, ColorOS, Pixel и др.).
@@ -25,7 +33,15 @@
 
 ## <a name="english"></a>  Description (English)
 
-**Analytics & Ads Disabler** is an adaptive systemless module for Magisk, KernelSU/Next and APatch. `SAFE` disables matched Services/Receivers and `BALANCED` additionally handles exact Provider rules. The default backend is `PM`; optional `HYBRID` adds isolated IFW rules for managed Services/Receivers and exact ad Activities. Ambiguous Activity/Provider matches remain report-only.
+**Analytics & Ads Disabler** is an adaptive systemless module for Magisk, KernelSU/Next and APatch. `SAFE` disables matched Services/Receivers, `BALANCED` additionally handles exact safe Provider rules, and `AGGRESSIVE` adds a separate allowlist of exact advertising Providers/Activities for stronger ad suppression. The default backend is `PM`; optional `HYBRID` adds isolated IFW rules for managed Services/Receivers and exact ad Activities. Ambiguous Activity/Provider matches remain report-only.
+
+### Component modes
+- `SAFE` — matched advertising/analytics Services and Receivers only.
+- `BALANCED` — SAFE plus exact Providers from `*_PROVIDER_SAFE`; existing BALANCED behavior is unchanged.
+- `AGGRESSIVE` — BALANCED plus a separate allowlist of exact advertising Providers; with the `PM` backend it can also disable only exact advertising Activities from `ADS_ACTIVITY_IFW`.
+- `HYBRID` remains a separate backend and blocks exact advertising Activities through IFW instead of PM.
+
+`AGGRESSIVE` can suppress more embedded ads at a higher compatibility risk. Ambiguous analytics init Providers such as Firebase/Facebook/Sentry remain report-only. Exact-state rollback is preserved.
 
 ### Features
 -  **Runtime Adaptive Engine:** Automatically adjusts behavior based on Android version and OEM ROM (MIUI, HyperOS, OneUI, ColorOS, Pixel, etc.).

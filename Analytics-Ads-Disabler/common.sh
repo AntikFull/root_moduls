@@ -291,7 +291,7 @@ read_max_matches() {
 read_component_mode() {
     val=$(read_setting COMPONENT_MODE SAFE | tr '[:lower:]' '[:upper:]')
     case "$val" in
-        SAFE|BALANCED) echo "$val" ;;
+        SAFE|BALANCED|AGGRESSIVE) echo "$val" ;;
         *) echo SAFE ;;
     esac
 }
@@ -731,8 +731,17 @@ component_matches_disable_rule() {
             component_matches_rule_section "$comp" "$cat"
             ;;
         PROVIDER)
-            [ "$mode" = "BALANCED" ] || return 1
-            component_matches_rule_section "$comp" "${cat}_PROVIDER_SAFE"
+            case "$mode" in
+                BALANCED|AGGRESSIVE)
+                    component_matches_rule_section "$comp" "${cat}_PROVIDER_SAFE" && return 0
+                    ;;
+            esac
+            [ "$mode" = "AGGRESSIVE" ] || return 1
+            component_matches_rule_section "$comp" "${cat}_PROVIDER_AGGRESSIVE"
+            ;;
+        ACTIVITY)
+            [ "$mode" = "AGGRESSIVE" ] || return 1
+            component_matches_rule_section "$comp" "${cat}_ACTIVITY_IFW"
             ;;
         *) return 1 ;;
     esac
@@ -747,6 +756,7 @@ component_matches_audit_rule() {
             ;;
         PROVIDER)
             component_matches_rule_section "$comp" "${cat}_PROVIDER_SAFE" && return 0
+            component_matches_rule_section "$comp" "${cat}_PROVIDER_AGGRESSIVE" && return 0
             component_matches_rule_section "$comp" "${cat}_PROVIDER_AUDIT"
             ;;
         ACTIVITY) component_matches_rule_section "$comp" "${cat}_ACTIVITY_AUDIT" ;;
@@ -837,15 +847,21 @@ record_package_audit() {
                 for (ci=1; ci<=2; ci++) {
                     category=(ci==1 ? "ADS" : "ANALYTICS")
                     if (section_match(category "_PROVIDER_SAFE",component))
-                        emit(category,kind,component,"BALANCED",(mode=="BALANCED" ? "DISABLE" : "REPORT_ONLY"))
+                        emit(category,kind,component,"BALANCED",((mode=="BALANCED" || mode=="AGGRESSIVE") ? "DISABLE" : "REPORT_ONLY"))
+                    else if (section_match(category "_PROVIDER_AGGRESSIVE",component))
+                        emit(category,kind,component,"AGGRESSIVE",(mode=="AGGRESSIVE" ? "DISABLE" : "REPORT_ONLY"))
                     else if (section_match(category "_PROVIDER_AUDIT",component))
                         emit(category,kind,component,"AUDIT","REPORT_ONLY")
                 }
             } else if (kind=="ACTIVITY") {
                 for (ci=1; ci<=2; ci++) {
                     category=(ci==1 ? "ADS" : "ANALYTICS")
-                    if (section_match(category "_ACTIVITY_IFW",component))
-                        emit(category,kind,component,"HYBRID",(backend=="HYBRID" ? "IFW_BLOCK" : "REPORT_ONLY"))
+                    if (section_match(category "_ACTIVITY_IFW",component)) {
+                        if (backend=="HYBRID")
+                            emit(category,kind,component,"HYBRID","IFW_BLOCK")
+                        else
+                            emit(category,kind,component,"AGGRESSIVE",(mode=="AGGRESSIVE" ? "DISABLE" : "REPORT_ONLY"))
+                    }
                     else if (section_match(category "_ACTIVITY_AUDIT",component))
                         emit(category,kind,component,"AUDIT","REPORT_ONLY")
                 }
@@ -1584,7 +1600,7 @@ full_rescan_locked() {
         END {
             package_count=0
             for (key in packages) package_count++
-            printf "candidates=%d packages/users=%d ads=%d analytics=%d safe=%d balanced=%d hybrid=%d audit_only=%d disable=%d ifw_block=%d report_only=%d skipped=%d", total, package_count, categories["ADS"]+0, categories["ANALYTICS"]+0, risks["SAFE"]+0, risks["BALANCED"]+0, risks["HYBRID"]+0, risks["AUDIT"]+0, actions["DISABLE"]+0, actions["IFW_BLOCK"]+0, actions["REPORT_ONLY"]+0, actions["SKIP_POLICY"]+0
+            printf "candidates=%d packages/users=%d ads=%d analytics=%d safe=%d balanced=%d aggressive=%d hybrid=%d audit_only=%d disable=%d ifw_block=%d report_only=%d skipped=%d", total, package_count, categories["ADS"]+0, categories["ANALYTICS"]+0, risks["SAFE"]+0, risks["BALANCED"]+0, risks["AGGRESSIVE"]+0, risks["HYBRID"]+0, risks["AUDIT"]+0, actions["DISABLE"]+0, actions["IFW_BLOCK"]+0, actions["REPORT_ONLY"]+0, actions["SKIP_POLICY"]+0
         }
     ' "$COMPONENT_AUDIT_FILE" 2>/dev/null)
     log "AUDIT-SUMMARY mode=$(read_component_mode) backend=$(read_component_backend) $audit_summary file=$COMPONENT_AUDIT_FILE"

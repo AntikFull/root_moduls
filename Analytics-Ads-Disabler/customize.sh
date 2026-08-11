@@ -209,6 +209,7 @@ if [ "$KEEP_EXISTING" -eq 0 ]; then
   ask_yes_no "Disable ANALYTICS / tracking components?" "YES" && BLOCK_ANALYTICS=1
   ask_yes_no "Disable ADVERTISING components?" "YES" && BLOCK_ADS=1
   ask_yes_no "Use BALANCED mode for exact Provider rules?" "NO" && COMPONENT_MODE=BALANCED
+  ask_yes_no "Use AGGRESSIVE ads mode (more exact ad Providers/Activities)?" "NO" && COMPONENT_MODE=AGGRESSIVE
   ask_yes_no "Use HYBRID IFW+PM blocking?" "NO" && COMPONENT_BACKEND=HYBRID
   ask_yes_no "Scan ALL Android users/profiles?" "YES" && SCAN_ALL_USERS=1
   ask_yes_no "Scan SYSTEM apps too?" "NO" && SCAN_SYSTEM_APPS=1
@@ -315,7 +316,7 @@ for f in rules.conf whitelist.list white_ads.list white_analytics.list; do
 done
 
 # При обновлении сохраняем пользовательские правила и добавляем только новые секции v4.5.
-for section in ADS_PROVIDER_SAFE ADS_PROVIDER_AUDIT ADS_ACTIVITY_IFW ADS_ACTIVITY_AUDIT ANALYTICS_PROVIDER_SAFE ANALYTICS_PROVIDER_AUDIT ANALYTICS_ACTIVITY_IFW ANALYTICS_ACTIVITY_AUDIT; do
+for section in ADS_PROVIDER_SAFE ADS_PROVIDER_AGGRESSIVE ADS_PROVIDER_AUDIT ADS_ACTIVITY_IFW ADS_ACTIVITY_AUDIT ANALYTICS_PROVIDER_SAFE ANALYTICS_PROVIDER_AGGRESSIVE ANALYTICS_PROVIDER_AUDIT ANALYTICS_ACTIVITY_IFW ANALYTICS_ACTIVITY_AUDIT; do
   if ! grep -Fxq "[$section]" "$DATA_DIR/rules.conf" 2>/dev/null; then
     printf '\n' >> "$DATA_DIR/rules.conf"
     awk -v target="[$section]" '
@@ -403,7 +404,7 @@ ui_print "- Installation complete. Compatibility profile saved."
 ui_print "- Install diagnostics: $INSTALL_DIAG (mirrored: $SDCARD_INSTALL_DIAG)"
 ui_print "- Component mode: $(sed -n 's/^COMPONENT_MODE=//p' "$SETTINGS_FILE" | head -n1)"
 ui_print "- Component backend: $(sed -n 's/^COMPONENT_BACKEND=//p' "$SETTINGS_FILE" | head -n1)"
-ui_print "- SAFE: Services/Receivers; BALANCED: exact Provider rules; Activities: audit only."
+ui_print "- SAFE: Services/Receivers; BALANCED: exact safe Providers; AGGRESSIVE: extra exact ad Providers/Activities."
 ui_print "- Original component state is preserved per Android user."
 ui_print "- Config survives module updates: $DATA_DIR"
 ui_print "- Live log mirror: $SDCARD_LOG_DIR (best-effort, ~10s)"

@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.6.5 (605) — AGGRESSIVE ads mode
+
+- Добавлен отдельный `COMPONENT_MODE=AGGRESSIVE`; существующие `SAFE` и `BALANCED` не меняют поведение.
+- AGGRESSIVE наследует BALANCED и дополнительно отключает только точные рекламные Provider-компоненты из отдельного allowlist (`Vungle`, `LevelPlay`, `MBridge`, `InMobi`, альтернативный Yandex Ads initializer и др.).
+- При backend `PM` AGGRESSIVE может отключать только точные рекламные Activity из существующего `ADS_ACTIVITY_IFW`; при `HYBRID` они, как и раньше, блокируются через IFW.
+- Неоднозначные analytics-init Provider (`FirebaseInitProvider`, `FacebookInitProvider`, `Sentry` и др.) намеренно остаются `REPORT_ONLY` даже в AGGRESSIVE.
+- Audit-summary теперь отдельно показывает `aggressive=N`. Exact original-state rollback, whitelist semantics, PM transport и multi-user IFW safety не изменены.
+
 ## v4.6.4 (604) — universal FD isolation + multi-user IFW safety
 
 - PM `runcon_shell_uid0` теперь перед SELinux-переходом в дочернем процессе закрывает только унаследованные fd, указывающие в `/data/adb/analytics_ads_disabler` или каталог модуля. Это обобщает фиксы `.desired.tmp`/`component_state.list.orphans.*` без расширения sepolicy и без изменения parent shell.

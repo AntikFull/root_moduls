@@ -84,7 +84,7 @@ load_capabilities
 log "CAPABILITY pm-disable=${CAP_PM_DISABLE_BACKEND}:${CAP_PM_DISABLE_VERB} user=${CAP_PM_DISABLE_HAS_USER} learned=${CAP_PM_LEARNED_DISABLE_BACKEND:-none}/${CAP_PM_LEARNED_DISABLE_EXEC:-direct} verified=${CAP_PM_LEARNED_DISABLE_VERIFIED:-0}"
 log "CAPABILITY pm-enable=${CAP_PM_ENABLE_BACKEND}:${CAP_PM_ENABLE_VERB} default=${CAP_PM_DEFAULT_BACKEND}:${CAP_PM_DEFAULT_VERB} restore-disabled=${CAP_PM_STATE_DISABLED_BACKEND}:${CAP_PM_STATE_DISABLED_VERB} exact=${CAP_PM_STATE_DISABLED_EXACT}"
 log "CAPABILITY users=${CAP_USER_LIST_BACKEND} packages=${CAP_PACKAGE_LIST_BACKEND} versionCode=${CAP_PACKAGE_LIST_HAS_VERSIONCODE} dump=${CAP_PACKAGE_DUMP_BACKEND} watch=${CAP_APP_WATCH_BACKEND}"
-log "POLICY component-mode=$(read_component_mode) backend=$(read_component_backend) activity-ifw=exact-rules provider-balanced=pm-only"
+log "POLICY component-mode=$(read_component_mode) backend=$(read_component_backend) activity-ifw=exact-rules provider-balanced=pm-only aggressive=exact-ad-providers-activities"
 
 trace "BOOT-SCAN begin"
 log "BOOT-SCAN: starting full policy reconciliation. Users: $(list_user_ids | tr '\n' ' ')"
