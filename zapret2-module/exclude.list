@@ -2,14 +2,6 @@
 # Автор: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
 # Приложения из этого списка работают напрямую через iptables UID bypass.
 
-# --- Мессенджеры Telegram (прямой доступ без задержек NFQUEUE) ---
-org.telegram.messenger
-com.telegram.messenger
-org.telegram.messenger.web
-com.exteragram.messenger
-com.ayugram.messenger
-com.ayugram.messenger.beta
-
 # --- Государственные сервисы ---
 ru.gosuslugi.gui
 ru.gosuslugi.auto
@@ -22,10 +14,8 @@ ru.fns.billcabinet
 ru.nsg.platosfera
 com.platosfera.app
 
-# --- Приложения Яндекс и Алиса ---
-com.yandex.aliceapp
+# --- Приложения Яндекс (кроме выбранных в apps.list) ---
 ru.yandex.searchplugin
-com.yandex.browser
 ru.yandex.disk
 ru.yandex.yandexmaps
 ru.yandex.yandexnavi

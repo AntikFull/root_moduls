@@ -1,0 +1,251 @@
+#!/system/bin/sh
+# Zapret2 eCubz control backend for WebUI / terminal.
+
+MODDIR="/data/adb/modules/zapret2-android"
+[ -d "$MODDIR" ] || MODDIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
+CONF_FILE="$MODDIR/zapret2.conf"
+APPS_LIST="$MODDIR/apps.list"
+EXCLUDE_LIST="$MODDIR/exclude.list"
+AUTO_DOMAINS_FILE="$MODDIR/auto_domains.list"
+EXCLUDE_DOMAINS_FILE="$MODDIR/exclude_domains.list"
+LOG_DIR="/sdcard/eCubz"
+LOG_FILE="$LOG_DIR/zapret2_debug.log"
+NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
+RUN_DIR="$MODDIR/run"
+HEALTH_FILE="$RUN_DIR/health.env"
+CONTROL_WRITE_MARK="$RUN_DIR/control-write.ts"
+
+load_conf() { [ -f "$CONF_FILE" ] && . "$CONF_FILE"; }
+reload_service() { sh "$MODDIR/service.sh" reload; }
+
+validate_pkg() { case "$1" in *[!A-Za-z0-9_.]*|'') return 1 ;; *) return 0 ;; esac; }
+validate_switch() { [ "$1" = 0 ] || [ "$1" = 1 ]; }
+validate_vpn_fallback() { [ "$1" = ANTIDPI ] || [ "$1" = BLOCK ]; }
+validate_tun_name() { case "$1" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; *) return 0 ;; esac; }
+validate_dns_servers() {
+  [ -n "$1" ] || return 1
+  for dns_server in $1; do case "$dns_server" in *[!0-9.]*|.*|*.) return 1 ;; esac; done
+}
+validate_strategy_args() {
+  [ -n "$1" ] && [ "${#1}" -le 4096 ] || return 1
+  # Keep config values shell-safe while allowing normal nfqws2/zapret arguments.
+  printf '%s' "$1" | LC_ALL=C grep -Eq '^[-A-Za-z0-9_.,:=/@+% /]+$'
+}
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g'; }
+
+mark_control_write() { mkdir -p "$RUN_DIR" 2>/dev/null; date +%s > "$CONTROL_WRITE_MARK" 2>/dev/null; }
+set_conf() {
+  local key="$1" value="$2"
+  mark_control_write
+  grep -q "^$key=" "$CONF_FILE" 2>/dev/null && sed -i "s|^$key=.*|$key=\"$value\"|" "$CONF_FILE" || echo "$key=\"$value\"" >> "$CONF_FILE"
+}
+
+list_file() {
+  case "$1" in
+    apps) echo "$APPS_LIST" ;;
+    exclude) echo "$EXCLUDE_LIST" ;;
+    auto-domains) echo "$AUTO_DOMAINS_FILE" ;;
+    exclude-domains) echo "$EXCLUDE_DOMAINS_FILE" ;;
+    *) return 1 ;;
+  esac
+}
+
+health_value() { sed -n "s/^$1=//p" "$HEALTH_FILE" 2>/dev/null | head -n1; }
+
+cmd_status() {
+  load_conf
+  local pid=0 state="ОСТАНОВЛЕН" health source warnings effective
+  [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
+  [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null && state="РАБОТАЕТ"
+  health=$(health_value HEALTH); source=$(health_value PACKAGE_SOURCE); warnings=$(health_value WARNINGS); effective=$(health_value STRATEGY_EFFECTIVE)
+  echo "Zapret2: $state (PID: ${pid:-0}) health=${health:-UNKNOWN}"
+  echo "MODE=${MODE:-INCLUDE}, STRATEGY=${STRATEGY_MODE:-AUTO}->${effective:-${STRATEGY_MODE:-AUTO}}, FORCE_TCP=${FORCE_TCP:-1}, QUIC_MODE=${QUIC_MODE:-SELECTED}, package_source=${source:-unknown}"
+  [ -n "$warnings" ] && echo "WARNINGS: $warnings"
+}
+
+cmd_json_status() {
+  load_conf
+  local pid=0 running=false apps=0 excluded=0 scope health warnings source compat compat_notes effective acct connbytes4 connmark4 nfq4 owner4
+  [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
+  [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null && running=true || pid=0
+  [ -f "$APPS_LIST" ] && apps=$(grep -cv '^[[:space:]]*\(#\|$\)' "$APPS_LIST")
+  [ -f "$EXCLUDE_LIST" ] && excluded=$(grep -cv '^[[:space:]]*\(#\|$\)' "$EXCLUDE_LIST")
+  scope=${SCOPE_PRESET:-}
+  case "$scope" in SAFE|SELECTED|ALL|CUSTOM) ;; *) case "${MODE:-INCLUDE}:${QUIC_MODE:-SELECTED}" in EXCLUDE:SELECTED) scope=SAFE ;; INCLUDE:SELECTED) scope=SELECTED ;; GLOBAL:GLOBAL) scope=ALL ;; *) scope=CUSTOM ;; esac ;; esac
+  health=$(health_value HEALTH); [ -n "$health" ] || health=UNKNOWN
+  warnings=$(health_value WARNINGS); source=$(health_value PACKAGE_SOURCE); effective=$(health_value STRATEGY_EFFECTIVE)
+  compat=$(health_value COMPAT_STATUS); compat_notes=$(health_value COMPAT_NOTES)
+  acct=$(health_value CONNTRACK_ACCT); connbytes4=$(health_value CONNBYTES4); connmark4=$(health_value CONNMARK4); nfq4=$(health_value NFQUEUE4); owner4=$(health_value OWNER4)
+  [ -n "$effective" ] || effective=${STRATEGY_MODE:-UNKNOWN}
+  [ -n "$compat" ] || compat=NATIVE
+  printf '{"running":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","compat_status":"%s","compat_notes":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s"}\n' \
+    "$running" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$apps" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-UNKNOWN}")" "$(json_escape "$effective")" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}"
+}
+
+cmd_scope_preset() {
+  case "$2" in
+    safe) set_conf MODE EXCLUDE; set_conf QUIC_MODE SELECTED; set_conf FORCE_TCP 1; set_conf SCOPE_PRESET SAFE ;;
+    selected) set_conf MODE INCLUDE; set_conf QUIC_MODE SELECTED; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE AUTO; set_conf SCOPE_PRESET SELECTED ;;
+    all) set_conf MODE GLOBAL; set_conf QUIC_MODE GLOBAL; set_conf FORCE_TCP 1; set_conf SCOPE_PRESET ALL ;;
+    *) return 1 ;;
+  esac
+  reload_service
+}
+
+cmd_json_hotspot_settings() {
+  load_conf
+  printf '{"enable_hotspot":"%s","enable_vpn_hotspot":"%s","vpn_tun_name":"%s","vpn_fallback_mode":"%s","force_tcp_hotspot":"%s","dns_forward_hotspot":"%s","dns_forward_servers":"%s"}\n' \
+    "${ENABLE_HOTSPOT:-1}" "${ENABLE_VPN_HOTSPOT:-0}" "${VPN_TUN_NAME:-AUTO}" "${VPN_FALLBACK_MODE:-ANTIDPI}" "${FORCE_TCP_HOTSPOT:-1}" "${DNS_FORWARD_HOTSPOT:-0}" "${DNS_FORWARD_SERVERS:-${DNS_FORWARD_SERVER:-1.1.1.1}}"
+}
+
+cmd_json_strategies() {
+  load_conf
+  printf '{"active":"%s","simple":"%s","auto":"%s","custom":"%s","domain_override":"%s"}\n' \
+    "${STRATEGY_MODE:-AUTO}" "$(json_escape "${DESYNC_ARGS_SIMPLE:-}")" "$(json_escape "${DESYNC_ARGS_AUTO:-}")" "$(json_escape "${DESYNC_ARGS_CUSTOM:-}")" "$(json_escape "${DESYNC_ARGS_ALT:-}")"
+}
+
+cmd_save_strategies() {
+  case "$2" in SIMPLE|AUTO|CUSTOM) ;; *) return 1 ;; esac
+  validate_strategy_args "$3" && validate_strategy_args "$4" && validate_strategy_args "$5" && validate_strategy_args "$6" || return 1
+  set_conf STRATEGY_MODE "$2"; set_conf DESYNC_ARGS_SIMPLE "$3"; set_conf DESYNC_ARGS_AUTO "$4"; set_conf DESYNC_ARGS_CUSTOM "$5"; set_conf DESYNC_ARGS_ALT "$6"
+  reload_service
+}
+
+cmd_hotspot_settings() {
+  validate_switch "$2" && validate_switch "$3" && validate_tun_name "$4" && validate_vpn_fallback "$5" && validate_switch "$6" && validate_switch "$7" && validate_dns_servers "$8" || return 1
+  set_conf ENABLE_HOTSPOT "$2"; set_conf ENABLE_VPN_HOTSPOT "$3"; set_conf VPN_TUN_NAME "$4"; set_conf VPN_FALLBACK_MODE "$5"; set_conf VPN_HOTSPOT_KILLSWITCH 0; set_conf FORCE_TCP_HOTSPOT "$6"; set_conf DNS_FORWARD_HOTSPOT "$7"; set_conf DNS_FORWARD_SERVERS "$8"
+  reload_service
+}
+
+package_list_raw() {
+  # Merge package names from all available sources. A command may succeed but return
+  # an incomplete list during early boot on some vendor ROMs.
+  local out="$1" tmp="$RUN_DIR/.pkg-src.$$" got=0
+  : > "$out"
+  for mode in pm_uid cmd_uid pm_plain cmd_plain; do
+    : > "$tmp"
+    case "$mode" in
+      pm_uid) pm list packages -U --user 0 > "$tmp" 2>/dev/null ;;
+      cmd_uid) cmd package list packages -U --user 0 > "$tmp" 2>/dev/null ;;
+      pm_plain) pm list packages --user 0 > "$tmp" 2>/dev/null ;;
+      cmd_plain) cmd package list packages --user 0 > "$tmp" 2>/dev/null ;;
+    esac
+    if grep -q '^package:' "$tmp" 2>/dev/null; then cat "$tmp" >> "$out"; got=1; fi
+  done
+  rm -f "$tmp"
+  if [ -r /data/system/packages.list ]; then
+    awk 'NF>=1 {print "package:"$1}' /data/system/packages.list >> "$out" 2>/dev/null
+    got=1
+  fi
+  [ "$got" = 1 ] || return 1
+  # Normalize to package:<name>; remove UID/path decorations and duplicates.
+  awk '/^package:/ {line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
+  mv -f "$out.norm" "$out"
+  [ -s "$out" ]
+}
+
+system_package_list_raw() {
+  local out="$1" tmp="$RUN_DIR/.sys-pkg.$$" got=0
+  : > "$out"
+  : > "$tmp"; pm list packages -s --user 0 > "$tmp" 2>/dev/null; grep -q '^package:' "$tmp" && { cat "$tmp" >> "$out"; got=1; }
+  : > "$tmp"; cmd package list packages -s --user 0 > "$tmp" 2>/dev/null; grep -q '^package:' "$tmp" && { cat "$tmp" >> "$out"; got=1; }
+  rm -f "$tmp"
+  if [ "$got" = 1 ]; then
+    awk '/^package:/ {line=$0; sub(/^package:/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
+    mv -f "$out.norm" "$out"
+  fi
+  return 0
+}
+
+cmd_json_apps() {
+  mkdir -p "$RUN_DIR" 2>/dev/null
+  local raw="$RUN_DIR/.packages.$$" sys_tmp="$RUN_DIR/.system-packages.$$" rc=0
+  package_list_raw "$raw" || rc=1
+  system_package_list_raw "$sys_tmp"
+  if [ "$rc" -ne 0 ]; then rm -f "$raw" "$sys_tmp"; echo '[]'; return 1; fi
+  awk -v inc="$APPS_LIST" -v exc="$EXCLUDE_LIST" -v sys="$sys_tmp" '
+    BEGIN {
+      while ((getline l < inc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") a[l]=1} close(inc)
+      while ((getline l < exc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") e[l]=1} close(exc)
+      while ((getline l < sys)>0) {sub(/^package:/,"",l); sub(/[[:space:]].*/,"",l); if(l!="") s[l]=1} close(sys)
+      print "["; first=1
+    }
+    /^package:/ {
+      line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,parts,"="); pkg=parts[n]; sub(/[[:space:]].*/,"",pkg)
+      if(pkg!="") {
+        if(!first) printf ","; first=0
+        printf "{\"pkg\":\"%s\",\"include\":%s,\"exclude\":%s,\"isSystem\":%s}", pkg, (pkg in a)?"true":"false", (pkg in e)?"true":"false", (pkg in s)?"true":"false"
+      }
+    }
+    END { print "]" }' "$raw"
+  rc=$?
+  rm -f "$raw" "$sys_tmp"
+  return "$rc"
+}
+
+cmd_add_del() {
+  local list="$1" op="$2" pkg="$3" file
+  validate_pkg "$pkg" || { echo "Недопустимое имя пакета"; return 1; }
+  file=$(list_file "$list") || return 1
+  mark_control_write
+  if [ "$op" = add ]; then grep -qxF "$pkg" "$file" 2>/dev/null || echo "$pkg" >> "$file"; else sed -i "\|^$pkg$|d" "$file"; fi
+  reload_service
+}
+
+cmd_replace_list() {
+  local list="$1" input="$2" file tmp line
+  file=$(list_file "$list") || return 1
+  tmp="$file.tmp.$$"; : > "$tmp" || return 1
+  printf '%s\n' "$input" | while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[!A-Za-z0-9._#\ -]* ) exit 1 ;; esac
+    echo "$line"
+  done > "$tmp" || { rm -f "$tmp"; echo "Недопустимые символы в списке"; return 1; }
+  mark_control_write
+  mv -f "$tmp" "$file"
+  reload_service
+}
+
+cmd_json_diagnostics() {
+  load_conf
+  printf '{"nfqws_debug":"%s","service_log":"%s","nfqws_log":"%s","diag_file":"%s"}\n' "${NFQWS_DEBUG:-0}" "$LOG_FILE" "$NFQWS_LOG" "$LOG_DIR/zapret2_diagnostics_latest.txt"
+}
+cmd_nfqws_debug() {
+  validate_switch "$2" || return 1
+  if [ "$2" = 1 ]; then
+    [ -f "$NFQWS_LOG" ] && mv -f "$NFQWS_LOG" "$NFQWS_LOG.previous" 2>/dev/null
+    : > "$NFQWS_LOG" 2>/dev/null
+  fi
+  set_conf NFQWS_DEBUG "$2"
+  reload_service
+  [ "$2" = 1 ] && echo "nfqws debug включён: $NFQWS_LOG" || echo "nfqws debug выключен"
+}
+cmd_diag() { sh "$MODDIR/diagnostics.sh"; }
+cmd_webui() { echo "WebUI предоставляется менеджером KernelSU через webroot/index.html"; }
+
+case "$1" in
+  status) cmd_status ;;
+  json-status) cmd_json_status ;;
+  json-hotspot-settings) cmd_json_hotspot_settings ;;
+  json-strategies) cmd_json_strategies ;;
+  json-apps) cmd_json_apps ;;
+  json-diagnostics) cmd_json_diagnostics ;;
+  mode) case "$2" in include|exclude|global) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
+  forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; set_conf SCOPE_PRESET CUSTOM; reload_service ;;
+  quicmode) case "$2" in off|selected|global) set_conf QUIC_MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
+  settings) case "$2:$3:$4" in include:off:0|include:off:1|include:selected:0|include:selected:1|include:global:0|include:global:1|exclude:off:0|exclude:off:1|exclude:selected:0|exclude:selected:1|exclude:global:0|exclude:global:1|global:off:0|global:off:1|global:selected:0|global:selected:1|global:global:0|global:global:1) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf QUIC_MODE "$(echo "$3" | tr '[:lower:]' '[:upper:]')"; set_conf FORCE_TCP "$4"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
+  scope) cmd_scope_preset "$@" ;;
+  hotspot-settings) cmd_hotspot_settings "$@" ;;
+  save-strategies) cmd_save_strategies "$@" ;;
+  add) cmd_add_del apps add "$2" ;;
+  del) cmd_add_del apps del "$2" ;;
+  add-exclude) cmd_add_del exclude add "$2" ;;
+  del-exclude) cmd_add_del exclude del "$2" ;;
+  replace-list) cmd_replace_list "$2" "$3" ;;
+  nfqws-debug) cmd_nfqws_debug "$@" ;;
+  diag) cmd_diag ;;
+  restart) reload_service ;;
+  webui) cmd_webui ;;
+  log) tail -n "${2:-150}" "$LOG_FILE" 2>/dev/null ;;
+  nfqws-log) tail -n "${2:-150}" "$NFQWS_LOG" 2>/dev/null ;;
+  *) echo "Команды: status, json-status, json-apps, restart, diag, nfqws-debug 0|1, log, nfqws-log" ;;
+esac

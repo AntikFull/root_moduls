@@ -1,6 +1,6 @@
 id=zapret2-android
 name=Zapret2 eCubz
-version=v2.3.4
-versionCode=2341
+version=v2.6.13
+versionCode=2613
 author=eCubz (https://t.me/eCubz)
-description=Обход замедлений и блокировок YouTube/DPI через zapret2 (nfqws2 + Lua). Автонастройка и поддержка: https://t.me/module_ecubz
+description=Zapret2 для Android: per-app AntiDPI, Hotspot/USB, строгая динамическая роль VPN/tether, безопасная VPN-раздача с AntiDPI fallback, точная compatibility-диагностика и Material 3 Expressive WebUI. Telegram: https://t.me/module_ecubz

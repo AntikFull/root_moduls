@@ -182,7 +182,7 @@ for _x in cmd pm su runcon service dumpsys; do install_diag "tool $_x: $(command
 install_diag "service package: $(service check package 2>&1 | tr '\n' ' ')"
 install_diag "package help verbs: $(cmd package help 2>/dev/null | grep -E '^[[:space:]]+(disable|disable-user|disable-until-used|default-state)([[:space:]]|\[)' | tr '\n' ';')"
 install_diag "runcon shell domain available: $(cap_runcon_shell_available && echo yes || echo no)"
-install_diag "PM mutation model: API=$(cap_api_level 2>/dev/null) shell_uid_component_mutation=$(cap_shell_uid_component_mutation_allowed && echo legacy_candidate || echo disabled_android16_plus) runcon_uid0=$(cap_runcon_shell_available && echo available || echo unavailable) scope=pm_command_via_shell_no_data_io"
+install_diag "PM mutation model: API=$(cap_api_level 2>/dev/null) shell_uid_component_mutation=$(cap_shell_uid_component_mutation_allowed && echo legacy_candidate || echo disabled_android16_plus) runcon_uid0=$(cap_runcon_shell_available && echo available || echo unavailable) scope=pm_command_via_shell_no_data_io fd_sanitizer=module_data_only"
 
 KEEP_EXISTING=0
 if [ -f "$SETTINGS_FILE" ]; then

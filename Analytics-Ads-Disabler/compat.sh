@@ -141,10 +141,33 @@ cap_runcon_pm_exec() {
         line="$base $verb '$target'"
     fi
 
-    case "$rb" in
-        *" "*) $rb u:r:shell:s0 /system/bin/sh -c "exec $line" </dev/null ;;
-        *) "$rb" u:r:shell:s0 /system/bin/sh -c "exec $line" </dev/null ;;
-    esac
+    # Defense in depth for BusyBox/ash and OEM SELinux combinations:
+    # a caller may be iterating over a /data/adb file using "done < file".
+    # Such loop descriptors are not stdin, so </dev/null alone does not close
+    # them. Before switching to u:r:shell:s0, close only inherited descriptors
+    # that point into this module's persistent/module directories. The parent
+    # shell is untouched because this runs in a subshell.
+    (
+        data_prefix="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
+        module_prefix="${MODDIR:-/data/adb/modules/analytics_ads_disabler}"
+        for fd_path in /proc/$$/fd/*; do
+            fd=${fd_path##*/}
+            case "$fd" in
+                0|1|2|''|*[!0-9]*) continue ;;
+            esac
+            fd_target=$(readlink "$fd_path" 2>/dev/null)
+            case "$fd_target" in
+                "$data_prefix"/*|"$module_prefix"/*)
+                    eval "exec ${fd}>&-" 2>/dev/null || true
+                    ;;
+            esac
+        done
+
+        case "$rb" in
+            *" "*) $rb u:r:shell:s0 /system/bin/sh -c "exec $line" </dev/null ;;
+            *) "$rb" u:r:shell:s0 /system/bin/sh -c "exec $line" </dev/null ;;
+        esac
+    )
 }
 
 # Execute package-manager shell commands either in the current context or,

@@ -201,7 +201,7 @@ collect_deep_diagnostics() {
         diag_line "shell_uid_component_mutation=disabled_android16_plus"
     fi
     diag_line "runcon_shell_uid0_available=$(cap_runcon_shell_available && echo yes || echo no)"
-    diag_line "runcon_scope=pm_command_via_shell_no_data_io_no_sh_c"
+    diag_line "runcon_scope=pm_command_via_shell_no_data_io fd_sanitizer=module_data_only"
 
     diag_capture_sh "process-contexts" 'ps -AZ 2>/dev/null | grep -E "(^|[[:space:]])(cmd|pm|sh|su|ksud|magisk|apd)([[:space:]]|$)" | head -n 120'
     diag_capture_sh "binder-proc-summary" 'cat /proc/binder/proc/$$ 2>/dev/null | head -n 120; cat /sys/kernel/debug/binder/proc/$$ 2>/dev/null | head -n 120'
@@ -857,6 +857,35 @@ record_package_audit() {
     return "$rc"
 }
 
+# IFW is global across Android users. A component may be put into the owned
+# IFW file only when every installed user of that package agrees that the
+# component should be blocked. This prevents a work profile / secondary user
+# whitelist from being overridden by a rule requested only by another user.
+ifw_filter_global_candidates() {
+    raw="$1"; pair_file="$2"; installed="$3"; out="$4"
+    : > "$out"
+    [ -f "$raw" ] && [ -f "$pair_file" ] && [ -f "$installed" ] || return 1
+
+    while IFS= read -r comp; do
+        [ -n "$comp" ] || continue
+        pkg=${comp%%/*}
+        users=$(awk -F'|' -v p="$pkg" '$2==p {print $1}' "$installed" 2>/dev/null | sort -u)
+        [ -n "$users" ] || continue
+        safe=1
+        for user in $users; do
+            if ! grep -Fxq -- "$user|$comp" "$pair_file" 2>/dev/null; then
+                safe=0
+                break
+            fi
+        done
+        if [ "$safe" -eq 1 ]; then
+            printf '%s\n' "$comp" >> "$out"
+        else
+            log "IFW-MULTIUSER-SKIP component=$comp reason=policy_not_unanimous"
+        fi
+    done < "$raw"
+}
+
 # IFW не умеет блокировать Provider и действует глобально для всех пользователей.
 # Модуль владеет только одним отдельным XML и никогда не изменяет файлы App Manager/Blocker.
 reconcile_owned_ifw_rules() {
@@ -879,23 +908,49 @@ reconcile_owned_ifw_rules() {
 
     work_base="$DATA_DIR/.ifw_build.$$"
     managed="$work_base.managed"
+    managed_pairs="$work_base.managed_pairs"
+    installed="$work_base.installed"
+    activity_pairs="$work_base.activity_pairs"
+    activities_raw="$work_base.activities.raw"
+    receivers_raw="$work_base.receivers.raw"
+    services_raw="$work_base.services.raw"
     activities="$work_base.activities"
     receivers="$work_base.receivers"
     services="$work_base.services"
+    ifw_work_files="$managed $managed_pairs $installed $activity_pairs $activities_raw $receivers_raw $services_raw $activities $receivers $services"
     disabled_source="$DISABLED_LIST"
     [ -f "$disabled_source" ] || disabled_source="/dev/null"
 
     awk -F'|' 'NF>=3 && $2!="" {print $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed"
+    awk -F'|' 'NF>=3 && $1!="" && $2!="" {print $1 "|" $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed_pairs"
     # Непустой первый вход устраняет неоднозначность NR==FNR в старых awk.
     printf '#\n' >> "$managed"
 
+    # IFW rules are global, therefore an authoritative user/package snapshot is
+    # mandatory before emitting them. On snapshot failure we prefer PM-only
+    # behavior over a rule that could override another user's whitelist.
+    list_all_installed_package_keys > "$installed" 2>/dev/null
+    if [ ! -s "$installed" ]; then
+        rm -f "$IFW_RULE_FILE" "$managed" "$managed_pairs" "$installed" \
+            "$activity_pairs" "$activities_raw" "$receivers_raw" "$services_raw" \
+            "$activities" "$receivers" "$services" 2>/dev/null || true
+        log "IFW-SAFETY-SKIP reason=installed_user_snapshot_unavailable"
+        return 1
+    fi
+
     # Двойной слой IFW+PM применяется только к компонентам, которыми модуль реально владеет.
     awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="RECEIVER" && owned[$8] {print $8}' \
-        "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$receivers"
+        "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$receivers_raw"
     awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="SERVICE" && owned[$8] {print $8}' \
-        "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$services"
+        "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$services_raw"
+    ifw_filter_global_candidates "$receivers_raw" "$managed_pairs" "$installed" "$receivers"
+    ifw_filter_global_candidates "$services_raw" "$managed_pairs" "$installed" "$services"
 
     # Activity разрешаются только отдельными точными правилами и с лимитом на пакет/категорию.
+    # Because activities are IFW-only, user agreement comes from the audit plan
+    # rather than PM membership records.
+    awk -F'|' 'FNR>1 && $2!="" && $7=="IFW_BLOCK" {print $2 "|" $8}' \
+        "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activity_pairs"
     ifw_limit=$(read_ifw_activity_limit)
     awk -F'|' -v limit="$ifw_limit" '
         FNR>1 && $5=="ACTIVITY" && $7=="IFW_BLOCK" {
@@ -913,7 +968,8 @@ reconcile_owned_ifw_rules() {
                 if (count[group] <= limit) print component[pair]
             }
         }
-    ' "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activities"
+    ' "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activities_raw"
+    ifw_filter_global_candidates "$activities_raw" "$activity_pairs" "$installed" "$activities"
 
     activity_count=$(grep -c . "$activities" 2>/dev/null); [ -n "$activity_count" ] || activity_count=0
     receiver_count=$(grep -c . "$receivers" 2>/dev/null); [ -n "$receiver_count" ] || receiver_count=0
@@ -922,7 +978,7 @@ reconcile_owned_ifw_rules() {
 
     if [ "$total_ifw" -eq 0 ]; then
         rm -f "$IFW_RULE_FILE" 2>/dev/null || true
-        rm -f "$managed" "$activities" "$receivers" "$services" 2>/dev/null
+        rm -f $ifw_work_files 2>/dev/null
         log "IFW reconciled: no owned rules"
         return 0
     fi
@@ -953,24 +1009,24 @@ reconcile_owned_ifw_rules() {
         fi
         echo '</rules>'
     } > "$tmp" 2>/dev/null || {
-        rm -f "$tmp" "$managed" "$activities" "$receivers" "$services" 2>/dev/null
+        rm -f "$tmp" $ifw_work_files 2>/dev/null
         log "IFW-WRITE-FAILED temp=$tmp"
         return 1
     }
 
     chmod 0644 "$tmp" 2>/dev/null || {
-        rm -f "$tmp" "$managed" "$activities" "$receivers" "$services" 2>/dev/null
+        rm -f "$tmp" $ifw_work_files 2>/dev/null
         log "IFW-CHMOD-FAILED temp=$tmp"
         return 1
     }
     command -v restorecon >/dev/null 2>&1 && restorecon "$tmp" >/dev/null 2>&1 || true
     mv -f "$tmp" "$IFW_RULE_FILE" 2>/dev/null || {
-        rm -f "$tmp" "$managed" "$activities" "$receivers" "$services" 2>/dev/null
+        rm -f "$tmp" $ifw_work_files 2>/dev/null
         log "IFW-COMMIT-FAILED file=$IFW_RULE_FILE"
         return 1
     }
     command -v restorecon >/dev/null 2>&1 && restorecon "$IFW_RULE_FILE" >/dev/null 2>&1 || true
-    rm -f "$managed" "$activities" "$receivers" "$services" 2>/dev/null
+    rm -f $ifw_work_files 2>/dev/null
     log "IFW reconciled: activity=$activity_count receiver=$receiver_count service=$service_count total=$total_ifw file=$IFW_RULE_FILE"
     return 0
 }
@@ -1276,13 +1332,32 @@ retry_orphan_restores() {
     [ -f "$COMPONENT_STATE" ] || return
     work="$COMPONENT_STATE.orphans.$$"
     cp "$COMPONENT_STATE" "$work" 2>/dev/null || return
-    while IFS='|' read -r user comp original; do
-        [ -z "$comp" ] && continue
+
+    # Do not execute PackageManager mutations while a /data/adb state file is
+    # attached to a shell read loop. BusyBox/ash can retain the loop fd across
+    # nested function/exec boundaries; when the PM transport switches to
+    # u:r:shell:s0, OEM SELinux then reports attempts to read adb_data_file.
+    # Snapshot the small state DB into memory, close/remove the backing file,
+    # and only then perform restore operations.
+    orphan_records=$(cat "$work" 2>/dev/null)
+    rm -f "$work" 2>/dev/null
+    [ -n "$orphan_records" ] || return 0
+
+    old_ifs=$IFS
+    IFS='
+'
+    for record in $orphan_records; do
+        [ -n "$record" ] || continue
+        user=${record%%|*}
+        rest=${record#*|}
+        comp=${rest%%|*}
+        original=${rest#*|}
+        [ -n "$comp" ] || continue
         if ! has_any_membership "$user" "$comp"; then
             restore_original_state "$user" "$comp"
         fi
-    done < "$work"
-    rm -f "$work"
+    done
+    IFS=$old_ifs
 }
 
 compute_config_hash() {

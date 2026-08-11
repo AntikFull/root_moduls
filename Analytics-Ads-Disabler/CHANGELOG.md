@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.6.4 (604) — universal FD isolation + multi-user IFW safety
+
+- PM `runcon_shell_uid0` теперь перед SELinux-переходом в дочернем процессе закрывает только унаследованные fd, указывающие в `/data/adb/analytics_ads_disabler` или каталог модуля. Это обобщает фиксы `.desired.tmp`/`component_state.list.orphans.*` без расширения sepolicy и без изменения parent shell.
+- Рабочий OEM-совместимый transport `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."` сохранён; direct PM, learned backend и обязательная post-state verification не менялись.
+- HYBRID IFW получил multi-user safety gate: глобальное IFW-правило создаётся только если все Android users, у которых установлен пакет, согласны блокировать данный компонент. Whitelist/work-profile одного user больше не может быть перекрыт решением другого user.
+- При невозможности построить authoritative user/package snapshot IFW fail-closed в сторону безопасности: собственное IFW-правило не создаётся, PM-состояние не расширяется.
+- Атомарная запись IFW через временный файл без `.xml` и rename сохранена; это соответствует механизму AOSP Intent Firewall, который наблюдает только XML-файлы в `/data/system/ifw`.
+- Default backend остаётся `PM`; HYBRID по-прежнему опционален. Policy/rules/whitelist semantics и exact rollback не расширялись.
+
+## v4.6.3 (603) — закрытие orphan FD перед PM restore
+
+- `retry_orphan_restores()` больше не выполняет PackageManager restore из цикла, чьим входом является `component_state.list.orphans.*` в `/data/adb`.
+- Snapshot orphan-state сначала считывается в память, backing-файл закрывается и удаляется, и только после этого запускаются restore-операции.
+- Устраняет подтверждённый на Xiaomi 14 Ultra / HyperOS 3 / Android 16 SELinux AVC `u:r:shell:s0 -> adb_data_file` для `component_state.list.orphans.*` без расширения sepolicy.
+- PM transport, IFW, SAFE/BALANCED/HYBRID, whitelist semantics, exact rollback и update-race fix v4.6.2 не изменялись.
+
 ## v4.6.2 (602) — исправление гонки обновления на HyperOS
 
 - Процессы старой версии теперь останавливаются до изменения persistent-конфигурации и до проверки Package Manager.

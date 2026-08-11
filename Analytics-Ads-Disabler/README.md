@@ -17,7 +17,7 @@
 -  **Поддержка динамического отслеживания:** Автоматически обрабатывает новые и обновляемые приложения.
 -  **Белые списки:** Возможность внесения исключений в `whitelist.list`, `white_ads.list`, `white_analytics.list`.
 -  **Аудит компонентов:** Отчёт `component_audit.log` разделяет найденные компоненты по типу, категории, риску и принятому действию.
--  **Изолированный IFW:** HYBRID использует только `/data/system/ifw/analytics_ads_disabler.xml`, не перезаписывая правила App Manager, Blocker и других программ.
+-  **Изолированный IFW:** HYBRID использует только `/data/system/ifw/analytics_ads_disabler.xml`, не перезаписывая правила App Manager, Blocker и других программ. Поскольку IFW глобален для Android users, правило создаётся только при единогласной policy для компонента во всех профилях, где установлен пакет.
 -  **Точный откат:** При отключении HYBRID или удалении модуля собственный IFW-файл удаляется, а PM-компоненты возвращаются к сохранённому исходному override.
 -  **Без сетевого слоя:** Модуль не изменяет DNS/hosts и не конфликтует с отдельными сетевыми блокировщиками.
 
@@ -34,7 +34,7 @@
 -  **App Monitor:** Automatically applies disabler rules when new apps are installed or updated.
 -  **Custom Whitelists:** Highly configurable via `whitelist.list`, `white_ads.list`, and `white_analytics.list`.
 -  **Typed Audit:** `component_audit.log` records component type, category, risk, and selected action.
--  **Isolated IFW:** HYBRID owns a single dedicated IFW file and never rewrites third-party rule files.
+-  **Isolated IFW:** HYBRID owns a single dedicated IFW file and never rewrites third-party rule files. Because IFW is global across Android users, a component rule is emitted only when every installed user profile agrees that it should be blocked.
 
 ---
 
