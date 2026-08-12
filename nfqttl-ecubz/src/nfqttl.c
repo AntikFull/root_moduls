@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <unistd.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -33,7 +34,48 @@
 #include <sys/poll.h>
 
 
-#define Version "v6.3"
+static const char *runtime_version(void) {
+    static char version[96];
+    const char *v = getenv("NFQTTL_MODULE_VERSION");
+    if (v && *v) return v;
+
+    const char *prop = getenv("NFQTTL_MODULE_PROP");
+    char propbuf[PATH_MAX];
+    if (!prop || !*prop) {
+        ssize_t n = readlink("/proc/self/exe", propbuf, sizeof(propbuf) - 1);
+        if (n > 0) {
+            propbuf[n] = '\0';
+            char *slash = strrchr(propbuf, '/');
+            if (slash) {
+                size_t dirlen = (size_t)(slash - propbuf);
+                if (dirlen + sizeof("/module.prop") < sizeof(propbuf)) {
+                    propbuf[dirlen] = '\0';
+                    strncat(propbuf, "/module.prop", sizeof(propbuf) - strlen(propbuf) - 1);
+                    prop = propbuf;
+                }
+            }
+        }
+    }
+    if (prop && *prop) {
+        FILE *fp = fopen(prop, "r");
+        if (fp) {
+            char line[160];
+            while (fgets(line, sizeof(line), fp)) {
+                if (strncmp(line, "version=", 8) == 0) {
+                    char *value = line + 8;
+                    value[strcspn(value, "\r\n")] = '\0';
+                    if (*value) {
+                        snprintf(version, sizeof(version), "%s", value);
+                        fclose(fp);
+                        return version;
+                    }
+                }
+            }
+            fclose(fp);
+        }
+    }
+    return "unknown";
+}
 
 
 #include <sys/resource.h>
@@ -248,7 +290,7 @@ int splittcp(uint8_t *data, int len, uint32_t *mark, uint32_t index) {
 	struct tcphdr *tcphdr = (struct tcphdr *)( newdata + iphdrl);
 
 	uint16_t dport = ntohs(tcphdr->dest);
-	if(dport != 443 && dport != 80 && dport)
+	if(dport != 443 && dport != 80)
 		return 0;
 
 	int tcphdrl = tcphdr->doff*4;
@@ -279,7 +321,7 @@ int splittcp(uint8_t *data, int len, uint32_t *mark, uint32_t index) {
 		return 0;
 	}
 
-	if (setsockopt(sock, SOL_SOCKET, SO_MARK, mark, sizeof(mark)) == -1) {
+	if (setsockopt(sock, SOL_SOCKET, SO_MARK, mark, sizeof(*mark)) == -1) {
 	        perror("setsockopt not success mark");
 	}
 
@@ -291,6 +333,7 @@ int splittcp(uint8_t *data, int len, uint32_t *mark, uint32_t index) {
 
 	if (sendto(sock, (char*)newdata, allhdrl+newlen, 0, (struct sockaddr*)&si, sizeof(struct sockaddr)) == -1) {
 		perror("sendto 1");
+		close(sock);
 		return 0;
 	}
 
@@ -488,7 +531,7 @@ void display_usage(int status)
 		"  -s1-65535  --split-tcp=1-65535  split tcp sequence, default disable\n"
 		"  -u1-65535  --uid=1-65535        set uid and gid process\n"
 		"  -h         --help               print help\n",
-		Version );
+		runtime_version() );
 	exit(status);
 }
 
@@ -500,8 +543,8 @@ int main(int argc, char **argv)
 	struct nfq_q_handle *qh;
 	int fd;
 	int rv;
-        int bufsize = 16384*5;
-        char buf[bufsize] __attribute__ ((aligned));
+        int rcvbufsize = 4*1024*1024;
+        char buf[131072] __attribute__ ((aligned));
         int on = 1;
 
         globalArgs.ttl = 64;
@@ -538,6 +581,7 @@ int main(int argc, char **argv)
 				    opta = atoi(optarg);
 				    if(opta > 0 && opta <= 255){
 					    globalArgs.ttlwan = opta;
+					    globalArgs.ttl = opta;
 				    }else{
 					    printf("Wrong ttl value: %u\n", opta);
 					    display_usage(EXIT_FAILURE);
@@ -553,17 +597,8 @@ int main(int argc, char **argv)
 				    }
 				    break;
 			case 's':
-				    if(optarg){
-					    opta = atoi(optarg);
-					    if(opta > 0 && opta <= 65535){
-						    globalArgs.splittcp = opta;
-					    }else{
-						    printf("Wrong split tcp pakage value: %d\n", opta);
-						    display_usage(EXIT_FAILURE);
-					    }
-				    }else{
-					    globalArgs.splittcp = 1;
-				    }
+				    fprintf(stderr, "--split-tcp is disabled in this build; TTL/HL masking does not require packet injection\n");
+				    display_usage(EXIT_FAILURE);
 				    break;
 			case 'u':
 				    if(optarg) {
@@ -675,35 +710,15 @@ int main(int argc, char **argv)
 		fprintf(stderr, "error during nfq_open()\n");
 		exit(1);
 	}
-        if(nfnl_rcvbufsiz(nfq_nfnlh(h), bufsize) == -1) {
+        if(nfnl_rcvbufsiz(nfq_nfnlh(h), rcvbufsize) == -1) {
                 printf("nfnl_rcvbufsize error\n");
                 exit(1);
         }
 
 
-	printf("unbinding existing nf_queue handler for AF_INET (if any)\n");
-	if (nfq_unbind_pf(h, AF_INET) < 0) {
-		fprintf(stderr, "error during nfq_unbind_pf()\n");
-		exit(1);
-	}
-
-	printf("unbinding existing nf_queue handler for AF_INET6 (if any)\n");
-        if (nfq_unbind_pf(h, AF_INET6) < 0) {
-	    fprintf(stderr, "error during nfq_unbind_pf()\n");
-	    exit(1);
-	}
-
-	printf("binding nfnetlink_queue as nf_queue handler for AF_INET\n");
-	if (nfq_bind_pf(h, AF_INET) < 0) {
-		fprintf(stderr, "error during nfq_bind_pf()\n");
-		exit(1);
-	}
-
-        printf("binding nfnetlink_queue as nf_queue handler for AF_INET6\n");
-        if (nfq_bind_pf(h, AF_INET6) < 0) {
-	    fprintf(stderr, "error during nfq_bind_pf()\n");
-	    exit(1);
-        }
+	/* Linux 3.8+ ignores protocol-family bind/unbind; avoiding these obsolete
+	 * calls also prevents legacy kernels/userspace from disturbing another
+	 * NFQUEUE consumer. We own only the configured queue number. */
 
 	printf("binding this socket to queue '%u'\nchange ttl to '%hhu'\nSplit tcp package '%i'\n",
 		globalArgs.queue_num, globalArgs.ttlwan, globalArgs.splittcp);
@@ -723,6 +738,18 @@ int main(int argc, char **argv)
 	if (nfq_set_mode(qh, NFQNL_COPY_PACKET, 0xffff) < 0) {
 		fprintf(stderr, "can't set packet_copy mode\n");
 		exit(1);
+	}
+
+	/* Keep tethering usable even under queue pressure. */
+	if (nfq_set_queue_maxlen(qh, 4096) < 0) {
+		perror("nfq_set_queue_maxlen");
+	}
+	if (nfq_set_queue_flags(qh, NFQA_CFG_F_FAIL_OPEN, NFQA_CFG_F_FAIL_OPEN) < 0) {
+		perror("NFQA_CFG_F_FAIL_OPEN");
+	}
+	/* Avoid expensive kernel normalization of GSO packets on modern Android kernels. */
+	if (nfq_set_queue_flags(qh, NFQA_CFG_F_GSO, NFQA_CFG_F_GSO) < 0) {
+		perror("NFQA_CFG_F_GSO");
 	}
 	if(globalArgs.uid){
 		if(changeuid()){
@@ -744,20 +771,8 @@ int main(int argc, char **argv)
             exit(1);
         }
 
-	globalArgs.h = nlif_open();
-	int flags = fcntl(nlif_fd(globalArgs.h), F_GETFL, 0);
-			if(flags != O_NONBLOCK)
-				fcntl(nlif_fd(globalArgs.h), F_SETFL, (flags | O_NONBLOCK));
-			nlif_query(globalArgs.h);
-        if (rtnl_open_(&globalArgs.rth, RTMGRP_IPV4_ROUTE) < 0) {
-                fprintf(stderr, "Cannot open rtnetlink\n");
-                exit(EXIT_FAILURE);
-        }
-	flags = fcntl(globalArgs.rth.fd, F_GETFL, 0);
-	if(flags != O_NONBLOCK)
-		fcntl(globalArgs.rth.fd, F_SETFL, (flags | O_NONBLOCK));
-	globalArgs.if_fd[0].fd = globalArgs.rth.fd;
-	globalArgs.if_fd[0].events = POLLIN;
+	/* Legacy route/interface tracking was unused by the packet loop and could
+	 * crash when nlif_open() failed. Fixed TTL/HL mode needs neither handle. */
 
 
 
