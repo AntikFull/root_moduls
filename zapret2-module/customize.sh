@@ -1,4 +1,5 @@
 #!/system/bin/sh
+umask 077
 # Zapret2 eCubz — standalone installer for Magisk / KernelSU / APatch.
 # No nested MMT framework and no system overlay are required.
 
@@ -51,7 +52,12 @@ set_permissions() {
     "$MODPATH/vpn-watch.sh" \
     "$MODPATH/net-role.sh" \
     "$MODPATH/tether-sync.sh" \
+    "$MODPATH/app-sync.sh" \
+    "$MODPATH/auto-select.sh" \
+    "$MODPATH/strategy-lib.sh" \
+    "$MODPATH/service-watch.sh" \
     "$MODPATH/network-event.sh" \
+    "$MODPATH/log-export.sh" \
     "$MODPATH/diagnostics.sh"
   do
     if type set_perm >/dev/null 2>&1; then
@@ -95,6 +101,18 @@ if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
   for keep in zapret2.conf apps.list exclude.list auto_domains.list exclude_domains.list; do
     [ -f "$ACTIVE_MODDIR/$keep" ] && cp -f "$ACTIVE_MODDIR/$keep" "$UPGRADE_BACKUP/$keep" 2>/dev/null
   done
+  if [ -d "$ACTIVE_MODDIR/strategies" ]; then
+    mkdir -p "$UPGRADE_BACKUP/strategies" 2>/dev/null
+    for strategy in "$ACTIVE_MODDIR"/strategies/strategy_*; do
+      [ -f "$strategy" ] && [ ! -L "$strategy" ] && cp -f "$strategy" "$UPGRADE_BACKUP/strategies/" 2>/dev/null
+    done
+  fi
+  if [ -d "$ACTIVE_MODDIR/state" ]; then
+    mkdir -p "$UPGRADE_BACKUP/state" 2>/dev/null
+    for cache in "$ACTIVE_MODDIR"/state/auto-*.env; do
+      [ -f "$cache" ] && cp -f "$cache" "$UPGRADE_BACKUP/state/" 2>/dev/null
+    done
+  fi
   UPGRADE_FROM="$ACTIVE_MODDIR"
   ilog "upgrade_backup=$UPGRADE_BACKUP source=$ACTIVE_MODDIR"
 fi
@@ -121,7 +139,20 @@ restore_upgrade_data() {
   for keep in apps.list exclude.list auto_domains.list exclude_domains.list; do
     [ -f "$UPGRADE_BACKUP/$keep" ] && cp -f "$UPGRADE_BACKUP/$keep" "$MODPATH/$keep" 2>/dev/null
   done
-  ilog "upgrade_preserved=config,apps,exclude,auto_domains,exclude_domains"
+  if [ -d "$UPGRADE_BACKUP/strategies" ]; then
+    rm -f "$MODPATH"/strategies/strategy_* 2>/dev/null
+    mkdir -p "$MODPATH/strategies" 2>/dev/null
+    for strategy in "$UPGRADE_BACKUP"/strategies/strategy_*; do
+      [ -f "$strategy" ] && [ ! -L "$strategy" ] && cp -f "$strategy" "$MODPATH/strategies/" 2>/dev/null
+    done
+  fi
+  if [ -d "$UPGRADE_BACKUP/state" ]; then
+    mkdir -p "$MODPATH/state" 2>/dev/null
+    for cache in "$UPGRADE_BACKUP"/state/auto-*.env; do
+      [ -f "$cache" ] && cp -f "$cache" "$MODPATH/state/" 2>/dev/null
+    done
+  fi
+  ilog "upgrade_preserved=config,apps,exclude,auto_domains,exclude_domains,strategies,auto_cache"
 }
 
 # Extract ourselves so behavior does not depend on manager-specific unzip order.
@@ -137,6 +168,23 @@ else
 fi
 rm -rf "$MODPATH/META-INF" "$MODPATH/common" 2>/dev/null
 restore_upgrade_data
+# v2.8 SMART migration. Preserve user choices, but retire the old public
+# SIMPLE/AUTO split: both legacy values become the single SMART engine.
+if [ -n "$UPGRADE_FROM" ] && [ -f "$MODPATH/zapret2.conf" ]; then
+  old_strategy=$(sed -n 's/^STRATEGY_MODE=//p' "$MODPATH/zapret2.conf" | head -n1 | tr -d '"')
+  case "$old_strategy" in SIMPLE|AUTO|'') sed -i 's/^STRATEGY_MODE=.*/STRATEGY_MODE="SMART"/' "$MODPATH/zapret2.conf" ;; esac
+  grep -q '^AUTO_APPS_ENABLED=' "$MODPATH/zapret2.conf" 2>/dev/null || sed -i '/^STRATEGY_MODE=/a AUTO_APPS_ENABLED="1"' "$MODPATH/zapret2.conf"
+  sed -i 's/^AUTO_PROFILE_DEFAULT=.*/AUTO_PROFILE_DEFAULT="strategy_1"/' "$MODPATH/zapret2.conf"
+  # Entries now covered by the built-in AUTO catalog no longer need to remain
+  # duplicated in the manual list. Effective selection is preserved because
+  # AUTO_APPS_ENABLED=1 and exclude.list still has the highest priority.
+  if [ -f "$MODPATH/apps.list" ] && [ -f "$MODPATH/auto_apps.list" ]; then
+    awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) auto[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in auto)) print $0}' "$MODPATH/auto_apps.list" "$MODPATH/apps.list" > "$MODPATH/apps.list.smart.$$" && mv -f "$MODPATH/apps.list.smart.$$" "$MODPATH/apps.list"
+  fi
+  ilog "upgrade_migration=smart old_strategy=${old_strategy:-unset} auto_apps=enabled manual_catalog_duplicates=removed"
+fi
+mkdir -p "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "Не удалось создать runtime каталоги logs/run/state"
+chmod 0700 "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "Не удалось выставить права runtime каталогов"
 
 ABI=$(getprop ro.product.cpu.abi 2>/dev/null)
 [ -n "$ABI" ] || ABI="$ARCH"
@@ -163,7 +211,7 @@ for f in \
   "$MODPATH/bin/nfqws2" "$MODPATH/bin/ip2net" "$MODPATH/bin/mdig" "$MODPATH/bin/zapret2-control" \
   "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
-  "$MODPATH/network-event.sh" "$MODPATH/diagnostics.sh"
+  "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh"
 do
   set_exec "$f" || fail_install "Не удалось выставить +x: $f"
 done
@@ -215,38 +263,33 @@ ask_yes_no() {
 CONF_TARGET="$MODPATH/zapret2.conf"
 [ -f "$CONF_TARGET" ] || fail_install "zapret2.conf не найден"
 
-if ask_yes_no "Обрабатывать Wi-Fi Hotspot и USB-модем?" yes; then
-  ENABLE_HOTSPOT_VAL=1
-  if ask_yes_no "Направлять клиентов раздачи через VPN телефона?" no; then
-    ENABLE_VPN_HOTSPOT_VAL=1
-  else
-    ENABLE_VPN_HOTSPOT_VAL=0
-  fi
-  if ask_yes_no "Блокировать QUIC (UDP/443) у клиентов раздачи?" yes; then
-    FORCE_TCP_HOTSPOT_VAL=1
-  else
-    FORCE_TCP_HOTSPOT_VAL=0
-  fi
-  if ask_yes_no "Принудительно перенаправлять DNS клиентов раздачи?" no; then
-    DNS_FORWARD_HOTSPOT_VAL=1
-  else
-    DNS_FORWARD_HOTSPOT_VAL=0
-  fi
+if [ -n "$UPGRADE_FROM" ]; then
+  # Upgrade is non-interactive: preserved config is the source of truth. Do not
+  # silently overwrite the user's Hotspot/VPN/QUIC/DNS choices on every update.
+  ENABLE_HOTSPOT_VAL=$(sed -n 's/^ENABLE_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$ENABLE_HOTSPOT_VAL" ] || ENABLE_HOTSPOT_VAL=1
+  ENABLE_VPN_HOTSPOT_VAL=$(sed -n 's/^ENABLE_VPN_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$ENABLE_VPN_HOTSPOT_VAL" ] || ENABLE_VPN_HOTSPOT_VAL=0
+  FORCE_TCP_HOTSPOT_VAL=$(sed -n 's/^FORCE_TCP_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$FORCE_TCP_HOTSPOT_VAL" ] || FORCE_TCP_HOTSPOT_VAL=1
+  DNS_FORWARD_HOTSPOT_VAL=$(sed -n 's/^DNS_FORWARD_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$DNS_FORWARD_HOTSPOT_VAL" ] || DNS_FORWARD_HOTSPOT_VAL=0
+  ilog "upgrade_questions=skipped preserved_user_choices=1"
+  ui_print "- Обновление: настройки Hotspot/VPN/QUIC/DNS сохранены"
 else
-  ENABLE_HOTSPOT_VAL=0
-  ENABLE_VPN_HOTSPOT_VAL=0
-  FORCE_TCP_HOTSPOT_VAL=0
-  DNS_FORWARD_HOTSPOT_VAL=0
+  if ask_yes_no "Обрабатывать Wi-Fi Hotspot и USB-модем?" yes; then
+    ENABLE_HOTSPOT_VAL=1
+    if ask_yes_no "Направлять клиентов раздачи через VPN телефона?" no; then ENABLE_VPN_HOTSPOT_VAL=1; else ENABLE_VPN_HOTSPOT_VAL=0; fi
+    if ask_yes_no "Блокировать QUIC (UDP/443) у клиентов раздачи?" yes; then FORCE_TCP_HOTSPOT_VAL=1; else FORCE_TCP_HOTSPOT_VAL=0; fi
+    if ask_yes_no "Принудительно перенаправлять DNS клиентов раздачи?" no; then DNS_FORWARD_HOTSPOT_VAL=1; else DNS_FORWARD_HOTSPOT_VAL=0; fi
+  else
+    ENABLE_HOTSPOT_VAL=0; ENABLE_VPN_HOTSPOT_VAL=0; FORCE_TCP_HOTSPOT_VAL=0; DNS_FORWARD_HOTSPOT_VAL=0
+  fi
+  sed -i "s|^ENABLE_HOTSPOT=.*|ENABLE_HOTSPOT=\"$ENABLE_HOTSPOT_VAL\"|" "$CONF_TARGET"
+  sed -i "s|^ENABLE_VPN_HOTSPOT=.*|ENABLE_VPN_HOTSPOT=\"$ENABLE_VPN_HOTSPOT_VAL\"|" "$CONF_TARGET"
+  sed -i 's|^VPN_FALLBACK_MODE=.*|VPN_FALLBACK_MODE="ANTIDPI"|' "$CONF_TARGET"
+  sed -i 's|^VPN_HOTSPOT_KILLSWITCH=.*|VPN_HOTSPOT_KILLSWITCH="0"|' "$CONF_TARGET"
+  sed -i "s|^FORCE_TCP_HOTSPOT=.*|FORCE_TCP_HOTSPOT=\"$FORCE_TCP_HOTSPOT_VAL\"|" "$CONF_TARGET"
+  sed -i "s|^DNS_FORWARD_HOTSPOT=.*|DNS_FORWARD_HOTSPOT=\"$DNS_FORWARD_HOTSPOT_VAL\"|" "$CONF_TARGET"
 fi
-
-sed -i "s/^ENABLE_HOTSPOT=.*/ENABLE_HOTSPOT=\"$ENABLE_HOTSPOT_VAL\"/" "$CONF_TARGET"
-sed -i "s/^ENABLE_VPN_HOTSPOT=.*/ENABLE_VPN_HOTSPOT=\"$ENABLE_VPN_HOTSPOT_VAL\"/" "$CONF_TARGET"
-if [ -z "$UPGRADE_FROM" ]; then
-  sed -i "s/^VPN_FALLBACK_MODE=.*/VPN_FALLBACK_MODE=\"ANTIDPI\"/" "$CONF_TARGET"
-fi
-sed -i "s/^VPN_HOTSPOT_KILLSWITCH=.*/VPN_HOTSPOT_KILLSWITCH=\"0\"/" "$CONF_TARGET"
-sed -i "s/^FORCE_TCP_HOTSPOT=.*/FORCE_TCP_HOTSPOT=\"$FORCE_TCP_HOTSPOT_VAL\"/" "$CONF_TARGET"
-sed -i "s/^DNS_FORWARD_HOTSPOT=.*/DNS_FORWARD_HOTSPOT=\"$DNS_FORWARD_HOTSPOT_VAL\"/" "$CONF_TARGET"
+chmod 0600 "$CONF_TARGET" "$MODPATH/apps.list" "$MODPATH/auto_apps.list" "$MODPATH/exclude.list" "$MODPATH/auto_domains.list" "$MODPATH/smart_youtube.list" "$MODPATH/exclude_domains.list" "$MODPATH"/strategies/strategy_* 2>/dev/null || true
+chmod 0700 "$MODPATH/strategies" 2>/dev/null || true
 
 VPN_FALLBACK_LOG=$(sed -n 's/^VPN_FALLBACK_MODE=//p' "$CONF_TARGET" | head -n1 | tr -d '"')
 [ -n "$VPN_FALLBACK_LOG" ] || VPN_FALLBACK_LOG=ANTIDPI

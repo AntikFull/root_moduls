@@ -1,11 +1,15 @@
 #!/system/bin/sh
+umask 077
 # Handler for manual edits. WebUI/CLI writes are reloaded synchronously by control
 # and are suppressed here to avoid a second delayed restart.
 
 MODDIR="${0%/*}"
-LOG_FILE="/sdcard/eCubz/zapret2_debug.log"
+LOG_DIR="$MODDIR/logs"
+LOG_FILE="$LOG_DIR/zapret2_debug.log"
 RUN_DIR="$MODDIR/run"
 CONTROL_WRITE_MARK="$RUN_DIR/control-write.ts"
+mkdir -p "$LOG_DIR" "$RUN_DIR" 2>/dev/null
+chmod 0700 "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
 
 case "$1" in
   *.tmp|*.bak|*.swp|*.pid|*.lock) exit 0 ;;
@@ -25,12 +29,25 @@ case "$marker_ts:$now" in
     ;;
 esac
 
-LOCKFILE="$RUN_DIR/on_change.lock"
-mkdir -p "$RUN_DIR" 2>/dev/null
-[ -f "$LOCKFILE" ] && exit 0
-
-touch "$LOCKFILE"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: ручное изменение ($1 $2), перезагрузка через 2с" >> "$LOG_FILE"
-sleep 2
-sh "$MODDIR/service.sh" reload
-rm -f "$LOCKFILE" 2>/dev/null
+LOCKDIR="$RUN_DIR/on_change.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  lp=$(cat "$LOCKDIR/pid" 2>/dev/null)
+  case "$lp" in ''|0|*[!0-9]*) rm -rf "$LOCKDIR" 2>/dev/null ;; *) kill -0 "$lp" 2>/dev/null || rm -rf "$LOCKDIR" 2>/dev/null ;; esac
+  mkdir "$LOCKDIR" 2>/dev/null || exit 0
+fi
+echo $$ > "$LOCKDIR/pid" 2>/dev/null
+trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT HUP INT TERM
+case "$1" in
+  *apps.list|*auto_apps.list|*exclude.list)
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: ручное изменение списка приложений ($1), быстрый sync через 1с" >> "$LOG_FILE"
+    sleep 1
+    sh "$MODDIR/app-sync.sh" apply >/dev/null 2>&1 || sh "$MODDIR/service.sh" reload
+    ;;
+  *)
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: ручное изменение ($1 $2), полная перезагрузка через 2с" >> "$LOG_FILE"
+    sleep 2
+    sh "$MODDIR/service.sh" reload
+    ;;
+esac
+rm -rf "$LOCKDIR" 2>/dev/null
+trap - EXIT HUP INT TERM

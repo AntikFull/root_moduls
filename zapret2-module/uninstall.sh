@@ -1,17 +1,51 @@
 #!/system/bin/sh
+umask 077
 # Очистка только процессов и правил, принадлежащих этому модулю.
 
 MODDIR=${0%/*}
 RUN_DIR="$MODDIR/run"
-for pid_file in "$RUN_DIR/nfqws2.pid" "$RUN_DIR/watcher.pid" "$RUN_DIR/vpn-watcher.pid" "$RUN_DIR/late-start.pid" "$RUN_DIR/boot-wait.pid"; do
+[ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
+: "${AUTO_TEST_QNUM:=201}" "${AUTO_TEST_PORT_MIN:=39000}" "${AUTO_TEST_PORT_MAX:=39049}"
+pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+pid_owned() {
+  pid="$1" kind="$2"
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  case "$kind" in
+    nfqws2) [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = nfqws2 ] && [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$MODDIR/bin" ] ;;
+    config) pid_cmdline "$pid" | grep -Fq "$MODDIR/on_change.sh" ;;
+    vpn) pid_cmdline "$pid" | grep -Fq "$MODDIR/vpn-watch.sh" ;;
+    health) pid_cmdline "$pid" | grep -Fq "$MODDIR/service-watch.sh" ;;
+    auto) pid_cmdline "$pid" | grep -Fq "$MODDIR/auto-select.sh" ;;
+    service) pid_cmdline "$pid" | grep -Fq "$MODDIR/service.sh" ;;
+    bootwait) pid_cmdline "$pid" | grep -Fq "$MODDIR/boot-wait.sh" ;;
+    *) return 1 ;;
+  esac
+}
+for spec in "nfqws2.pid:nfqws2" "watcher.pid:config" "vpn-watcher.pid:vpn" "health-watcher.pid:health" "auto-probe.pid:auto" "late-start.pid:service" "boot-wait.pid:bootwait"; do
+  pf=${spec%%:*}; kind=${spec#*:}; pid_file="$RUN_DIR/$pf"
   pid=$(cat "$pid_file" 2>/dev/null)
-  case "$pid" in ''|0|*[!0-9]*) continue ;; esac
-  kill -TERM "$pid" 2>/dev/null
+  pid_owned "$pid" "$kind" && kill -TERM "$pid" 2>/dev/null
+  rm -f "$pid_file" 2>/dev/null
+done
+# Also terminate an orphaned nfqws2 only when its cwd proves it belongs to this module.
+for proc in /proc/[0-9]*; do
+  [ "$(cat "$proc/comm" 2>/dev/null)" = nfqws2 ] || continue
+  [ "$(readlink "$proc/cwd" 2>/dev/null)" = "$MODDIR/bin" ] || continue
+  kill -TERM "${proc##*/}" 2>/dev/null
 done
 sh "$MODDIR/vpn-routing.sh" cleanup 2>/dev/null
 
 IPT="iptables -w 5"
 IP6T="ip6tables -w 5"
+
+# Временная очередь активного AUTO использует только этот диапазон sport.
+while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
+while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN 2>/dev/null; do :; done
+while $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
+while $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
+while $IP6T -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
+while $IP6T -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
 
 while $IPT -t mangle -D OUTPUT -j ZAPRET2_MANGLE 2>/dev/null; do :; done
 $IPT -t mangle -F ZAPRET2_MANGLE_FORWARD 2>/dev/null
@@ -29,7 +63,7 @@ while $IPT -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null; do :; done
 $IPT -t mangle -F ZAPRET2_INPUT 2>/dev/null
 $IPT -t mangle -X ZAPRET2_INPUT 2>/dev/null
 
-$IPT -t filter -D OUTPUT -j ZAPRET2_FILTER 2>/dev/null
+while $IPT -t filter -D OUTPUT -j ZAPRET2_FILTER 2>/dev/null; do :; done
 $IPT -t filter -F ZAPRET2_FILTER 2>/dev/null
 $IPT -t filter -X ZAPRET2_FILTER 2>/dev/null
 while $IPT -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD 2>/dev/null; do :; done
@@ -54,7 +88,7 @@ while $IP6T -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null; do :; done
 $IP6T -t mangle -F ZAPRET2_INPUT 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_INPUT 2>/dev/null
 
-$IP6T -t filter -D OUTPUT -j ZAPRET2_FILTER 2>/dev/null
+while $IP6T -t filter -D OUTPUT -j ZAPRET2_FILTER 2>/dev/null; do :; done
 $IP6T -t filter -F ZAPRET2_FILTER 2>/dev/null
 $IP6T -t filter -X ZAPRET2_FILTER 2>/dev/null
 while $IP6T -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD 2>/dev/null; do :; done
@@ -63,3 +97,5 @@ $IP6T -t filter -X ZAPRET2_FILTER_FORWARD 2>/dev/null
 
 rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
 rm -f /tmp/zapret2_apps_new.json 2>/dev/null
+
+rm -rf "$RUN_DIR/app-sync.lock" "$RUN_DIR/service.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/auto-select.lock" 2>/dev/null

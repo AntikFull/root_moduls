@@ -1,0 +1,16 @@
+# Built-in SMART profile: YouTube / Google Video.
+# Список намеренно узкий: не включает корневые googleapis.com/gstatic.com/ggpht.com,
+# чтобы сервисный профиль YouTube не затрагивал другой Google-трафик браузеров.
+youtube.com
+youtu.be
+youtube-nocookie.com
+youtubekids.com
+withyoutube.com
+googlevideo.com
+ytimg.com
+youtubei.googleapis.com
+youtubeembeddedplayer.googleapis.com
+ytimg.l.google.com
+yt3.ggpht.com
+yt4.ggpht.com
+gvt1.com

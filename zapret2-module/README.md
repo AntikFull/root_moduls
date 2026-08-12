@@ -1,152 +1,145 @@
-# Zapret2 eCubz
+# Zapret2 eCubz v2.9.0 SMART ACTIVE
 
-[Русский](#zapret2-ecubz) | [English](#zapret2-ecubz-english-version)
+Android root-модуль AntiDPI на базе `nfqws2` для KernelSU / KernelSU Next / Magisk / APatch.
 
----
+## Пользовательская очередь AUTO-стратегий
 
-**Разработчик:** [eCubz (4PDA)](https://4pda.to/forum/index.php?showuser=1266125)  
-**TG Сообщество модуля:** [https://t.me/module_ecubz](https://t.me/module_ecubz) — Проект находится в разработке, нужна обратная связь.  
-**Исходный код:** [github.com/AntikFull/root_moduls/tree/main/zapret2-module](https://github.com/AntikFull/root_moduls/tree/main/zapret2-module)
+SMART_ACTIVE читает отдельные файлы из каталога `strategies`: `strategy_1`,
+`strategy_2`, `strategy_3` и далее. Номер задаёт порядок проверки. Пропуски
+допускаются, жёсткого максимального номера нет. Чтобы поменять приоритет,
+переименуйте файлы; чтобы убрать стратегию из AUTO — удалите её или измените имя.
 
-Надежный обход блокировок и замедления ресурсов (YouTube, Discord и др.) на вашем Android-устройстве без использования сторонних VPN-сервисов.
+В файл вставляются обычные строки аргументов nfqws2:
 
-Это Magisk / KernelSU / APatch модуль, работающий на базе мощного движка `nfqws` (проект zapret). Он перехватывает и модифицирует сетевые пакеты прямо на устройстве, позволяя вернуть привычную скорость работы популярных ресурсов.
+```text
+# NAME=MY_STRATEGY
+--lua-desync=fake:blob=0x00000000:repeats=4
+--lua-desync=multisplit:pos=1,midsni
+```
 
----
+`# NAME=` необязателен. Если в короткой стратегии нет фильтров, модуль добавляет
+TLS/443, `out-range=-d10` и `payload=tls_client_hello`. Полный профиль с фильтрами
+тоже допустим. Управляющие аргументы процесса (`--qnum`, `--user`, `--pidfile`,
+`--lua-init`, `--debug`) запрещены — ими владеет служба модуля.
 
-## Требования
+Явный DIRECT-файл выглядит так:
 
-- **Android 6.0+**
-- **Root**: Magisk / KernelSU / KernelSU Next / APatch
-- **Архитектуры**: ARM64 / ARM / x86_64 / x86
+```text
+# NAME=DIRECT
+# MODE=DIRECT
+```
 
----
+Пользовательский каталог сохраняется при обновлении. Изменение содержимого или
+порядка меняет подпись каталога, поэтому старый сетевой кэш не применяется.
 
-## Что умеет
+## Что изменилось в 2.9.0
 
-- Выбор приложений прямо в WebUI;
-- Режимы `INCLUDE` / `EXCLUDE` / `GLOBAL`;
-- Обход DPI для YouTube, мессенджеров, браузеров и других приложений;
-- Автоматическое применение после выбора приложения — отдельная кнопка «Сохранить» не нужна;
-- Поддержка Wi-Fi Hotspot и USB-раздачи;
-- Раздача интернета через VPN телефона (VPN Tethering);
-- Если VPN пропал — по умолчанию клиенты автоматически переходят на AntiDPI, а не остаются без интернета;
-- Блокировка QUIC/HTTP3 с переводом соединения на TCP;
-- Опциональное перенаправление DNS клиентов раздачи;
-- AUTO-стратегия с автоматическим безопасным переходом на SIMPLE, если ядро не поддерживает нужные возможности;
-- Material 3 Expressive WebUI;
-- Встроенные логи, диагностика и проверка состояния NFQUEUE/ядра.
+На ядрах без `xt_connbytes` режим SMART теперь использует `SMART_ACTIVE`, а не один
+постоянный compatibility-профиль. После подключения к сети модуль отдельной очередью
+проверяет YouTube, YouTube API, изображения и Google Video в порядке файлов
+`strategy_1`, `strategy_2` и далее. В комплекте шесть стартовых профилей:
+`COMPAT_FAKE`, `SIMPLE_ALT4`, `SPLIT_SAFE` и три пользовательские стратегии.
 
----
+Успешный профиль сохраняется отдельно для каждой сети: Wi-Fi на 24 часа, мобильная
+сеть на 1 час. Лёгкая проверка свежести кэша выполняется раз в 30 минут; HTTPS-probe
+запускается только после истечения соответствующего TTL.
 
-<details>
-<summary><b>Возможности WebUI</b></summary>
+После успешного подбора меняется только процесс `nfqws2`: UID-кэш, firewall,
+Hotspot и VPN не пересобираются. Это убирает тяжёлый полный reload и сохраняет
+низкую фоновую нагрузку.
 
-- **Выбор режима работы:** Весь трафик устройства, «Исключать выбранные приложения» (`EXCLUDE`) или «Только для выбранных приложений» (`INCLUDE`).
-- **Списки доменов и исключений:** Управление доменными списками и дополнительными стратегиями обхода прямо в текстовом поле интерфейса.
-- **Быстрое управление приложениями:** Удобный поиск по названию пакета, отображение иконок и переключатели `INCLUDE`/`EXCLUDE` для любого установленного приложения.
-- **Настройка QUIC & TCP:** Гибкое управление трафиком HTTP/3 (QUIC) и функцией TCP fallback.
-- **Логи в реальном времени:** Просмотр журнала работы службы `nfqws` прямо с экрана настроек.
-</details>
+Фактическая сеть определяется через Android `Active default network`, включая
+OEM smart data switching. DNS для редкого probe не зависит от root-shell resolver:
+четыре контрольных имени разрешаются отдельным DoH-запросом, после чего TLS идёт
+через реальный интерфейс с `--resolve`. Netlink/inotify события объединяются и будят
+AUTO только при реальной смене роли/default upstream.
+При старте сразу применяется кэш, а повторная проверка выполняется в фоне. Тестовый
+трафик изолирован диапазоном локальных портов и очередью 201, не перезапускает и не
+подменяет рабочую очередь 200. WebUI показывает профиль и позволяет запустить подбор
+вручную либо сбросить кэш.
 
-<details>
-<summary><b>Техническая информация</b></summary>
+На ядрах с полным bounded reply-feed по-прежнему используется `SMART_NATIVE`/circular.
 
-- **Сетевой стек:** `iptables` с поддержкой `NFQUEUE`. Для стандартного per-app режима — поддержка `owner/xt_owner`.
-- **Совместимость бинарников:** Сами вложенные `nfqws2`-бинарники собраны с минимальной целью Android API 21 (Android 5.0), но практический рекомендуемый минимум для модуля — Android 6.0+. В частности, текущий Magisk официально поддерживает Android 6.0+.
-- **Интерфейс управления:** Полный WebUI с приложениями, названиями и иконками ориентирован в первую очередь на KernelSU / KernelSU Next / APatch WebUI API. Основная сетевая часть модуля при этом не зависит от WebUI и работает через конфиг/Action/CLI и с другими root-менеджерами.
-- **Режимы ядра:** Для режима AUTO ядро должно поддерживать `nf_conntrack_acct` + `CONNMARK/connmark` + `xt_connbytes`. Если чего-то из этого нет, модуль автоматически использует рабочую стратегию `SIMPLE`. Отсутствие `xt_connbytes` не мешает пользоваться модулем.
-- **Поддержка IPv6:** Для AntiDPI по IPv6 нужны `ip6tables` + `IPv6 NFQUEUE` + `owner`. Если этих возможностей нет, IPv4 продолжает работать, а модуль показывает соответствующий compatibility-статус.
-- **Маршрутизация Hotspot/USB:** Для VPN → Hotspot/USB дополнительно нужны рабочие `ip rule/policy routing`, `FORWARD` и `MASQUERADE` в ядре/netfilter. VPN-интерфейс и интерфейс раздачи определяются динамически (`tun0` или `wlan2` не являются обязательными именами).
-- **Upstream Zapret:** Сам upstream Zapret подтверждает, что transparent `nfqws` на Android требует root и использует NFQUEUE. Android-ядра в общем случае имеют поддержку NFQUEUE.
-- **Требования Root-менеджеров:** Отдельно root-менеджеры имеют свои требования к ядру: KernelSU Next заявляет поддержку ядер 4.4–6.6, а APatch — 3.18–6.12 (ARM64). Это требования способов получения root, а не самого модуля Zapret2 eCubz.
-</details>
+## Что изменилось в 2.8.1
 
----
+### Low-CPU network role watcher
 
-> **Важно:** Результат зависит от провайдера и прошивки. При конфликте с VPN, фильтраторами или другими DPI-модулями используйте только один сетевой модуль одновременно.
-> 
-> *Проект создан в образовательных целях.*
->
-> *После установки и перезагрузки бывает, что служба не стартует сразу — подождите пару минут (пока система полностью прогрузится), зайдите в модуль и нажмите «Перезапустить модуль» (в WebUI или через action.sh).*
+В 2.8.0 `vpn-watch.sh` каждые 2 секунды запускал `net-role.sh signature`. Тот обходил все сетевые интерфейсы и для каждого вызывал `ip`; дополнительно каждые 10 секунд выполнялся строгий role snapshot с `dumpsys connectivity/tethering`. На устройствах с большим числом Android/rmnet/ifb интерфейсов это давало заметную постоянную CPU-нагрузку.
 
----
+2.8.1 переводит fast path на события:
 
-# Zapret2 eCubz (English Version)
+- `ip monitor all` (rtnetlink) сигнализирует изменения link/address/route без polling;
+- `/data/misc/net` inotify остаётся вторым Android/netd-триггером;
+- цикл 2 секунды теперь только проверяет маленький event flag и не запускает `net-role.sh`;
+- события объединяются debounce в одну проверку ролей;
+- строгий `net-role.sh role-signature` остаётся резервной проверкой раз в 30 секунд;
+- rule drift verify остаётся раз в 60 секунд;
+- внутри одного `net-role.sh` результаты `dumpsys connectivity`, `dumpsys tethering` и default-upstream вычисляются не более одного раза и переиспользуются всеми вложенными проверками.
 
-**Developer:** [eCubz (4PDA)](https://4pda.to/forum/index.php?showuser=1266125)  
-**TG Community:** [https://t.me/module_ecubz](https://t.me/module_ecubz) — Project is under active development, feedback is welcome.  
-**Source Code:** [github.com/AntikFull/root_moduls/tree/main/zapret2-module](https://github.com/AntikFull/root_moduls/tree/main/zapret2-module)
+Во время реального перехода VPN/tether краткий 1-секундный retry сохраняется: высокая частота допустима только пока интерфейс действительно находится в переходном состоянии. SMART/YouTube профили 2.8.0 не менялись.
 
-Reliable bypass of DPI throttling and resource blocking (YouTube, Discord, etc.) on your Android device without third-party VPN services.
+## Что изменилось в 2.8.0
 
-This is a Magisk / KernelSU / APatch module powered by the high-performance `nfqws` engine (zapret project). It intercepts and modifies network packets on-device, restoring speed and access to popular web services.
+### Один нормальный режим — SMART
 
----
+Обычному пользователю больше не нужно выбирать между SIMPLE и AUTO. В штатном режиме используется:
 
-## Requirements
+- `SMART_NATIVE` — если ядро поддерживает безопасный ограниченный reply-feed (`nf_conntrack_acct + CONNMARK + xt_connbytes`);
+- `SMART_COMPAT` — если этих возможностей нет. Модуль всё равно автоматически выбирает сервисные профили, но не отправляет bulk-входящий трафик в NFQUEUE;
+- `CUSTOM` оставлен только как экспертный режим в WebUI.
 
-- **Android 6.0+**
-- **Root**: Magisk / KernelSU / KernelSU Next / APatch
-- **Architectures**: ARM64 / ARM / x86_64 / x86
+`SIMPLE` и старый `AUTO` при обновлении автоматически мигрируют в `SMART`.
 
----
+### Автоматический выбор приложений
 
-## Key Features
+`auto_apps.list` — встроенный каталог приложений, которым обычно нужен AntiDPI. Модуль создаёт UID/NFQUEUE/QUIC-правила только для реально установленных пакетов из каталога.
 
-- Per-app selection directly inside WebUI;
-- Operating modes: `INCLUDE` / `EXCLUDE` / `GLOBAL`;
-- DPI bypass for YouTube, instant messengers, web browsers, and other apps;
-- Instant automatic rule application upon app selection (no "Save" button required);
-- Wi-Fi Hotspot and USB Tethering support;
-- VPN Tethering (sharing phone's active VPN connection to tethered devices);
-- AntiDPI fallback: if VPN connection drops, tethered clients automatically fallback to AntiDPI mode instead of losing internet;
-- QUIC / HTTP3 blocking with seamless TCP fallback enforcement;
-- Optional DNS redirection for tethered clients;
-- AUTO strategy with graceful fallback to SIMPLE mode if kernel features are missing;
-- Modern Material 3 Expressive WebUI;
-- Integrated logging, diagnostic utilities, and NFQUEUE/kernel feature probes.
+- `auto_apps.list` — встроенный AUTO-каталог;
+- `apps.list` — только ручные добавления пользователя;
+- `exclude.list` — исключения с высшим приоритетом.
 
----
+Итоговый scope: `(установленные AUTO + ручные) - исключения`.
 
-<details>
-<summary><b>WebUI Capabilities</b></summary>
+При обновлении старые записи `apps.list`, которые уже покрываются новым AUTO-каталогом, удаляются как дубли. Фактический выбор не меняется, потому что AUTO включён по умолчанию.
 
-- **Mode Switching:** Global device traffic, "Exclude selected applications" (`EXCLUDE`), or "Only selected applications" (`INCLUDE`).
-- **Domain & Exclusion Lists:** Edit target domain lists and custom bypass strategies directly inside the WebUI text editor.
-- **Fast Application Management:** Convenient app search by package/label, dynamic icon rendering, and `INCLUDE`/`EXCLUDE` toggles for installed apps.
-- **QUIC & TCP Control:** Flexible HTTP/3 (QUIC) blocking and TCP fallback configuration.
-- **Real-Time Logs:** View live `nfqws` daemon logs directly from the settings interface.
-</details>
+### Сервисные SMART-профили
 
-<details>
-<summary><b>Technical Details</b></summary>
+SMART содержит явный YouTube / Google Video профиль и общий General-профиль. YouTube-профиль проверяется первым только для узкого встроенного списка YouTube-доменов; весь остальной выбранный трафик попадает в General.
 
-- **Network Stack:** Uses `iptables` with `NFQUEUE` target. Standard per-app filtering relies on `owner/xt_owner` kernel modules.
-- **Binary Compatibility:** Bundled `nfqws2` binaries are compiled targeting Android API 21+ (Android 5.0+), though Android 6.0+ is recommended for optimal system behavior.
-- **Management Interfaces:** Full WebUI with app icons is designed primarily for KernelSU / KernelSU Next / APatch WebUI API. Core network engine is independent of WebUI and can be managed via config files, `action.sh`, or CLI.
-- **Kernel Requirements for AUTO Mode:** Requires `nf_conntrack_acct` + `CONNMARK/connmark` + `xt_connbytes`. If any feature is missing, the module automatically falls back to `SIMPLE` mode without breaking functionality.
-- **IPv6 Support:** Requires `ip6tables` + `IPv6 NFQUEUE` + `owner`. If missing, IPv4 AntiDPI continues to function properly while reporting compatibility status.
-- **Hotspot & Tether Routing:** VPN → Hotspot/USB sharing requires working `ip rule/policy routing`, `FORWARD`, and `MASQUERADE` in netfilter. Interfaces are detected dynamically (names like `tun0` or `wlan2` are not hardcoded).
-- **Upstream Compatibility:** Upstream Zapret confirms that transparent `nfqws` on Android requires root privileges and `NFQUEUE`. Most Android kernels include `NFQUEUE` support out of the box.
-</details>
+`smart_youtube.list` специально не содержит широкие корневые `googleapis.com`, `gstatic.com`, `googleusercontent.com` или `ggpht.com`, чтобы YouTube-профиль не затрагивал посторонний Google-трафик браузеров.
 
----
+Для YouTube в `SMART_COMPAT` используется более сильный TLS-профиль в стиле актуальных upstream-примеров: fake TLS с `tcp_md5`, `repeats=11`, модификацией TLS (`rnd`, `dupsid`, SNI `www.google.com`) и `multidisorder`.
 
-> **Important:** Performance depends on your ISP and ROM environment. Do not run multiple network/DPI bypass modules or conflicting VPN apps simultaneously.
-> 
-> *Created for educational and research purposes.*
-> 
-> *If the service does not start immediately after reboot, please wait 1-2 minutes for system services to complete initialization, then open the module and click "Restart module" (in WebUI or via action.sh).*
+## Стабильность 2.7.x сохранена
 
----
+- boot-time runtime logs находятся в `$MODDIR/logs`, а `/sdcard/eCubz` используется только для экспорта;
+- boot worker и `nfqws2` запускаются в отдельных session/process group через `setsid`;
+- PID проверяется по `comm=nfqws2` и `cwd=$MODDIR/bin`;
+- VPN/tether state machine идемпотентный;
+- VPN leak guard ограничен реальными tether-downstream;
+- QUIC следует фактическому INCLUDE / EXCLUDE / GLOBAL scope;
+- DNS forcing для Hotspot/USB поддерживает UDP/TCP 53;
+- multi-user UID cache учитывает Android users;
+- app-only sync не рестартует `nfqws2` при обычных изменениях списка приложений;
+- WebUI использует Material 3 Expressive и показывает AUTO / ручной / исключённый статус приложения.
 
-## Донаты и поддержка / Donations
+## Основные файлы
 
-Ваша поддержка помогает развивать и поддерживать проекты! / Your support helps keep these projects active!
+- `zapret2.conf` — конфигурация;
+- `auto_apps.list` — встроенный AUTO-каталог приложений;
+- `apps.list` — ручные приложения;
+- `exclude.list` — исключения;
+- `smart_youtube.list` — встроенная группа YouTube/Google Video;
+- `exclude_domains.list` — домены, которые не должны модифицироваться;
+- `AUDIT_REPORT.md` — аудит релиза;
+- `BINARY_MANIFEST.txt` — provenance и SHA-256 поставляемых бинарников/Lua.
 
-- **СБП:** `+7 923 618-89-93`
-- **Т-Банк:** [Перевод Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
-- **Ю.Money (Яндекс):** [Перевод Ю.Money](https://yoomoney.ru/to/410011494875904)
-- **Crypto:** [USDT | GRAM (Telegram Crypto Bot)](http://t.me/send?start=IVjCT8LiszJ2)
-- **TON Wallet (USDT):** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
+## Важное ограничение SMART
+
+`SMART_ACTIVE` проверяет доступность контрольных YouTube/Google Video URL и кэширует
+первый полностью успешный профиль. Это активный сетевой подбор, а не анализ каждого
+соединения. Настоящий `circular` с детекторами успеха/ошибок требует входных reply-пакетов;
+модуль включает его только когда ядро позволяет ограничить этот feed и не отправлять
+весь входящий поток видео в userspace.
+
+Реальную эффективность конкретной DPI-стратегии всё равно нужно подтверждать на сети оператора: правила, ABI, NFQUEUE и запуск могут быть исправны, но конкретный TSPU/DPI может требовать другую комбинацию десинка.

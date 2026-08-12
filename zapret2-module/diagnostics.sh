@@ -1,15 +1,18 @@
 #!/system/bin/sh
+umask 077
 # Runtime diagnostics for Zapret2 eCubz. This script does not start packet capture.
 # If NFQWS_DEBUG was enabled, its existing debug log may contain domains/packet metadata.
 
 MODDIR="${0%/*}"
 CONF_FILE="$MODDIR/zapret2.conf"
 RUN_DIR="$MODDIR/run"
-LOG_DIR="/sdcard/eCubz"
+LOG_DIR="$MODDIR/logs"
 SERVICE_LOG="$LOG_DIR/zapret2_debug.log"
 NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
 OUT="$LOG_DIR/zapret2_diagnostics_latest.txt"
+EXPORT_DIR="/sdcard/eCubz"
 mkdir -p "$LOG_DIR" "$RUN_DIR" 2>/dev/null
+chmod 0700 "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
 
 IPT=$(command -v iptables 2>/dev/null); [ -n "$IPT" ] || IPT=/system/bin/iptables
 IP6T=$(command -v ip6tables 2>/dev/null); [ -n "$IP6T" ] || IP6T=/system/bin/ip6tables
@@ -18,12 +21,38 @@ IP=$(command -v ip 2>/dev/null); [ -n "$IP" ] || IP=/system/bin/ip
 
 section() { printf '\n===== %s =====\n' "$1"; }
 run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
+pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+pid_owned() {
+  local pid="$1" kind="$2" cmd comm cwd
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  case "$kind" in
+    nfqws2) comm=$(cat "/proc/$pid/comm" 2>/dev/null); cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null); [ "$comm" = nfqws2 ] && [ "$cwd" = "$MODDIR/bin" ] ;;
+    config) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/on_change.sh" ;;
+    vpn) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/vpn-watch.sh" ;;
+    health) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service-watch.sh" ;;
+    auto) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/auto-select.sh" ;;
+    service) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service.sh" ;;
+    *) return 1 ;;
+  esac
+}
 
 {
   echo "Zapret2 eCubz diagnostics"
   echo "Privacy: contains installed package names, network/routing state and logs; nfqws debug may contain domains/packet metadata if it was enabled."
   echo "Generated: $(date '+%Y-%m-%d %H:%M:%S %z')"
   echo "Module: $(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | head -n1) code=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop" 2>/dev/null | head -n1)"
+
+  section "BINARY PROVENANCE"
+  cat "$MODDIR/BINARY_MANIFEST.txt" 2>&1
+  echo "-- installed selected-ABI files --"
+  if command -v sha256sum >/dev/null 2>&1; then
+    for bf in "$MODDIR/bin/nfqws2" "$MODDIR/bin/ip2net" "$MODDIR/bin/mdig" "$MODDIR/bin/zapret-lib.lua" "$MODDIR/bin/zapret-antidpi.lua" "$MODDIR/bin/zapret-auto.lua"; do
+      [ -f "$bf" ] && sha256sum "$bf"
+    done
+  else
+    echo "sha256sum unavailable"
+  fi
 
   section "DEVICE"
   echo "brand=$(getprop ro.product.brand 2>/dev/null)"
@@ -56,24 +85,101 @@ run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
   section "HEALTH"
   cat "$RUN_DIR/health.env" 2>&1
   echo "package_source=$(cat "$RUN_DIR/package_source" 2>/dev/null)"
+  section "SMART STRATEGY RESOLUTION"
+  if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
+  strategy_effective=$(sed -n 's/^STRATEGY_EFFECTIVE=//p' "$RUN_DIR/health.env" 2>/dev/null | head -n1)
+  [ -n "$strategy_effective" ] || strategy_effective=${STRATEGY_MODE:-SMART}
+  youtube_count=$(grep -cv '^[[:space:]]*\(#\|$\)' "$MODDIR/smart_youtube.list" 2>/dev/null || echo 0)
+  auto_count=$(grep -cv '^[[:space:]]*\(#\|$\)' "$MODDIR/auto_apps.list" 2>/dev/null || echo 0)
+  manual_count=$(grep -cv '^[[:space:]]*\(#\|$\)' "$MODDIR/apps.list" 2>/dev/null || echo 0)
+  echo "STRATEGY_MODE=${STRATEGY_MODE:-SMART}"
+  echo "STRATEGY_EFFECTIVE=$strategy_effective"
+  echo "AUTO_APPS_ENABLED=${AUTO_APPS_ENABLED:-1}"
+  echo "AUTO_APPS_CATALOG_COUNT=$auto_count"
+  echo "MANUAL_APPS_COUNT=$manual_count"
+  echo "SMART_YOUTUBE_DOMAINS=$youtube_count"
+  case "$strategy_effective" in
+    SMART_NATIVE) echo "SMART_ENGINE_EFFECT=adaptive circular service profiles with bounded incoming reply-feed" ;;
+    SMART_COMPAT) echo "SMART_ENGINE_EFFECT=automatic service profiles without incoming bulk/reply-feed" ;;
+    CUSTOM) echo "SMART_ENGINE_EFFECT=expert CUSTOM profile" ;;
+    *) echo "SMART_ENGINE_EFFECT=unknown/legacy" ;;
+  esac
   section "STARTUP STATE"
   cat "$RUN_DIR/startup.env" 2>&1
   late_start_pid=$(cat "$RUN_DIR/late-start.pid" 2>/dev/null)
   echo "late_start_pid=${late_start_pid:-none}"
-  if [ -n "$late_start_pid" ] && kill -0 "$late_start_pid" 2>/dev/null; then echo "late_start_alive=1"; else echo "late_start_alive=0"; fi
+  if [ -n "$late_start_pid" ] && pid_owned "$late_start_pid" service; then echo "late_start_alive=1 owned=1"; else echo "late_start_alive=0 owned=0"; fi
   echo "-- boot trace --"
   tail -n 80 "$RUN_DIR/boot-trace.log" 2>/dev/null || true
 
+  section "LOGGING / STORAGE"
+  echo "internal_log_dir=$LOG_DIR"
+  ls -ld "$LOG_DIR" 2>&1
+  ls -l "$SERVICE_LOG" "$NFQWS_LOG" 2>&1 || true
+  echo "external_export_dir=$EXPORT_DIR"
+  mount 2>/dev/null | grep -E '(/sdcard|/storage/emulated)' | head -n 20 || true
+  if mkdir -p "$EXPORT_DIR" 2>/dev/null && testfile="$EXPORT_DIR/.zapret2-write-test.$$" && : > "$testfile" 2>/dev/null; then
+    rm -f "$testfile" 2>/dev/null
+    echo "external_export_writable=1"
+  else
+    echo "external_export_writable=0"
+  fi
+  if command -v setsid >/dev/null 2>&1; then echo "setsid=command"; elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then echo "setsid=busybox"; elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; then echo "setsid=toybox"; else echo "setsid=unavailable"; fi
+
+  section "RUNTIME FILES / WATCHERS"
+  echo "watch_mode=event-driven"
+  echo "control_loop_sec=${VPN_WATCH_INTERVAL:-2}"
+  echo "role_safety_recheck_sec=${VPN_ROLE_RECHECK:-30}"
+  echo "event_debounce_sec=${VPN_EVENT_DEBOUNCE:-2}"
+  echo "netlink_monitor=${VPN_NETLINK_MONITOR:-1}"
+  echo "rule_verify_sec=${VPN_VERIFY_INTERVAL:-60}"
+  echo "legacy_VPN_STATE_RECHECK=${VPN_STATE_RECHECK:-unset} (not used by hot loop)"
+  ls -ld "$RUN_DIR" 2>&1
+  ls -la "$RUN_DIR" 2>&1
+  for pf in nfqws2.pid watcher.pid vpn-watcher.pid health-watcher.pid auto-probe.pid auto-test-nfqws.pid late-start.pid; do
+    wp=$(cat "$RUN_DIR/$pf" 2>/dev/null)
+    alive=0; owned=0; kind=""
+    case "$pf" in nfqws2.pid|auto-test-nfqws.pid) kind=nfqws2 ;; watcher.pid) kind=config ;; vpn-watcher.pid) kind=vpn ;; health-watcher.pid) kind=health ;; auto-probe.pid) kind=auto ;; late-start.pid) kind=service ;; esac
+    case "$wp" in ''|0|*[!0-9]*) ;; *) kill -0 "$wp" 2>/dev/null && alive=1; pid_owned "$wp" "$kind" && owned=1 ;; esac
+    echo "$pf=${wp:-none} alive=$alive owned=$owned"
+  done
+  echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) recorded_boot_id=$(cat "$RUN_DIR/boot.id" 2>/dev/null)"
+  echo "-- active AUTO result --"
+  cat "$RUN_DIR/auto-current.env" 2>&1
+  echo "-- active AUTO cache --"
+  for cache in "$MODDIR"/state/auto-*.env; do
+    [ -f "$cache" ] || continue
+    echo "[$cache]"
+    cat "$cache" 2>&1
+  done
+  echo "-- current role signature --"
+  [ -x "$MODDIR/net-role.sh" ] && "$MODDIR/net-role.sh" role-signature 2>&1
+  echo
+  echo "-- tether verify --"
+  [ -x "$MODDIR/tether-sync.sh" ] && "$MODDIR/tether-sync.sh" verify >/dev/null 2>&1 && echo "tether_rules=OK" || echo "tether_rules=DRIFT/NOT_READY"
+  echo "-- vpn verify --"
+  [ -x "$MODDIR/vpn-routing.sh" ] && "$MODDIR/vpn-routing.sh" verify >/dev/null 2>&1 && echo "vpn_rules=OK" || echo "vpn_rules=DRIFT/NOT_READY"
+
   section "PACKAGE UID RESOLUTION"
+  echo "-- Android users --"
+  cmd user list 2>&1 || true
+  echo "-- cache entries by user --"
+  awk '{c[$3]++} END{for(u in c) print u,c[u]}' "$RUN_DIR/package_uids.cache" 2>/dev/null | sort -n | awk '{print "user"$1"="$2}'
   echo "cache_lines=$(wc -l < "$RUN_DIR/package_uids.cache" 2>/dev/null | tr -d ' ')"
-  echo "-- selected apps --"
+  echo "-- AUTO catalog apps that are installed/resolved --"
+  while IFS= read -r pkg || [ -n "$pkg" ]; do
+    case "$pkg" in ''|\#*) continue ;; esac
+    uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
+    [ -n "$uids" ] && echo "$pkg -> $uids"
+  done < "$MODDIR/auto_apps.list"
+  echo "-- manual apps.list additions --"
   while IFS= read -r pkg || [ -n "$pkg" ]; do
     case "$pkg" in ''|\#*) continue ;; esac
     printf '%s -> ' "$pkg"
     awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null
     echo
   done < "$MODDIR/apps.list"
-  echo "-- excludes that are installed/resolved --"
+  echo "-- excludes that are installed/resolved (highest priority) --"
   while IFS= read -r pkg || [ -n "$pkg" ]; do
     case "$pkg" in ''|\#*) continue ;; esac
     uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
@@ -130,6 +236,7 @@ run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
   if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
     printf 'cmdline='; tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null; echo
     printf 'status:\n'; grep -E '^(Name|State|Pid|PPid|Uid|Gid|VmRSS|Threads):' "/proc/$pid/status" 2>/dev/null
+    printf 'session: '; awk '{printf "ppid=%s pgrp=%s sid=%s\n",$4,$5,$6}' "/proc/$pid/stat" 2>/dev/null
   fi
   ps -A -o PID,PPID,USER,NAME,ARGS 2>/dev/null | grep -E 'nfqws|nfqttl|vpn|tether|proxy' || ps -A 2>/dev/null | grep -E 'nfqws|nfqttl|vpn|tether|proxy' || true
 
@@ -151,6 +258,10 @@ run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
   cat "$RUN_DIR/tether-downstreams.state" 2>&1
   echo "-- vpn-routing.state --"
   cat "$RUN_DIR/vpn-routing.state" 2>&1
+  echo "-- vpn-routing.meta --"
+  cat "$RUN_DIR/vpn-routing.meta" 2>&1
+  echo "-- tether-runtime.conf --"
+  cat "$RUN_DIR/tether-runtime.conf" 2>&1
   echo "-- Zapret2 VPN private table --"
   VPN_ROUTE_TABLE=$(sed -n 's/^VPN_ROUTE_TABLE="\([0-9][0-9]*\)"/\1/p' "$CONF_FILE" 2>/dev/null | head -n1)
   [ -n "$VPN_ROUTE_TABLE" ] || VPN_ROUTE_TABLE=11999
@@ -176,5 +287,13 @@ run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
   logcat -d -t 1500 2>/dev/null | grep -Ei 'nfqueue|netfilter|iptables|ip6tables|avc: denied|nfqws|zapret|KernelSU' | tail -n 400 || true
 } > "$OUT" 2>&1
 
-chmod 0644 "$OUT" 2>/dev/null
-echo "$OUT"
+chmod 0600 "$OUT" 2>/dev/null
+# Diagnostics are built from boot-safe internal logs. Export a shareable copy only
+# after the report is complete; failure of /sdcard never invalidates diagnostics.
+if mkdir -p "$EXPORT_DIR" 2>/dev/null && cp -f "$OUT" "$EXPORT_DIR/zapret2_diagnostics_latest.txt" 2>/dev/null; then
+  chmod 0644 "$EXPORT_DIR/zapret2_diagnostics_latest.txt" 2>/dev/null || true
+  [ -x "$MODDIR/log-export.sh" ] && sh "$MODDIR/log-export.sh" now >/dev/null 2>&1 || true
+  echo "$EXPORT_DIR/zapret2_diagnostics_latest.txt"
+else
+  echo "$OUT"
+fi

@@ -1,6 +1,6 @@
 id=zapret2-android
 name=Zapret2 eCubz
-version=v2.6.19
-versionCode=2619
+version=v2.9.0
+versionCode=2908
 author=eCubz (https://t.me/eCubz)
-description=Zapret2 для Android: per-app AntiDPI, Hotspot/USB, строгая динамическая роль VPN/tether, безопасная VPN-раздача с AntiDPI fallback, точная compatibility-диагностика, актуальный KernelSU Next package API, синхронизированный мгновенный per-app выбор и Material 3 Expressive WebUI. Telegram: https://t.me/module_ecubz
+description=Zapret2 eCubz v2.9.0: файловая очередь пользовательских AUTO-стратегий без жёсткого лимита, согласованный health/WebUI-статус, per-network кэш, быстрый reload и VPN/Hotspot. Telegram: https://t.me/module_ecubz

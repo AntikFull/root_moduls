@@ -14,7 +14,7 @@
 2. **[Analytics-Ads-Disabler](./Analytics-Ads-Disabler)** — Адаптивное отключение рекламных и аналитических служб/ресиверов в прошивках и приложениях.
 3. **[alice-bt-launcher](./alice-bt-launcher)** — Автоматический фоновый запуск и контроль работы сервиса Алиса AI при подключении Bluetooth-наушников.
 4. **[nfqttl-ecubz](./nfqttl-ecubz)** — Коррекция TTL/Hop Limit и замена заголовков для обхода ограничений сотовых операторов на раздачу интернета.
-5. **[zapret2-module](./zapret2-module)** — Автономный обход DPI на базе nfqws2 + Lua с нулевым расходом батареи.
+5. **[zapret2-module](./zapret2-module)** — Адаптивный обход DPI на базе nfqws2 + Lua с файловой очередью AUTO-стратегий и кэшем для каждой сети.
 
 ---
 
@@ -28,7 +28,7 @@ Unified collection of original **Magisk / KernelSU / APatch** modules for Androi
 2. **[Analytics-Ads-Disabler](./Analytics-Ads-Disabler)** — Runtime adaptive systemwide disabler for background analytics, ads, and telemetry components.
 3. **[alice-bt-launcher](./alice-bt-launcher)** — Automatic background launch and process management for Alice AI assistant upon Bluetooth connection.
 4. **[nfqttl-ecubz](./nfqttl-ecubz)** — TTL / Hop Limit fixing and header spoofing to bypass mobile carrier tethering restrictions.
-5. **[zapret2-module](./zapret2-module)** — Autonomous zero-battery DPI bypass module powered by nfqws2 + Lua engine.
+5. **[zapret2-module](./zapret2-module)** — Adaptive nfqws2 + Lua DPI bypass with a user-managed AUTO strategy queue and per-network cache.
 
 ---
 
