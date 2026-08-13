@@ -1,22 +1,79 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
 
-# ============================================================================
-# Nfqttl eCubz v8.4 - Ultimate IPv6 Hop Limit Lock & Zero-Leak Forward
-# Compatible with: OnePlus 13 (Android 15/16), OxygenOS, Xiaomi, Samsung, All
-# ============================================================================
+VERSION="v10"
+VERSION_CODE="100"
 
-VERSION="v8.4"
-VERSION_CODE="840"
-
-# Фиксация примененной версии для предотвращения путаницы логов без перезагрузки
 echo "$VERSION ($VERSION_CODE)" > "$MODDIR/.applied_version" 2>/dev/null || true
 
-PGREP_BIN=/system/bin/pgrep
+QUEUE_NUM=6464
+TTL_VALUE=64
+WD_LOG=/data/local/tmp/nfqttl_watchdog.log
+NFQTTL_DAEMON_LOG=/data/local/tmp/nfqttl_daemon_stdout.log
+
+# Флаги-файлы в папке модуля (создать/удалить -> reboot):
+#   debug     - подробный лог + LOG-правила
+#   noquic    - резать QUIC (UDP/443) от клиентов, чтобы весь трафик шёл по TCP
+#   no6       - полностью запретить IPv6-форвардинг клиентам (самый надёжный
+#               способ убрать утечки через 464XLAT/clat)
+DEBUG_MODE=0
+NOQUIC=0
+NO6=0
+[ -f "$MODDIR/debug" ] && DEBUG_MODE=1
+[ -f "$MODDIR/DEBUG" ] && DEBUG_MODE=1
+[ -f "$MODDIR/noquic" ] && NOQUIC=1
+[ -f "$MODDIR/no6" ] && NO6=1
+
+CELL_IFS="rmnet+ rmnet_data+ r_rmnet_data+ rmnet_mhi+ rmnet_ipa+ ccmni+ pdp+ v4-rmnet+ v4-rmnet_data+ tun+"
+CLIENT_IFS="wlan1 wlan2 ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+"
+
+# Обёртки. -w нужен, чтобы не драться с netd за xtables lock: без него часть
+# правил молча не применяется в момент подъёма точки доступа.
+IPT_W=""
+if iptables -w 2 -t mangle -L -n >/dev/null 2>&1; then
+    IPT_W="-w 5"
+fi
+
+IPT4() { iptables $IPT_W "$@" 2>/dev/null; }
+IPT6() { ip6tables $IPT_W "$@" 2>/dev/null; }
+
+wd_log() {
+    if [ -f "$WD_LOG" ] && [ "$(wc -c < "$WD_LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
+        tail -n 50 "$WD_LOG" > "$WD_LOG.tmp" 2>/dev/null && mv "$WD_LOG.tmp" "$WD_LOG"
+    fi
+    echo "[$(date '+%m-%d %H:%M:%S')] $*" >> "$WD_LOG"
+    chmod 600 "$WD_LOG" 2>/dev/null || true
+}
+
+nfqttl_daemon_log_rotate() {
+    if [ -f "$NFQTTL_DAEMON_LOG" ] && [ "$(wc -c < "$NFQTTL_DAEMON_LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
+        tail -n 200 "$NFQTTL_DAEMON_LOG" > "$NFQTTL_DAEMON_LOG.tmp" 2>/dev/null && mv "$NFQTTL_DAEMON_LOG.tmp" "$NFQTTL_DAEMON_LOG"
+    fi
+    chmod 600 "$NFQTTL_DAEMON_LOG" 2>/dev/null || true
+}
+
+# Проверки состояния. Реализованы БЕЗ форков: watchdog крутится постоянно,
+# каждый лишний exec в цикле — это пробуждение CPU и расход батареи.
+# QUEUE_STAT_* заполняются попутно: queue_dropped растёт => ядро роняет пакеты,
+# user_dropped растёт => демон не успевает читать очередь.
+QUEUE_DROPPED=0
+USER_DROPPED=0
+
+nfqueue_bound() {
+    [ -r /proc/net/netfilter/nfnetlink_queue ] || return 1
+    while read -r _q _pid _tot _cmode _crange _qdrop _udrop _rest; do
+        if [ "$_q" = "$QUEUE_NUM" ]; then
+            QUEUE_DROPPED=$_qdrop
+            USER_DROPPED=$_udrop
+            return 0
+        fi
+    done < /proc/net/netfilter/nfnetlink_queue
+    return 1
+}
 
 nfqttl_alive() {
-    if [ -x "$PGREP_BIN" ]; then
-        "$PGREP_BIN" -x nfqttl >/dev/null 2>&1
+    if [ -x /system/bin/pgrep ]; then
+        /system/bin/pgrep -x nfqttl >/dev/null 2>&1
         return $?
     fi
     for _p in /proc/[0-9]*; do
@@ -27,252 +84,475 @@ nfqttl_alive() {
     return 1
 }
 
-# 1. Отключение всех видов Tethering Offload (Hardware HAL + Android 12-15 eBPF Offload)
-device_config put connectivity override_tether_enable_bpf_offload false 2>/dev/null || true
-settings put global tether_offload_disabled 1 2>/dev/null || true
-setprop persist.sys.tether.offload.enable false 2>/dev/null || true
+# Признак активной раздачи. wlan0 исключён намеренно — это обычный клиентский
+# Wi-Fi, он "up" почти всегда и давал бы ложное срабатывание.
+tether_up() {
+    for _d in /sys/class/net/*; do
+        _n=${_d##*/}
+        case "$_n" in
+            wlan1|wlan2|ap*|swlan*|softap*|rndis*|usb*|bt-pan*|pan*) ;;
+            *) continue ;;
+        esac
+        [ -r "$_d/operstate" ] || continue
+        read -r _st < "$_d/operstate" 2>/dev/null || continue
+        [ "$_st" = "up" ] && return 0
+    done
+    return 1
+}
 
-# 2. Принудительное включение форвардинга IPv4 и IPv6
+# Фактический upstream по умолчанию: имена rmnet-интерфейсов у вендоров
+# различаются, статического списка не всегда достаточно.
+default_upstreams() {
+    ip route show default 2>/dev/null | while read -r _l; do
+        _prev=""
+        for _w in $_l; do
+            [ "$_prev" = "dev" ] && echo "$_w"
+            _prev=$_w
+        done
+    done
+    ip -6 route show default 2>/dev/null | while read -r _l; do
+        _prev=""
+        for _w in $_l; do
+            [ "$_prev" = "dev" ] && echo "$_w"
+            _prev=$_w
+        done
+    done
+}
+
+ensure_nfqttl_running() {
+    nfqttl_daemon_log_rotate
+    _attempt=1
+    while [ "$_attempt" -le 5 ]; do
+        if nfqttl_alive && nfqueue_bound; then
+            return 0
+        fi
+
+        if nfqttl_alive; then
+            wd_log "ensure: демон жив, очередь $QUEUE_NUM не подтверждена; перезапуск #$_attempt"
+            pkill -9 nfqttl 2>/dev/null || true
+            _w=0
+            while nfqttl_alive && [ "$_w" -lt 5 ]; do
+                sleep 1
+                _w=$((_w + 1))
+            done
+        fi
+
+        [ "$_attempt" -gt 1 ] && sleep 1
+        echo "===== $(date '+%Y-%m-%d %H:%M:%S') ensure start #$_attempt =====" >> "$NFQTTL_DAEMON_LOG"
+        "$MODDIR/nfqttl" -d >> "$NFQTTL_DAEMON_LOG" 2>&1
+
+        _w=0
+        while [ "$_w" -lt 5 ]; do
+            if nfqttl_alive && nfqueue_bound; then
+                wd_log "ensure: очередь $QUEUE_NUM подтверждена (попытка #$_attempt)"
+                return 0
+            fi
+            sleep 1
+            _w=$((_w + 1))
+        done
+        _attempt=$((_attempt + 1))
+    done
+
+    wd_log "ensure: ОШИБКА — очередь $QUEUE_NUM не забинжена после 5 попыток"
+    return 1
+}
+
+# 1. Отключение всех видов Tethering Offload (Hardware HAL + eBPF Offload).
+#    Читается сервисом Tethering при СТАРТЕ раздачи, поэтому применяется здесь
+#    и переприменяется watchdog'ом только на переходе "раздача включилась" —
+#    вызовы settings/device_config поднимают Java-процесс, в периодическом
+#    цикле им не место.
+kill_offload() {
+    device_config put connectivity override_tether_enable_bpf_offload false 2>/dev/null || true
+    settings put global tether_offload_disabled 1 2>/dev/null || true
+    setprop persist.sys.tether.offload.enable false 2>/dev/null || true
+}
+kill_offload
+
+# 2. Форвардинг
 echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
-sysctl -w net.ipv6.conf.all.forwarding=1 2>/dev/null || true
-sysctl -w net.ipv6.conf.all.disable_ipv6=0 2>/dev/null || true
+if [ "$NO6" -eq 0 ]; then
+    sysctl -w net.ipv6.conf.all.disable_ipv6=0 2>/dev/null || true
+fi
 
-# Сброс старых процессов демона при перезапуске
+# 3. Полная идемпотентная очистка.
+#    Все правила модуля живут в собственных цепочках, поэтому пересборка =
+#    снять переходы + удалить цепочки. Переходы снимаются в цикле: одиночный
+#    -D удаляет ровно одну копию, а v8.3 при повторном запуске без ребута
+#    накапливал дубликаты (debug_log.sh даже предупреждал про >25 штук).
+del_jump() { # $1=IPT4|IPT6 $2=table $3=chain $4=target
+    _n=0
+    while [ "$_n" -lt 40 ] && "$1" -t "$2" -D "$3" -j "$4"; do
+        _n=$((_n + 1))
+    done
+}
+drop_chain() { # $1=IPT4|IPT6 $2=table $3=chain
+    "$1" -t "$2" -F "$3"
+    "$1" -t "$2" -X "$3"
+}
+
+for _cmd in IPT4 IPT6; do
+    del_jump "$_cmd" mangle PREROUTING  nfqttlp
+    del_jump "$_cmd" mangle FORWARD     nfqttlo
+    del_jump "$_cmd" mangle FORWARD     nfqttlb
+    del_jump "$_cmd" mangle POSTROUTING nfqttlm
+    del_jump "$_cmd" mangle OUTPUT      nfqttlo
+    del_jump "$_cmd" nat    PREROUTING  nfqttln
+    del_jump "$_cmd" filter OUTPUT      nfqttlf
+
+    drop_chain "$_cmd" mangle nfqttlp
+    drop_chain "$_cmd" mangle nfqttlo
+    drop_chain "$_cmd" mangle nfqttlb
+    drop_chain "$_cmd" mangle nfqttlc
+    drop_chain "$_cmd" mangle nfqttlm
+    drop_chain "$_cmd" nat    nfqttln
+    drop_chain "$_cmd" filter nfqttlf
+done
+
+# Наследие v7.x/v8.x: правила, лежавшие прямо в системных цепочках.
+IPT4 -t mangle -D POSTROUTING ! -o lo -j nfqttlo
+_n=0
+while [ "$_n" -lt 20 ] && IPT4 -t mangle -D FORWARD -j TTL --ttl-set 64; do _n=$((_n + 1)); done
+_n=0
+while [ "$_n" -lt 20 ] && IPT6 -t mangle -D FORWARD -j HL --hl-set 64; do _n=$((_n + 1)); done
+
+for _c in $CELL_IFS; do
+    IPT4 -t mangle -D POSTROUTING -o "$_c" -j TTL --ttl-set 64
+    IPT4 -t mangle -D POSTROUTING -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
+    IPT4 -t mangle -D PREROUTING -i "$_c" -m ttl --ttl-eq 1 -j DROP
+    IPT4 -t mangle -D FORWARD -i "$_c" -m ttl --ttl-eq 1 -j DROP
+    IPT4 -t filter -D OUTPUT -o "$_c" -p icmp --icmp-type time-exceeded -j DROP
+    IPT6 -t mangle -D POSTROUTING -o "$_c" -j HL --hl-set 64
+    IPT6 -t filter -D OUTPUT -o "$_c" -p icmpv6 --icmpv6-type time-exceeded -j DROP
+done
+
+for _i in wlan+ ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+ wlan1 wlan2; do
+    IPT4 -t mangle -D POSTROUTING -o "$_i" -j TTL --ttl-set 64
+    IPT4 -t mangle -D POSTROUTING -o "$_i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
+    for _p in "udp --dport 123" "tcp --dport 853" "udp --dport 5353" "udp --dport 5355" "udp --dport 1900" "udp --dport 137:138"; do
+        IPT4 -t mangle -D FORWARD -i "$_i" -p $_p -j DROP
+        IPT6 -t mangle -D FORWARD -i "$_i" -p $_p -j DROP
+    done
+    IPT4 -t nat -D PREROUTING -i "$_i" -p udp --dport 53 -j REDIRECT --to-ports 53
+    IPT4 -t nat -D PREROUTING -i "$_i" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    IPT6 -t nat -D PREROUTING -i "$_i" -p udp --dport 53 -j REDIRECT --to-ports 53
+    IPT6 -t nat -D PREROUTING -i "$_i" -p tcp --dport 53 -j REDIRECT --to-ports 53
+done
+
 pkill -9 nfqttl 2>/dev/null || true
+_w=0
+while nfqttl_alive && [ "$_w" -lt 5 ]; do
+    sleep 1
+    _w=$((_w + 1))
+done
 sleep 1
 
-DEBUG_MODE=0
-if [ -f "$MODDIR/debug" ] || [ -f "$MODDIR/DEBUG" ]; then
-    DEBUG_MODE=1
-fi
-
-ALL_CELL_IFS="rmnet+ rmnet_data+ r_rmnet_data+ rmnet_mhi+ rmnet_ipa+ ccmni+ pdp+ tun+"
-ALL_CLIENT_IFS="wlan+ ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+"
-
-# 3. Полная и симметричная очистка старых правил MANGLE, FILTER, NAT и унаследованных правил
-iptables -t mangle -F nfqttlo 2>/dev/null || true
-iptables -t mangle -D OUTPUT -j nfqttlo 2>/dev/null || true
-iptables -t mangle -D POSTROUTING ! -o lo -j nfqttlo 2>/dev/null || true
-iptables -t mangle -D FORWARD -j nfqttlo 2>/dev/null || true
-
-ip6tables -t mangle -F nfqttlo 2>/dev/null || true
-ip6tables -t mangle -D POSTROUTING -j nfqttlo 2>/dev/null || true
-ip6tables -t mangle -D FORWARD -j nfqttlo 2>/dev/null || true
-
-iptables -t mangle -D FORWARD -j TTL --ttl-set 64 2>/dev/null || true
-ip6tables -t mangle -D FORWARD -j HL --hl-set 64 2>/dev/null || true
-
-for _celnt in $ALL_CELL_IFS; do
-    iptables -t mangle -D POSTROUTING -o "$_celnt" -j nfqttlo 2>/dev/null || true
-    iptables -t mangle -D POSTROUTING -o "$_celnt" -j TTL --ttl-set 64 2>/dev/null || true
-    iptables -t mangle -D POSTROUTING -o "$_celnt" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud 2>/dev/null || true
-    iptables -t mangle -D PREROUTING -i "$_celnt" -m ttl --ttl-eq 1 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_celnt" -m ttl --ttl-eq 1 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -o "$_celnt" -j nfqttlo 2>/dev/null || true
-    iptables -t filter -D OUTPUT -o "$_celnt" -p icmp --icmp-type time-exceeded -j DROP 2>/dev/null || true
-
-    ip6tables -t mangle -D POSTROUTING -o "$_celnt" -j nfqttlo 2>/dev/null || true
-    ip6tables -t mangle -D POSTROUTING -o "$_celnt" -j HL --hl-set 64 2>/dev/null || true
-    ip6tables -t mangle -D FORWARD -o "$_celnt" -j nfqttlo 2>/dev/null || true
-    ip6tables -t filter -D OUTPUT -o "$_celnt" -p icmpv6 --icmpv6-type time-exceeded -j DROP 2>/dev/null || true
+# Динамический upstream добавляем к статическому списку
+UPSTREAMS=$(default_upstreams)
+for _u in $UPSTREAMS; do
+    case " $CELL_IFS " in
+        *" $_u "*) ;;
+        *) CELL_IFS="$CELL_IFS $_u" ;;
+    esac
 done
 
-for _if in $ALL_CLIENT_IFS; do
-    iptables -t mangle -D POSTROUTING -o "$_if" -j nfqttlo 2>/dev/null || true
-    iptables -t mangle -D POSTROUTING -o "$_if" -j TTL --ttl-set 64 2>/dev/null || true
-    iptables -t mangle -D POSTROUTING -o "$_if" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud 2>/dev/null || true
+HAS_TTL4=0
+HAS_HL6=0
+grep -q TTL /proc/net/ip_tables_targets  2>/dev/null && HAS_TTL4=1
+grep -q HL  /proc/net/ip6_tables_targets 2>/dev/null && HAS_HL6=1
 
-    iptables -t mangle -D FORWARD -o "$_if" -j nfqttlo 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_if" -j nfqttlo 2>/dev/null || true
-    ip6tables -t mangle -D FORWARD -o "$_if" -j nfqttlo 2>/dev/null || true
-
-    ip6tables -t mangle -D POSTROUTING -o "$_if" -j nfqttlo 2>/dev/null || true
-    ip6tables -t mangle -D POSTROUTING -o "$_if" -j HL --hl-set 64 2>/dev/null || true
-
-    iptables -t mangle -D FORWARD -i "$_if" -p udp --dport 123 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_if" -p tcp --dport 853 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_if" -p udp --dport 5353 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_if" -p udp --dport 5355 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_if" -p udp --dport 1900 -j DROP 2>/dev/null || true
-    iptables -t mangle -D FORWARD -i "$_if" -p udp --dport 137:138 -j DROP 2>/dev/null || true
-
-    iptables -t nat -D PREROUTING -i "$_if" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-
-    ip6tables -t mangle -D FORWARD -i "$_if" -p udp --dport 123 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -D FORWARD -i "$_if" -p tcp --dport 853 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -D FORWARD -i "$_if" -p udp --dport 5353 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -D FORWARD -i "$_if" -p udp --dport 5355 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -D FORWARD -i "$_if" -p udp --dport 1900 -j DROP 2>/dev/null || true
-
-    ip6tables -t nat -D PREROUTING -i "$_if" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-    ip6tables -t nat -D PREROUTING -i "$_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
+# 4. ВХОДЯЩАЯ НОРМАЛИЗАЦИЯ (mangle PREROUTING) — защита от TTL=1 проб.
+#    ВАЖНО: в v8.3 это правило висело в FORWARD, где оно мертво. Ядро в
+#    ip_forward() проверяет ttl<=1 и генерирует ICMP time-exceeded ДО вызова
+#    хука FORWARD, поэтому пакет туда просто не доходит. Единственное место,
+#    где его ещё можно перехватить, — PREROUTING.
+#    Вместо DROP поднимаем TTL до 64: проба доезжает до клиента, клиент
+#    отвечает штатно, и для оператора картина неотличима от одиночного
+#    устройства. Молчание в ответ на пробу — тоже сигнал.
+for _cmd in IPT4 IPT6; do
+    "$_cmd" -t mangle -N nfqttlp
+    "$_cmd" -t mangle -F nfqttlp
 done
 
-# 4. ЗАЩИТА ОТ ДЕТЕКЦИИ МТС TTL=1:
-for _celnt in $ALL_CELL_IFS; do
-    iptables -t filter -A OUTPUT -o "$_celnt" -p icmp --icmp-type time-exceeded -j DROP 2>/dev/null || true
-    ip6tables -t filter -A OUTPUT -o "$_celnt" -p icmpv6 --icmpv6-type time-exceeded -j DROP 2>/dev/null || true
-    iptables -t mangle -A FORWARD -i "$_celnt" -m ttl --ttl-eq 1 -j DROP 2>/dev/null || true
-done
-
-# 5. ГЛОБАЛЬНАЯ НАСТРОЙКА TTL (IPv4) И HOP LIMIT (IPv6)
-if grep -q TTL /proc/net/ip_tables_targets 2>/dev/null; then
-# РЕЖИМ 1: Нативный Kernel TTL (0% нагрузки)
-    iptables -t mangle -I FORWARD 1 -j TTL --ttl-set 64 2>/dev/null || true
-else
-# РЕЖИМ 2: NFQUEUE Daemon
-    if ! nfqttl_alive; then
-        "$MODDIR/nfqttl" -d
-        sleep 1
+for _c in $CELL_IFS; do
+    if [ "$HAS_TTL4" -eq 1 ]; then
+        IPT4 -t mangle -A nfqttlp -i "$_c" -j TTL --ttl-set $TTL_VALUE
+    else
+        # Без kernel-таргета гнать входящий поток через userspace слишком
+        # дорого — режем только заведомо аномальный TTL.
+        IPT4 -t mangle -A nfqttlp -i "$_c" -m ttl --ttl-lt 3 -j DROP
     fi
-    iptables -t mangle -N nfqttlo 2>/dev/null || true
-    iptables -t mangle -F nfqttlo
-    iptables -t mangle -A nfqttlo -j NFQUEUE --queue-num 6464 --queue-bypass
-    iptables -t mangle -I FORWARD 1 -j nfqttlo 2>/dev/null || true
-fi
-
-if grep -q HL /proc/net/ip6_tables_targets 2>/dev/null; then
-# РЕЖИМ 1 (IPv6): Нативный Kernel HL
-    ip6tables -t mangle -I FORWARD 1 -j HL --hl-set 64 2>/dev/null || true
-else
-# РЕЖИМ 2 (IPv6): NFQUEUE Daemon - ВСТАВКА В САМУЮ ПЕРВУЮ СТРОКУ FORWARD!
-    if ! nfqttl_alive; then
-        "$MODDIR/nfqttl" -d
-        sleep 1
+    if [ "$HAS_HL6" -eq 1 ]; then
+        IPT6 -t mangle -A nfqttlp -i "$_c" -j HL --hl-set $TTL_VALUE
+    else
+        IPT6 -t mangle -A nfqttlp -i "$_c" -m hl --hl-lt 3 -j DROP
     fi
-    ip6tables -t mangle -N nfqttlo 2>/dev/null || true
-    ip6tables -t mangle -F nfqttlo
-    ip6tables -t mangle -A nfqttlo -j NFQUEUE --queue-num 6464 --queue-bypass
-    ip6tables -t mangle -I FORWARD 1 -j nfqttlo 2>/dev/null || true
-fi
-
-# 6. REDIRECT DNS (53) + Блокировка DoT (853) и локальных вещаний Windows
-for _if in $ALL_CLIENT_IFS; do
-    iptables -t nat -A PREROUTING -i "$_if" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-    iptables -t nat -A PREROUTING -i "$_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-    iptables -t mangle -A FORWARD -i "$_if" -p tcp --dport 853 -j DROP 2>/dev/null || true
-    iptables -t mangle -A FORWARD -i "$_if" -p udp --dport 5353 -j DROP 2>/dev/null || true
-    iptables -t mangle -A FORWARD -i "$_if" -p udp --dport 5355 -j DROP 2>/dev/null || true
-    iptables -t mangle -A FORWARD -i "$_if" -p udp --dport 1900 -j DROP 2>/dev/null || true
-    iptables -t mangle -A FORWARD -i "$_if" -p udp --dport 137:138 -j DROP 2>/dev/null || true
-
-    ip6tables -t nat -A PREROUTING -i "$_if" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-    ip6tables -t nat -A PREROUTING -i "$_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || true
-    ip6tables -t mangle -A FORWARD -i "$_if" -p tcp --dport 853 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -A FORWARD -i "$_if" -p udp --dport 5353 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -A FORWARD -i "$_if" -p udp --dport 5355 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -A FORWARD -i "$_if" -p udp --dport 1900 -j DROP 2>/dev/null || true
 done
 
-# 7. Защита от NTP на IPv4 и IPv6
-for _if in $ALL_CLIENT_IFS; do
+IPT4 -t mangle -I PREROUTING 1 -j nfqttlp
+IPT6 -t mangle -I PREROUTING 1 -j nfqttlp
+
+# Подстраховка: гасим сам ICMP time-exceeded наружу.
+for _cmd in IPT4 IPT6; do
+    "$_cmd" -t filter -N nfqttlf
+    "$_cmd" -t filter -F nfqttlf
+done
+for _c in $CELL_IFS; do
+    IPT4 -t filter -A nfqttlf -o "$_c" -p icmp   --icmp-type time-exceeded   -j DROP
+    IPT6 -t filter -A nfqttlf -o "$_c" -p icmpv6 --icmpv6-type time-exceeded -j DROP
+done
+IPT4 -t filter -A OUTPUT -j nfqttlf
+IPT6 -t filter -A OUTPUT -j nfqttlf
+
+# 5. ИСХОДЯЩИЙ TTL / HOP LIMIT
+#    Native-таргет ставим безусловным правилом: стоимость нулевая, зато
+#    покрывает интерфейсы с любыми именами.
+#    NFQUEUE, наоборот, ограничиваем направлением "-o upstream": входящий
+#    поток в подмене не нуждается, а это ровно половина пакетов, которые
+#    больше не ходят в userspace и обратно.
+USE_NFQ=0
+for _cmd in IPT4 IPT6; do
+    "$_cmd" -t mangle -N nfqttlo
+    "$_cmd" -t mangle -F nfqttlo
+done
+
+if [ "$HAS_TTL4" -eq 1 ]; then
+    IPT4 -t mangle -A nfqttlo -j TTL --ttl-set $TTL_VALUE
+    NFQ_V4=0
+else
+    NFQ_V4=1
+fi
+if [ "$HAS_HL6" -eq 1 ]; then
+    IPT6 -t mangle -A nfqttlo -j HL --hl-set $TTL_VALUE
+    NFQ_V6=0
+else
+    NFQ_V6=1
+fi
+
+if [ "$NFQ_V4" -eq 1 ] || [ "$NFQ_V6" -eq 1 ]; then
+    if ensure_nfqttl_running; then
+        for _c in $CELL_IFS; do
+            [ "$NFQ_V4" -eq 1 ] && IPT4 -t mangle -A nfqttlo -o "$_c" -j NFQUEUE --queue-num $QUEUE_NUM --queue-bypass
+            [ "$NFQ_V6" -eq 1 ] && IPT6 -t mangle -A nfqttlo -o "$_c" -j NFQUEUE --queue-num $QUEUE_NUM --queue-bypass
+        done
+        USE_NFQ=1
+    else
+        wd_log "NFQUEUE не активирован: очередь $QUEUE_NUM не подтверждена (v4=$NFQ_V4 v6=$NFQ_V6)"
+    fi
+fi
+
+IPT4 -t mangle -I FORWARD 1 -j nfqttlo
+IPT6 -t mangle -I FORWARD 1 -j nfqttlo
+
+# 6. Клиентские фильтры. Раньше 8 интерфейсов x N доменов давали сотни правил
+#    в FORWARD, и каждый пересылаемый пакет проходил весь этот список.
+#    Теперь: один переход nfqttlb -> (8 дешёвых сравнений интерфейса) ->
+#    nfqttlc, где лежит один экземпляр каждого правила.
+for _cmd in IPT4 IPT6; do
+    "$_cmd" -t mangle -N nfqttlb
+    "$_cmd" -t mangle -F nfqttlb
+    "$_cmd" -t mangle -N nfqttlc
+    "$_cmd" -t mangle -F nfqttlc
+done
+
+for _i in $CLIENT_IFS; do
+    IPT4 -t mangle -A nfqttlb -i "$_i" -j nfqttlc
+    IPT6 -t mangle -A nfqttlb -i "$_i" -j nfqttlc
+done
+
+# NTP / DoT / mDNS / LLMNR / SSDP / NetBIOS — характерные «десктопные» маркеры
+for _p in "udp --dport 123" "tcp --dport 853" "udp --dport 853" \
+          "udp --dport 5353" "udp --dport 5355" "udp --dport 1900" \
+          "udp --dport 137:138" "tcp --dport 139" "tcp --dport 445"; do
     if [ "$DEBUG_MODE" -eq 1 ]; then
-        iptables -t mangle -A FORWARD -i "$_if" -p udp --dport 123 -j LOG --log-prefix "NFQTTL-NTP-BLOCK: " 2>/dev/null || true
+        IPT4 -t mangle -A nfqttlc -p $_p -j LOG --log-prefix "NFQTTL-BLOCK: "
     fi
-    iptables -t mangle -A FORWARD -i "$_if" -p udp --dport 123 -j DROP 2>/dev/null || true
-    ip6tables -t mangle -A FORWARD -i "$_if" -p udp --dport 123 -j DROP 2>/dev/null || true
+    IPT4 -t mangle -A nfqttlc -p $_p -j DROP
+    IPT6 -t mangle -A nfqttlc -p $_p -j DROP
 done
 
-# 8. Динамический парсинг и подгрузка блокировок из blocklist.txt (IPv4 & IPv6)
-BLOCKLIST_FILE="$MODDIR/blocklist.txt"
-HAS_IP6_STRING=0
-if grep -q string /proc/net/ip6_tables_matches 2>/dev/null; then
-    HAS_IP6_STRING=1
+if [ "$NOQUIC" -eq 1 ]; then
+    IPT4 -t mangle -A nfqttlc -p udp --dport 443 -j DROP
+    IPT6 -t mangle -A nfqttlc -p udp --dport 443 -j DROP
 fi
 
-if [ -f "$BLOCKLIST_FILE" ]; then
+if [ "$NO6" -eq 1 ]; then
+    IPT6 -t mangle -A nfqttlc -j DROP
+fi
+
+# Строковый матч только по TCP/80,443 и только по коротким пакетам: SNI в
+# ClientHello и HTTP-заголовки всегда мелкие, а Boyer-Moore по каждому
+# полноразмерному пакету данных — это чистый нагрев процессора на скорости.
+BLOCKLIST_FILE="$MODDIR/blocklist.txt"
+HAS_STR4=0
+HAS_STR6=0
+grep -q string /proc/net/ip_tables_matches  2>/dev/null && HAS_STR4=1
+grep -q string /proc/net/ip6_tables_matches 2>/dev/null && HAS_STR6=1
+
+if [ -f "$BLOCKLIST_FILE" ] && [ "$HAS_STR4" -eq 1 ]; then
     while IFS= read -r line || [ -n "$line" ]; do
         domain=$(echo "$line" | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')
         [ -z "$domain" ] && continue
 
-        for _if in $ALL_CLIENT_IFS; do
-            iptables -t mangle -D FORWARD -i "$_if" -m string --string "$domain" --algo bm -j LOG --log-prefix "NFQTTL-BLOCK: " 2>/dev/null || true
-            iptables -t mangle -D FORWARD -i "$_if" -m string --string "$domain" --algo bm -j DROP 2>/dev/null || true
-
-            if [ "$DEBUG_MODE" -eq 1 ]; then
-                iptables -t mangle -A FORWARD -i "$_if" -m string --string "$domain" --algo bm -j LOG --log-prefix "NFQTTL-BLOCK: " 2>/dev/null || true
-            fi
-            iptables -t mangle -A FORWARD -i "$_if" -m string --string "$domain" --algo bm -j DROP 2>/dev/null || true
-
-            if [ "$HAS_IP6_STRING" -eq 1 ]; then
-                ip6tables -t mangle -D FORWARD -i "$_if" -m string --string "$domain" --algo bm -j DROP 2>/dev/null || true
-                ip6tables -t mangle -A FORWARD -i "$_if" -m string --string "$domain" --algo bm -j DROP 2>/dev/null || true
-            fi
-        done
+        if [ "$DEBUG_MODE" -eq 1 ]; then
+            IPT4 -t mangle -A nfqttlc -p tcp -m multiport --dports 80,443 \
+                 -m length --length 0:1200 -m string --string "$domain" --algo bm \
+                 -j LOG --log-prefix "NFQTTL-BLOCK: "
+        fi
+        IPT4 -t mangle -A nfqttlc -p tcp -m multiport --dports 80,443 \
+             -m length --length 0:1200 -m string --string "$domain" --algo bm -j DROP
+        if [ "$HAS_STR6" -eq 1 ]; then
+            IPT6 -t mangle -A nfqttlc -p tcp -m multiport --dports 80,443 \
+                 -m length --length 0:1200 -m string --string "$domain" --algo bm -j DROP
+        fi
     done < "$BLOCKLIST_FILE"
 fi
 
-# 9. Коррекция TCP MSS
-for _celnt in $ALL_CELL_IFS; do
-    iptables -t mangle -A POSTROUTING -o "$_celnt" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud 2>/dev/null || true
-done
-for _if in $ALL_CLIENT_IFS; do
-    iptables -t mangle -A POSTROUTING -o "$_if" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud 2>/dev/null || true
-done
+IPT4 -t mangle -A FORWARD -j nfqttlb
+IPT6 -t mangle -A FORWARD -j nfqttlb
 
-# 10. Watchdog автоконтроля процессов
-WD_LOG=/data/local/tmp/nfqttl_watchdog.log
-WD_INTERVAL=20
+# 7. DNS клиентов — на локальный резолвер телефона
+for _cmd in IPT4 IPT6; do
+    "$_cmd" -t nat -N nfqttln
+    "$_cmd" -t nat -F nfqttln
+done
+for _i in $CLIENT_IFS; do
+    IPT4 -t nat -A nfqttln -i "$_i" -p udp --dport 53 -j REDIRECT --to-ports 53
+    IPT4 -t nat -A nfqttln -i "$_i" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    IPT6 -t nat -A nfqttln -i "$_i" -p udp --dport 53 -j REDIRECT --to-ports 53
+    IPT6 -t nat -A nfqttln -i "$_i" -p tcp --dport 53 -j REDIRECT --to-ports 53
+done
+IPT4 -t nat -A PREROUTING -j nfqttln
+IPT6 -t nat -A PREROUTING -j nfqttln
+
+# 8. MSS-клэмп только в сторону оператора: Windows анонсирует MSS 1460, что
+#    само по себе отличается от того, что шлёт модем. В сторону клиента клэмп
+#    оператору не виден и был лишней работой.
+for _cmd in IPT4 IPT6; do
+    "$_cmd" -t mangle -N nfqttlm
+    "$_cmd" -t mangle -F nfqttlm
+done
+for _c in $CELL_IFS; do
+    IPT4 -t mangle -A nfqttlm -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
+    IPT6 -t mangle -A nfqttlm -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
+done
+IPT4 -t mangle -A POSTROUTING -j nfqttlm
+IPT6 -t mangle -A POSTROUTING -j nfqttlm
+
+wd_log "старт $VERSION: native_ttl4=$HAS_TTL4 native_hl6=$HAS_HL6 nfqueue=$USE_NFQ upstreams='$UPSTREAMS'"
+
+#    Энергетика: пока раздача выключена, утечь нечему — опрос раз в 60 с.
+#    Пока раздача активна — раз в 10 с (окно утечки при падении демона было
+#    до 20 с). Сама проверка очереди читает один файл в /proc и не порождает
+#    ни одного процесса; тяжёлые iptables -C и переприменение offload
+#    вызываются только по событию (раз в минуту / на включении раздачи).
+#    Если ядро умеет TTL/HL само — watchdog не нужен вообще и не запускается.
 WD_MAX_RESTARTS=50
-
-wd_log() {
-    if [ -f "$WD_LOG" ] && [ "$(wc -c < "$WD_LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
-        tail -n 50 "$WD_LOG" > "$WD_LOG.tmp" 2>/dev/null && mv "$WD_LOG.tmp" "$WD_LOG"
-    fi
-    echo "[$(date '+%m-%d %H:%M:%S')] $*" >> "$WD_LOG"
-}
 
 watchdog() {
     restarts=0
-    last_restart_time=$(date +%s 2>/dev/null || echo 0)
-    wd_log "watchdog запущен (авто-сброс усталости, контроль ip_forward, интервал ${WD_INTERVAL}с)"
+    stable=0
+    tether_prev=1
+    tick=0
 
     while true; do
-        sleep "$WD_INTERVAL"
-
-        echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
-
-# Убеждаемся, что ip6tables nfqttlo правило держится в строке 1 FORWARD
-        if ! grep -q HL /proc/net/ip6_tables_targets 2>/dev/null; then
-            ip6tables -t mangle -C FORWARD -j nfqttlo 2>/dev/null || ip6tables -t mangle -I FORWARD 1 -j nfqttlo 2>/dev/null || true
+        if tether_up; then
+            _interval=10
+            _tether=0
+        else
+            _interval=60
+            _tether=1
         fi
 
-        if nfqttl_alive; then
-            now=$(date +%s 2>/dev/null || echo 0)
-            if [ "$now" -gt 0 ] && [ "$last_restart_time" -gt 0 ]; then
-                elapsed=$((now - last_restart_time))
-                if [ "$elapsed" -ge 600 ] && [ "$restarts" -gt 0 ]; then
-                    wd_log "демон стабилен 10+ минут с момента последнего рестарта — сброс счетчика с $restarts до 0"
+        # Переход "раздача включилась": Tethering-сервис читает флаги offload
+        # именно в этот момент, поэтому переподтверждаем их здесь и только здесь.
+        if [ "$_tether" -eq 0 ] && [ "$tether_prev" -ne 0 ]; then
+            kill_offload
+            echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+            echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
+            IPT4 -t mangle -C FORWARD -j nfqttlo || IPT4 -t mangle -I FORWARD 1 -j nfqttlo
+            IPT6 -t mangle -C FORWARD -j nfqttlo || IPT6 -t mangle -I FORWARD 1 -j nfqttlo
+            IPT4 -t mangle -C PREROUTING -j nfqttlp || IPT4 -t mangle -I PREROUTING 1 -j nfqttlp
+            IPT6 -t mangle -C PREROUTING -j nfqttlp || IPT6 -t mangle -I PREROUTING 1 -j nfqttlp
+            wd_log "раздача включена — offload и правила переподтверждены"
+        fi
+        tether_prev=$_tether
+
+        if [ "$USE_NFQ" -eq 1 ]; then
+            if nfqueue_bound; then
+                stable=$((stable + 1))
+                if [ "$stable" -ge 60 ] && [ "$restarts" -gt 0 ]; then
+                    wd_log "демон стабилен — сброс счётчика рестартов ($restarts -> 0)"
                     restarts=0
+                    stable=0
                 fi
+                if [ "$QUEUE_DROPPED" != "0" ] || [ "$USER_DROPPED" != "0" ]; then
+                    tick=$((tick + 1))
+                    if [ $((tick % 30)) -eq 0 ]; then
+                        wd_log "очередь роняет пакеты: queue_dropped=$QUEUE_DROPPED user_dropped=$USER_DROPPED"
+                    fi
+                fi
+            elif [ "$restarts" -ge "$WD_MAX_RESTARTS" ]; then
+                wd_log "лимит перезапусков исчерпан — watchdog остановлен"
+                break
+            else
+                restarts=$((restarts + 1))
+                stable=0
+                wd_log "очередь $QUEUE_NUM не подтверждена — перезапуск #$restarts"
+                pkill -9 nfqttl 2>/dev/null || true
+                _w=0
+                while nfqttl_alive && [ "$_w" -lt 5 ]; do
+                    sleep 1
+                    _w=$((_w + 1))
+                done
+                echo "===== $(date '+%Y-%m-%d %H:%M:%S') watchdog restart #$restarts =====" >> "$NFQTTL_DAEMON_LOG"
+                "$MODDIR/nfqttl" -d >> "$NFQTTL_DAEMON_LOG" 2>&1
+                _w=0
+                while [ "$_w" -lt 5 ]; do
+                    nfqueue_bound && { wd_log "очередь $QUEUE_NUM восстановлена"; break; }
+                    sleep 1
+                    _w=$((_w + 1))
+                done
             fi
-            continue
         fi
 
-        if [ "$restarts" -ge "$WD_MAX_RESTARTS" ]; then
-            wd_log "демон мёртв, лимит перезапусков исчерпан — прекращаю попытки"
-            break
-        fi
-
-        restarts=$((restarts + 1))
-        last_restart_time=$(date +%s 2>/dev/null || echo 0)
-        wd_log "демон не найден, перезапуск #$restarts"
-        "$MODDIR/nfqttl" -d
-        sleep 2
+        sleep "$_interval"
     done
 }
 
-watchdog &
+if [ "$USE_NFQ" -eq 1 ]; then
+    watchdog &
+else
+    # Native TTL/HL: демон не нужен, следим только за состоянием раздачи —
+    # это дешевле любого таймера в системе.
+    (
+        tether_prev=1
+        while true; do
+            if tether_up; then
+                if [ "$tether_prev" -ne 0 ]; then
+                    kill_offload
+                    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+                    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
+                    IPT4 -t mangle -C FORWARD -j nfqttlo || IPT4 -t mangle -I FORWARD 1 -j nfqttlo
+                    IPT6 -t mangle -C FORWARD -j nfqttlo || IPT6 -t mangle -I FORWARD 1 -j nfqttlo
+                    IPT4 -t mangle -C PREROUTING -j nfqttlp || IPT4 -t mangle -I PREROUTING 1 -j nfqttlp
+                    IPT6 -t mangle -C PREROUTING -j nfqttlp || IPT6 -t mangle -I PREROUTING 1 -j nfqttlp
+                    wd_log "раздача включена (native TTL/HL) — правила переподтверждены"
+                    tether_prev=0
+                fi
+                sleep 30
+            else
+                tether_prev=1
+                sleep 60
+            fi
+        done
+    ) &
+fi
 
-# 11. Отладочный режим: если есть файл debug или DEBUG — автоматически генерируем nfqttl_debug.log
-if [ "$DEBUG_MODE" -eq 1 ]; then
-    if [ -f "$MODDIR/debug_log.sh" ]; then
-        sh "$MODDIR/debug_log.sh" >/dev/null 2>&1 &
-    fi
+# 10. Отладочный режим
+if [ "$DEBUG_MODE" -eq 1 ] && [ -f "$MODDIR/debug_log.sh" ]; then
+    sh "$MODDIR/debug_log.sh" >/dev/null 2>&1 &
 fi
 
 exit 0
