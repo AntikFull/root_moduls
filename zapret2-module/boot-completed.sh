@@ -1,8 +1,5 @@
 #!/system/bin/sh
 umask 077
-# KernelSU/KernelSU Next/APatch boot-completed lifecycle trigger.
-# late_start intentionally exits quickly on these managers; the real network
-# initialization starts here after Android reports boot completion.
 MODDIR="${0%/*}"
 RUN_DIR="$MODDIR/run"
 mkdir -p "$RUN_DIR" 2>/dev/null
@@ -15,9 +12,6 @@ printf '[%s] pid=%s ppid=%s pgrp=%s sid=%s boot_completed=%s boot-completed.sh i
   >> "$RUN_DIR/boot-trace.log" 2>/dev/null
 chmod 0600 "$RUN_DIR/boot-trace.log" 2>/dev/null || true
 
-# KernelSU/APatch can finish/clean the lifecycle process group after this hook.
-# Start the real initializer in a fresh session. The initializer itself owns a
-# service lock, so duplicate triggers remain harmless.
 launch_boot_worker() {
   BOOT_WORKER_DESC=""
   if command -v setsid >/dev/null 2>&1; then
@@ -35,8 +29,6 @@ launch_boot_worker() {
     BOOT_WORKER_DESC="toybox-setsid:$!"
     return 0
   fi
-  # Last-resort compatibility path. Supported KernelSU/APatch environments ship
-  # BusyBox, so this should not normally be reached.
   nohup sh "$MODDIR/service.sh" boot </dev/null >/dev/null 2>&1 &
   BOOT_WORKER_DESC="nohup-fallback:$!"
 }

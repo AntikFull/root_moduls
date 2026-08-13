@@ -1,5 +1,4 @@
 #!/system/bin/sh
-# Action button: quick runtime settings + full policy reconciliation.
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
@@ -13,9 +12,6 @@ action_volume_select() {
         [ "$default_answer" = "yes" ] && return 0
         return 1
     fi
-    # Bounded in both directions: without `timeout` a blocking getevent could
-    # hang the Action forever, and an endless loop of unrelated key events
-    # (screen taps, sensors) must not do the same.
     tries=0
     while [ "$tries" -lt 40 ]; do
         tries=$((tries + 1))
@@ -149,8 +145,6 @@ echo "SDK scan   : $SDK_FINGERPRINT_FILE"
 echo "Manifest   : $MANIFEST_SCAN_FILE"
 echo "Ad surfaces: $AD_SURFACE_SCAN_FILE"
 
-# Fast entry to settings without changing the legacy Action behaviour: Vol+ opens
-# the menu; Vol- or no key within five seconds starts the normal rescan.
 echo ""
 echo "Action menu:"
 echo "  VOL+ within 5s = SETTINGS"

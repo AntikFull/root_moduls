@@ -1,2 +1,3 @@
-# NAME=SPLIT_SAFE
---lua-desync=multidisorder:pos=1,sniext+1,midsld,endhost-1
+# NAME=SIMPLE_ALT4
+--lua-desync=fake:blob=0x00000000:repeats=6:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1,midsld:seqovl=1

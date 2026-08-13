@@ -106,7 +106,6 @@ function detect_payload_str(ctx, desync)
 	end
 end
 
-
 -- this shim is needed then function is orchestrated. ctx services not available
 -- have to emulate cutoff in LUA using connection persistent table track.lua_state
 function instance_cutoff_shim(ctx, desync, dir)
@@ -145,7 +144,6 @@ function cutoff_shim_check(desync)
 		return b
 	end
 end
-
 
 -- applies # and $ prefixes. #var means var length, %var means var value
 function apply_arg_prefix(desync)
@@ -340,7 +338,6 @@ function pos_str(desync, pos)
 	return pos.mode..pos_get(desync, pos.mode)
 end
 
-
 -- convert array a to packed string using 'packer' function. only numeric indexes starting from 1, order preserved
 function barray(a, packer)
 	if a then
@@ -428,7 +425,6 @@ function desync_opts(desync)
 		fooling = desync.arg
 	}
 end
-
 
 -- convert binary string to hex data
 function string2hex(s)
@@ -628,7 +624,6 @@ function find_next_line(s, pos)
 	return p1,p2
 end
 
-
 -- support sni=%var
 function tls_mod_shim(desync, blob, modlist, payload)
 	local p1,p2 = string.find(modlist,"sni=%%[^,]+")
@@ -816,7 +811,6 @@ function desync_timer_name(desync)
 	end
 	return name
 end
-
 
 -- reverses ip addresses, ports and seq/ack
 function dis_reverse(dis)
@@ -1077,7 +1071,6 @@ function apply_fooling(desync, dis, fooling_options)
 	end
 end
 
-
 -- assign dis.ip.ip_id value according to policy in ipid_options or desync.arg. apply def or "seq" policy if no ip_id options
 -- ip_id=seq|rnd|zero|none
 -- ip_id_conn - in 'seq' mode save current ip_id in track.lua_state to use it between packets
@@ -1104,7 +1097,6 @@ function apply_ip_id(desync, dis, ipid_options, def)
 		end
 	end
 end
-
 
 -- return length of ipv4 or ipv6 header without options and extension headers. should be 20 for ipv4 and 40 for ipv6.
 function l3_base_len(dis)
@@ -1287,7 +1279,6 @@ function rawsend_payload_segmented(desync, payload, seq, options)
 	end
 	return rawsend_dissect_segmented(desync, dis, nil, options)
 end
-
 
 -- check if desync.outgoing comply with arg.dir or def if it's not present or "out" of they are not present both. dir can be "in","out","any"
 function direction_check(desync, def)
@@ -1588,7 +1579,6 @@ function ipfrag2(dis, ipfrag_options)
 	return {dis1,dis2}
 end
 
-
 -- option: sni_snt - server name type value in existing names
 -- option: sni_snt_new - server name type value for new names
 -- option: sni_del_ext - delete sni extension
@@ -1749,7 +1739,6 @@ function writefile(filename, data)
 	end
 end
 
-
 -- DISSECTORS
 
 function http_dissect_header(header)
@@ -1900,8 +1889,6 @@ function dissect_nld(domain, level)
 	end
 	return nil
 end
-
-
 
 TLS_EXT_SERVER_NAME=0
 TLS_EXT_MAX_FRAGMENT_LENGTH=1
@@ -2193,7 +2180,6 @@ TLS_HANDSHAKE_QUIC_TP_NAMES = {
  [TLS_HANDSHAKE_QUIC_TP_MIN_ACK_DELAY]="min_ack_delay"
 }
 
-
 -- tls record length without header
 function tls_record_data_len(tls, offset)
 	if not offset then offset=1 end
@@ -2293,7 +2279,6 @@ function bquic_tvb(v)
 		return bu32(divint(v, 0x100000000) + 0xC0000000) .. bu32(v % 0x100000000)
 	end
 end
-
 
 -- dissect tls extension
 -- create dis tables inside ext for supported exts. leave 'data' as is for unsupported exts
@@ -2582,7 +2567,6 @@ function tls_dissect(tls, offset, partialOK)
 
 	return (tdis.rec or tdis.handshake) and tdis or nil
 end
-
 
 -- reconstruct tls extension dissects
 -- unsupported ext types must have their 'data' filled

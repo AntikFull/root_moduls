@@ -1,16 +1,9 @@
 #!/system/bin/sh
-# inotifyd event handler: EVENTS WATCHED_PATH [CHILD]
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
 log "APP-FS event=${1:-?} path=${2:-?} child=${3:-?}"
 
-# Installing or updating a single APK produces a burst of /data/app events
-# (temp dir, split APKs, rename, oat files). Without a debounce each one spawned
-# a full package rescan that then serialised on the global lock, so the queue
-# could keep the device busy long after the install finished. Coalesce the burst
-# into a single reconciliation: the first handler claims the window and rescans,
-# later handlers within the window just refresh the request marker and exit.
 APP_EVENT_MARKER="$DATA_DIR/.app_event.pending"
 APP_EVENT_LOCK="$DATA_DIR/.app_event.lock"
 APP_EVENT_SETTLE=6
@@ -33,7 +26,6 @@ cleanup_app_event() {
 }
 trap cleanup_app_event EXIT
 
-# Drain the burst: keep waiting while new events keep arriving, then rescan once.
 rounds=0
 while [ "$rounds" -lt 10 ]; do
     rm -f "$APP_EVENT_MARKER" 2>/dev/null

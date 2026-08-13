@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# Device capability profile for Analytics & Ads Disabler.
-# Probes once, stores safe enum-like selections, and avoids per-operation fallback chains.
 
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
 CAPABILITIES_FILE="${CAPABILITIES_FILE:-$DATA_DIR/capabilities.conf}"
@@ -45,18 +43,12 @@ cap_backend_has_verb() {
     printf '%s\n' "$help" | grep -Eq "(^|[[:space:]])${verb}([[:space:]]|\[|$)"
 }
 
-# Android 7.0+ supports --user natively for every component-state verb, so this
-# is true almost everywhere. It used to return success merely because cmd or pm
-# existed, which made the "ROM without --user" handling dead code. Ask the
-# backend's own help text first and only then fall back to the optimistic answer.
 cap_backend_verb_has_user() {
     backend="$1"; verb="$2"
     help=$(cap_pkg_help "$backend") || return 1
     if printf '%s\n' "$help" | grep -q -- '--user'; then
         return 0
     fi
-    # Some OEM builds ship a trimmed help text while still honouring --user.
-    # Treat API level as the tie-breaker instead of assuming either way.
     api=$(cap_api_level)
     case "$api" in
         ''|*[!0-9]*) return 0 ;;
@@ -65,7 +57,6 @@ cap_backend_verb_has_user() {
     return 1
 }
 
-# Runtime probe targets a deliberately impossible component name.
 cap_runtime_probe_target() {
     pkg=""
     if command -v cmd >/dev/null 2>&1; then
@@ -89,15 +80,11 @@ cap_shell_exec_available() {
     [ "$out" = "2000" ]
 }
 
-# A uid switch is not the same thing as Android's real shell SELinux domain.
-# Some Android 16 / KernelSU combinations can reach Binder only from u:r:shell:s0.
-# Try a real SELinux context transition when a runcon implementation is available.
 cap_runcon_bin() {
     if [ -x /system/bin/runcon ]; then
         echo /system/bin/runcon
         return 0
     fi
-    # Any root manager's BusyBox will do, not only KernelSU's.
     for _crb in "${AAD_BUSYBOX:-}" \
                 /data/adb/magisk/busybox \
                 /data/adb/ksu/bin/busybox \
@@ -116,7 +103,6 @@ cap_runcon_bin() {
 
 cap_runcon_shell_available() {
     rb=$(cap_runcon_bin) || return 1
-    # Transition probe only. No PackageManager state is touched here.
     case "$rb" in
         *" "*) out=$($rb u:r:shell:s0 /system/bin/sh -c 'id -u; cat /proc/self/attr/current 2>/dev/null' 2>/dev/null) ;;
         *) out=$("$rb" u:r:shell:s0 /system/bin/sh -c 'id -u; cat /proc/self/attr/current 2>/dev/null' 2>/dev/null) ;;
@@ -124,8 +110,6 @@ cap_runcon_shell_available() {
     printf '%s\n' "$out" | grep -q 'u:r:shell:s0'
 }
 
-# Android 16+ PackageManager blocks component-state mutations from the real
-# shell UID (2000). Keep legacy su-shell candidates only on older APIs.
 cap_api_level() {
     getprop ro.build.version.sdk 2>/dev/null | tr -cd '0-9'
 }
@@ -136,11 +120,6 @@ cap_shell_uid_component_mutation_allowed() {
     [ "$api" -lt 36 ]
 }
 
-# Execute PackageManager mutation in the SELinux shell domain while retaining uid 0.
-# IMPORTANT: only the PM command string is executed in this domain; policy/state files
-# remain handled by the caller in the KernelSU/root domain. Some OEM SELinux policies
-# (including the tested OnePlus Android 16 build) deny direct execution of /system/bin/cmd
-# after runcon, while allowing /system/bin/sh to transition and exec the PM command.
 cap_runcon_pm_exec() {
     backend="$1"; verb="$2"; with_user="$3"; user="$4"; target="$5"
     cap_runcon_shell_available || return 127
@@ -158,12 +137,6 @@ cap_runcon_pm_exec() {
         line="$base $verb '$target'"
     fi
 
-    # Defense in depth for BusyBox/ash and OEM SELinux combinations:
-    # a caller may be iterating over a /data/adb file using "done < file".
-    # Such loop descriptors are not stdin, so </dev/null alone does not close
-    # them. Before switching to u:r:shell:s0, close only inherited descriptors
-    # that point into this module's persistent/module directories. The parent
-    # shell is untouched because this runs in a subshell.
     (
         data_prefix="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
         module_prefix="${MODDIR:-/data/adb/modules/analytics_ads_disabler}"
@@ -187,9 +160,6 @@ cap_runcon_pm_exec() {
     )
 }
 
-# Execute package-manager shell commands either in the current context or,
-# when a root manager/ROM breaks Binder calls from uid 0, through uid 2000.
-# The latter is selected only after a runtime probe proves it can reach PMS.
 cap_exec_command() {
     exec_mode="$1"; backend="$2"; verb="$3"; with_user="$4"; user="$5"; target="$6"
     [ "$backend" = "cmd" ] || [ "$backend" = "pm" ] || return 127
@@ -249,7 +219,7 @@ cap_runtime_hard_failure() {
 cap_runtime_reached_pm() {
     out="$1"; rc="$2"
 
-    # PackageManager подтвердил обработку команды и отклонил только несуществующий компонент
+    # PackageManager РїРѕРґС‚РІРµСЂРґРёР» РѕР±СЂР°Р±РѕС‚РєСѓ РєРѕРјР°РЅРґС‹ Рё РѕС‚РєР»РѕРЅРёР» С‚РѕР»СЊРєРѕ РЅРµСЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РєРѕРјРїРѕРЅРµРЅС‚
     printf '%s\n' "$out" | grep -Eiq \
         'does not exist|Unknown component|Unknown package|not found|not installed|new state:' && return 0
 
@@ -289,8 +259,6 @@ cap_probe_action_candidate() {
 
 cap_pick_action() {
     key="$1"; shift
-    # Prefer the normal root context. Only if it cannot reach PackageManager do
-    # we try uid 2000 through the installed root manager. No ROM/model allowlist.
     action_exec_modes="direct"
     cap_shell_uid_component_mutation_allowed && action_exec_modes="direct su_uid2000 su_shell"
     for exec_mode in $action_exec_modes; do
@@ -305,8 +273,6 @@ cap_pick_action() {
         done
     done
 
-    # Last-resort profile preserves old-device behavior, but is explicitly
-    # marked direct and will be re-probed after a hard Binder failure.
     for verb in "$@"; do
         if command -v cmd >/dev/null 2>&1; then
             printf 'cmd|%s|1|direct\n' "$verb"
@@ -321,9 +287,6 @@ cap_pick_action() {
     return 1
 }
 
-# Verify the actual component-state Binder path on a REAL component while preserving
-# its explicit state. This avoids false positives from nonexistent-component probes on
-# ROMs that short-circuit validation before the OEM PackageManager path is reached.
 cap_verify_real_context() {
     user="$1"; target="$2"; preserve_state="$3"
     case "$preserve_state" in
@@ -337,7 +300,6 @@ cap_verify_real_context() {
     for exec_mode in $verify_exec_modes; do
         [ "$exec_mode" = "direct" ] || cap_shell_exec_available "$exec_mode" || continue
         for backend in cmd pm; do
-            # A selected backend must support every state operation the module needs.
             cap_backend_has_verb "$backend" disable || continue
             cap_backend_has_verb "$backend" enable || continue
             cap_backend_has_verb "$backend" default-state || continue
@@ -352,7 +314,6 @@ cap_verify_real_context() {
                 fi
             fi
 
-            # Without --user this is safe only for user 0.
             if [ "$user" = "0" ]; then
                 out=$(cap_exec_command "$exec_mode" "$backend" "$preserve_verb" 0 0 "$target" 2>&1)
                 rc=$?
@@ -366,8 +327,6 @@ cap_verify_real_context() {
     return 1
 }
 
-# Rebuild the profile, then pin component-state operations to a context that has
-# just succeeded against the real target. No model/ROM/root-manager allowlist.
 cap_reprobe_from_real_target() {
     user="$1"; target="$2"; preserve_state="$3"
     verified=$(cap_verify_real_context "$user" "$target" "$preserve_state") || return 1
@@ -477,9 +436,6 @@ probe_capabilities() {
     mkdir -p "$DATA_DIR" 2>/dev/null
     tmp="$CAPABILITIES_FILE.tmp.$$"
 
-    # Preserve a backend that was VERIFIED on a real component across module upgrades,
-    # but only while the exact device signature is unchanged. Runtime availability is
-    # still checked every time before the cached path is used.
     old_sig=$(cap_read DEVICE_SIGNATURE missing)
     cur_sig=$(cap_device_signature)
     old_learn_b=none; old_learn_v=disable; old_learn_u=1; old_learn_x=direct; old_learn_t=numeric
@@ -526,8 +482,7 @@ EOF_SPEC
     watch_backend=$(cap_probe_watch_backend)
 
     cat > "$tmp" <<EOF_CAP
-# Analytics & Ads Disabler — auto-detected device capability profile
-# Safe data only: this file is parsed as key/value text and is never sourced/eval'ed.
+# Analytics & Ads Disabler вЂ” auto-detected device capability profile
 CAP_PROFILE_VERSION=$CAP_PROFILE_VERSION
 DEVICE_SIGNATURE=$(cap_device_signature)
 ROOT_MANAGER=$(cap_root_manager)
@@ -661,8 +616,6 @@ cap_action_text() {
     printf '%s%s %s\n' "$prefix" "$base" "$target"
 }
 
-# Execute one pre-probed action. A hard Binder failure invalidates the profile,
-# triggers one fresh runtime probe (which can switch execution identity), then retries.
 cap_run_profiled_action() {
     backend="$1"; verb="$2"; has_user="$3"; exec_mode="$4"; user="$5"; target="$6"; preserve_state="$7"
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$user" "$target")
@@ -695,8 +648,6 @@ cap_current_user_id() {
     echo 0
 }
 
-# Verify the postcondition, not merely exit code. OEM shells sometimes return 0
-# even when PackageManager did not persist the requested component state.
 cap_component_is_disabled() {
     user="$1"; target="$2"
     if command -v get_component_override_state >/dev/null 2>&1; then
@@ -736,8 +687,6 @@ cap_remember_disable_spec() {
     CAP_PM_LEARNED_DISABLE_VERIFIED=1
 }
 
-# Read a component override state without depending on common.sh. Used by the
-# installer to find an already-disabled, therefore safe/idempotent, write target.
 cap_query_component_override_state() {
     user="$1"; comp="$2"
     pkg=${comp%%/*}; cls=${comp#*/}
@@ -768,8 +717,6 @@ cap_query_component_override_state() {
 cap_find_safe_disabled_probe_target() {
     list="$DATA_DIR/disabled_components.list"
     [ -s "$list" ] || return 1
-    # Prefer records previously managed by this module. Verify current state before
-    # using them; stale records are skipped and never written to.
     while IFS='|' read -r user comp cat; do
         case "$user" in ''|*[!0-9]*) continue ;; esac
         [ -n "$comp" ] || continue
@@ -784,7 +731,6 @@ cap_find_safe_disabled_probe_target() {
 
 cap_install_try_idempotent_candidate() {
     backend="$1"; verb="$2"; has_user="$3"; exec_mode="$4"; user="$5"; target="$6"; token="$7"
-    # The target MUST already be disabled. This probe only re-applies the same state.
     [ "$(cap_query_component_override_state "$user" "$target" 2>/dev/null)" = "disabled" ] || return 1
     actual_user="$user"; [ "$token" = "current" ] && actual_user=current
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$actual_user" "$target")
@@ -803,15 +749,12 @@ cap_install_verify_disable_backend() {
     user=${safe%%|*}; target=${safe#*|}
     CAP_INSTALL_PROBE_TARGET="u${user}:$target"
 
-    # Existing verified cache first (upgrade path).
     if [ "${CAP_PM_LEARNED_DISABLE_VERIFIED:-0}" = "1" ] && [ "${CAP_PM_LEARNED_DISABLE_BACKEND:-none}" != "none" ]; then
         cap_install_try_idempotent_candidate "$CAP_PM_LEARNED_DISABLE_BACKEND" "$CAP_PM_LEARNED_DISABLE_VERB" \
             "$CAP_PM_LEARNED_DISABLE_HAS_USER" "$CAP_PM_LEARNED_DISABLE_EXEC" "$user" "$target" \
             "${CAP_PM_LEARNED_DISABLE_USER_TOKEN:-numeric}" && return 0
     fi
 
-    # Short production probe: baseline first, then materially different execution
-    # domains. Full legacy cascade remains available at runtime on failure.
     command -v cmd >/dev/null 2>&1 && {
         cap_install_try_idempotent_candidate cmd disable 1 direct "$user" "$target" numeric && return 0
     }
@@ -842,7 +785,6 @@ cap_exec_disable_candidate() {
         *) return 1 ;;
     esac
 
-    # no-user forms are only safe for Android user 0.
     [ "$has_user" = "1" ] || [ "$user" = "0" ] || return 1
 
     actual_user="$user"
@@ -884,8 +826,6 @@ cap_exec_disable_candidate() {
 
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$actual_user" "$target")
     command -v log_cmd_exec >/dev/null 2>&1 && log_cmd_exec "$cmd_text" "$out" "$rc"
-    # The package dump cache must be dropped before the postcondition check,
-    # otherwise verification would read the pre-write snapshot.
     command -v aad_package_dump_invalidate >/dev/null 2>&1 && aad_package_dump_invalidate "${target%%/*}"
     cap_action_ok "$rc" "$out" || return 1
     cap_component_is_disabled "$user" "$target" || return 1
@@ -896,16 +836,12 @@ cap_exec_disable_candidate() {
 cap_disable_component() {
     user="$1"; target="$2"; preserve_state="$3"
 
-    # 0. Learned fast path: only a path that previously changed a REAL component
-    # and passed post-state verification is allowed here.
     if [ "${CAP_PM_LEARNED_DISABLE_VERIFIED:-0}" = "1" ] && [ -n "${CAP_PM_LEARNED_DISABLE_BACKEND:-}" ] && [ "$CAP_PM_LEARNED_DISABLE_BACKEND" != "none" ]; then
         cap_exec_disable_candidate "$CAP_PM_LEARNED_DISABLE_BACKEND" "$CAP_PM_LEARNED_DISABLE_VERB" \
             "$CAP_PM_LEARNED_DISABLE_HAS_USER" "$CAP_PM_LEARNED_DISABLE_EXEC" "$user" "$target" \
             "${CAP_PM_LEARNED_DISABLE_USER_TOKEN:-numeric}" && return 0
     fi
 
-    # 1. Original v4.3.0 behavior first. This is intentionally retained as the
-    # compatibility baseline because it is known to work on existing devices.
     cap_exec_disable_candidate "$CAP_PM_DISABLE_BACKEND" "$CAP_PM_DISABLE_VERB" \
         "$CAP_PM_DISABLE_HAS_USER" direct "$user" "$target" numeric && return 0
 
@@ -920,9 +856,6 @@ cap_disable_component() {
         [ "$user" = "0" ] && cap_exec_disable_candidate pm disable 0 direct "$user" "$target" numeric && return 0
     fi
 
-    # 2. Compatibility extension A: some OEMs behave differently when USER_CURRENT
-    # is translated inside PackageManagerShellCommand. Only use it if this target
-    # Android user is actually the current foreground user.
     current_user=$(cap_current_user_id)
     if [ "$user" = "$current_user" ]; then
         command -v cmd >/dev/null 2>&1 && {
@@ -935,9 +868,6 @@ cap_disable_component() {
         }
     fi
 
-    # 3. Legacy compatibility only (< Android 16): real shell UID 2000 may be
-    # useful on older releases, but Android 16+ rejects component-state writes
-    # from SHELL_UID in PackageManagerService.
     for exec_mode in su_uid2000 su_shell; do
         cap_shell_uid_component_mutation_allowed || break
         cap_shell_exec_available "$exec_mode" || continue
@@ -963,10 +893,6 @@ cap_disable_component() {
         fi
     done
 
-    # 4. Compatibility extension C: actual Android shell SELinux domain.
-    # This differs materially from `su 2000`: KernelSU can change uid to 2000
-    # while retaining a KSU/root SELinux domain. Only attempt when runcon proves
-    # that u:r:shell:s0 was really entered.
     if cap_runcon_shell_available; then
         if command -v cmd >/dev/null 2>&1; then
             cap_exec_disable_candidate cmd disable      1 runcon_shell_uid0 "$user" "$target" numeric && return 0
@@ -990,9 +916,6 @@ cap_component_state_matches() {
     [ "$actual" = "$expected" ]
 }
 
-# Execute a state-changing PackageManager verb through a specific transport and
-# verify the resulting override state. Unlike disable learning, this helper does
-# not alter the learned disable backend; it is used by restore/whitelist rollback.
 cap_exec_state_candidate() {
     backend="$1"; verb="$2"; has_user="$3"; exec_mode="$4"; user="$5"; target="$6"; expected="$7"; user_token="${8:-numeric}"
     [ -n "$backend" ] && [ "$backend" != "none" ] || return 1
@@ -1058,10 +981,6 @@ cap_set_component_state() {
         default|*) state="default"; verb="default-state" ;;
     esac
 
-    # First reuse the already verified write transport. The learned backend is a
-    # transport decision (cmd/pm + execution context), while policy decides which
-    # state verb is appropriate. This keeps whitelist/uninstall restore as robust
-    # as disabling on OEMs that reject direct Binder writes.
     if [ "${CAP_PM_LEARNED_DISABLE_VERIFIED:-0}" = "1" ] && [ -n "${CAP_PM_LEARNED_DISABLE_BACKEND:-}" ] && [ "$CAP_PM_LEARNED_DISABLE_BACKEND" != "none" ]; then
         cap_exec_state_candidate "$CAP_PM_LEARNED_DISABLE_BACKEND" "$verb" \
             "${CAP_PM_LEARNED_DISABLE_HAS_USER:-1}" "${CAP_PM_LEARNED_DISABLE_EXEC:-direct}" \
@@ -1069,7 +988,6 @@ cap_set_component_state() {
         command -v log >/dev/null 2>&1 && log "WRITE-TRANSPORT learned backend failed for restore state=$state u$user: $target; trying restore cascade."
     fi
 
-    # Existing probed state profile remains the compatibility baseline.
     case "$state" in
         enabled) b="$CAP_PM_ENABLE_BACKEND"; v="$CAP_PM_ENABLE_VERB"; u="$CAP_PM_ENABLE_HAS_USER"; x="$CAP_PM_ENABLE_EXEC" ;;
         disabled) b="$CAP_PM_STATE_DISABLED_BACKEND"; v="$CAP_PM_STATE_DISABLED_VERB"; u="$CAP_PM_STATE_DISABLED_HAS_USER"; x="$CAP_PM_STATE_DISABLED_EXEC" ;;
@@ -1077,8 +995,6 @@ cap_set_component_state() {
     esac
     cap_exec_state_candidate "$b" "$v" "$u" "$x" "$user" "$target" "$state" numeric && return 0
 
-    # Restore cascade: same safe transports as disable, but with the verb needed
-    # to reproduce the exact original override state.
     current_user=$(cap_current_user_id)
     restore_exec_modes="direct runcon_shell_uid0"
     cap_shell_uid_component_mutation_allowed && restore_exec_modes="direct su_uid2000 su_shell runcon_shell_uid0"

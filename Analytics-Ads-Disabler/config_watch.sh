@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# Hash polling safety net for config changes + package polling fallback.
-# Realtime config events are handled by config_event.sh when inotifyd exists.
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
@@ -17,9 +15,6 @@ package_elapsed=0
 while true; do
     interval=$(read_poll_interval)
 
-    # Safety net: catches missed/overflowed inotify events and works on devices
-    # without inotifyd. The helper re-checks under lock, so this cannot duplicate
-    # a reconciliation already completed by the realtime watcher.
     current_hash=$(compute_config_hash)
     previous_hash=$(cat "$CONFIG_HASH_FILE" 2>/dev/null)
     if [ "$current_hash" != "$previous_hash" ]; then
@@ -34,7 +29,6 @@ while true; do
         package_due=$(read_package_poll_interval)
     fi
 
-    # Retry a package reconciliation that could not take the lock earlier.
     if [ -f "$PACKAGE_RESCAN_PENDING" ]; then
         log "PACKAGE-RETRY: consuming deferred rescan request."
         rm -f "$PACKAGE_RESCAN_PENDING" 2>/dev/null
@@ -49,9 +43,6 @@ while true; do
         package_elapsed=0
     fi
 
-    # netd rebuilds the filter table on connectivity/VPN/tethering changes and
-    # can drop our OUTPUT jump without any event reaching this module, which
-    # previously left the Killer reporting ACTIVE while enforcing nothing.
     if ad_killer_enabled && [ "$(sed -n 's/^state=//p' "$AD_KILLER_STATUS_FILE" 2>/dev/null | head -n1)" = "ACTIVE" ]; then
         if ! ad_killer_chain_alive; then
             log "AD-KILLER chain missing from OUTPUT (netd rebuild?); re-applying."

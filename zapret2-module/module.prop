@@ -1,6 +1,6 @@
 id=zapret2-android
 name=Zapret2 eCubz
-version=v2.9.0
-versionCode=2908
+version=v2.9.1
+versionCode=2909
 author=eCubz (https://t.me/eCubz)
-description=Zapret2 eCubz v2.9.0: файловая очередь пользовательских AUTO-стратегий без жёсткого лимита, согласованный health/WebUI-статус, per-network кэш, быстрый reload и VPN/Hotspot. Telegram: https://t.me/module_ecubz
+description=Zapret2 eCubz v2.9.1: РїРѕРґРѕР±СЂР°РЅРЅР°СЏ СЃС‚СЂР°С‚РµРіРёСЏ РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РєРѕ РІСЃРµРјСѓ TLS-С‚СЂР°С„РёРєСѓ (РЅРµ С‚РѕР»СЊРєРѕ YouTube), probe РїСЂРѕРІРµСЂСЏРµС‚ РѕР±С‹С‡РЅС‹Рµ СЃР°Р№С‚С‹ Рё Google, СЂРµР¶РёРј DIRECT РїРѕР»РЅРѕСЃС‚СЊСЋ РѕС‚РєР»СЋС‡Р°РµС‚ РѕР±С…РѕРґ Рё nfqws2 РЅР° РЅРµС„РёР»СЊС‚СЂРѕРІР°РЅРЅРѕР№ СЃРµС‚Рё, СЃРѕР±С‹С‚РёР№РЅС‹Р№ watcher Р±РµР· РѕРїСЂРѕСЃР° РєР°Р¶РґС‹Рµ 2 СЃРµРє. Telegram: https://t.me/module_ecubz

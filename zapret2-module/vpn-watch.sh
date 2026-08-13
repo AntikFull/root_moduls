@@ -1,8 +1,4 @@
 #!/system/bin/sh
-# Low-overhead VPN/tether watcher.
-# Fast path is event-driven (netlink + /data/misc/net inotify). Expensive Android
-# role resolution is only performed after a coalesced event, during transitions,
-# or at a low-frequency safety recheck. No per-2-second net-role snapshot polling.
 
 umask 077
 MODDIR=${0%/*}
@@ -10,16 +6,16 @@ RUN_DIR="$MODDIR/run"
 TRIGGER_FILE="$RUN_DIR/network-event.flag"
 NETLINK_FIFO="$RUN_DIR/netlink-events.fifo"
 [ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
-: "${VPN_WATCH_INTERVAL:=2}" "${VPN_RETRY_INTERVAL:=1}" "${VPN_ROLE_RECHECK:=30}" "${VPN_VERIFY_INTERVAL:=60}" "${VPN_EVENT_DEBOUNCE:=2}" "${VPN_NETLINK_MONITOR:=1}"
+: "${VPN_WATCH_INTERVAL:=20}" "${VPN_RETRY_INTERVAL:=2}" "${VPN_ROLE_RECHECK:=120}" "${VPN_VERIFY_INTERVAL:=300}" "${VPN_EVENT_DEBOUNCE:=2}" "${VPN_NETLINK_MONITOR:=1}"
 : "${AUTO_SELECT_ENABLED:=1}" "${AUTO_PERIODIC_RECHECK:=1800}"
 for v in VPN_WATCH_INTERVAL VPN_RETRY_INTERVAL VPN_ROLE_RECHECK VPN_VERIFY_INTERVAL VPN_EVENT_DEBOUNCE; do
   eval val=\$$v
-  case "$val" in ''|*[!0-9]*) case "$v" in VPN_WATCH_INTERVAL) val=2 ;; VPN_RETRY_INTERVAL) val=1 ;; VPN_ROLE_RECHECK) val=30 ;; VPN_VERIFY_INTERVAL) val=60 ;; VPN_EVENT_DEBOUNCE) val=2 ;; esac; eval "$v=$val" ;; esac
+  case "$val" in ''|*[!0-9]*) case "$v" in VPN_WATCH_INTERVAL) val=20 ;; VPN_RETRY_INTERVAL) val=2 ;; VPN_ROLE_RECHECK) val=120 ;; VPN_VERIFY_INTERVAL) val=300 ;; VPN_EVENT_DEBOUNCE) val=2 ;; esac; eval "$v=$val" ;; esac
 done
-[ "$VPN_WATCH_INTERVAL" -ge 1 ] 2>/dev/null || VPN_WATCH_INTERVAL=2
-[ "$VPN_RETRY_INTERVAL" -ge 1 ] 2>/dev/null || VPN_RETRY_INTERVAL=1
-[ "$VPN_ROLE_RECHECK" -ge 15 ] 2>/dev/null || VPN_ROLE_RECHECK=30
-[ "$VPN_VERIFY_INTERVAL" -ge 30 ] 2>/dev/null || VPN_VERIFY_INTERVAL=60
+[ "$VPN_WATCH_INTERVAL" -ge 1 ] 2>/dev/null || VPN_WATCH_INTERVAL=20
+[ "$VPN_RETRY_INTERVAL" -ge 1 ] 2>/dev/null || VPN_RETRY_INTERVAL=2
+[ "$VPN_ROLE_RECHECK" -ge 15 ] 2>/dev/null || VPN_ROLE_RECHECK=120
+[ "$VPN_VERIFY_INTERVAL" -ge 30 ] 2>/dev/null || VPN_VERIFY_INTERVAL=300
 [ "$VPN_EVENT_DEBOUNCE" -ge 1 ] 2>/dev/null || VPN_EVENT_DEBOUNCE=2
 mkdir -p "$RUN_DIR" 2>/dev/null; chmod 0700 "$RUN_DIR" 2>/dev/null || true
 rm -f "$TRIGGER_FILE" "$NETLINK_FIFO" 2>/dev/null
@@ -44,6 +40,7 @@ start_android_event_watcher() {
   fi
 }
 
+NETLINK_READY=0
 start_netlink_monitor() {
   [ "$VPN_NETLINK_MONITOR" = "1" ] || return 0
   [ -x "$IP_BIN" ] || return 0
@@ -51,30 +48,79 @@ start_netlink_monitor() {
   mkfifo "$NETLINK_FIFO" 2>/dev/null || return 0
   chmod 0600 "$NETLINK_FIFO" 2>/dev/null || true
 
-  # Reader first: it blocks on the FIFO without CPU usage until ip monitor writes.
-  (
-    while IFS= read -r _line; do
-      [ -e "$TRIGGER_FILE" ] || : > "$TRIGGER_FILE"
-    done < "$NETLINK_FIFO"
-  ) &
-  IPMON_READER_PID=$!
+  # Основной цикл сам читает FIFO через `read -t`, поэтому отдельный
+  # reader-подпроцесс больше не нужен. FIFO открывается на чтение И запись,
+  # чтобы open() не блокировался и чтобы EOF не приходил при рестарте
+  exec 9<> "$NETLINK_FIFO" || return 0
 
-  # ip monitor uses rtnetlink and blocks in the kernel. If this ip build does not
-  # support monitor/all it exits; the periodic role safety check remains active.
-  "$IP_BIN" monitor all > "$NETLINK_FIFO" 2>/dev/null &
+  # ip monitor uses rtnetlink and blocks in the kernel. Подписываемся только на
+  # link/address/route: `monitor all` тянет ещё и neigh (ARP), а это десятки
+  # событий в минуту на людном Wi-Fi — цикл просыпался бы впустую.
+  "$IP_BIN" monitor link address route >&9 2>/dev/null &
   IPMON_PID=$!
+  sleep 1
+  if ! kill -0 "$IPMON_PID" 2>/dev/null; then
+    # Сборка ip без выбора объектов: возвращаемся к monitor all.
+    "$IP_BIN" monitor all >&9 2>/dev/null &
+    IPMON_PID=$!
+    sleep 1
+  fi
+  kill -0 "$IPMON_PID" 2>/dev/null || return 0
+  NETLINK_READY=1
+}
+
+# `read -t` есть в mksh (/system/bin/sh) и в busybox ash, но не гарантирован
+# в любой оболочке, которую может подсунуть прошивка. Проверяем один раз.
+READ_TIMEOUT_OK=0
+probe_read_timeout() {
+  [ "$NETLINK_READY" = 1 ] || return 0
+  local probe="$RUN_DIR/read-probe.$$" line rc t0 t1
+  mkfifo "$probe" 2>/dev/null || return 0
+  exec 8<> "$probe" 2>/dev/null || { rm -f "$probe" 2>/dev/null; return 0; }
+  # Шаг 1: данные уже в FIFO. Если оболочка не понимает -t, read завершится
+  # ошибкой — и мы узнаем это, ни разу не заблокировавшись.
+  echo probe >&8
+  read -t 1 line <&8 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ]; then
+    # Шаг 2: FIFO пуст. Код возврата таймаута отличается у mksh (142) и
+    # busybox ash (1), поэтому опираемся на факт ожидания, а не на код.
+    t0=$(date +%s 2>/dev/null)
+    read -t 1 line <&8 2>/dev/null; rc=$?
+    t1=$(date +%s 2>/dev/null)
+    case "$t0:$t1" in
+      *[!0-9:]*|:*|*:) ;;
+      *) [ "$rc" != 0 ] && [ $((t1 - t0)) -ge 1 ] 2>/dev/null && READ_TIMEOUT_OK=1 ;;
+    esac
+  fi
+  exec 8>&- 2>/dev/null
+  rm -f "$probe" 2>/dev/null
+}
+
+# Ждём следующего netlink-события до $1 секунд. Пока событий нет, процесс
+# спит в ядре: ни пробуждений таймера каждые 2 сек, ни форков `sleep`.
+wait_for_event() {
+  local timeout="$1" line
+  if [ "$READ_TIMEOUT_OK" = 1 ]; then
+    # Пачка событий одного изменения сети схлопывается debounce-ом в основном
+    # цикле, поэтому достаточно проснуться на первой строке.
+    read -t "$timeout" line <&9 2>/dev/null && signal_event
+    return 0
+  fi
+  sleep "$timeout"
 }
 
 cleanup() {
   [ -n "$EVENT_PID" ] && kill "$EVENT_PID" 2>/dev/null || true
   [ -n "$IPMON_PID" ] && kill "$IPMON_PID" 2>/dev/null || true
   [ -n "$IPMON_READER_PID" ] && kill "$IPMON_READER_PID" 2>/dev/null || true
+  exec 9>&- 2>/dev/null
   rm -f "$TRIGGER_FILE" "$NETLINK_FIFO" 2>/dev/null
 }
 trap cleanup EXIT
 trap 'cleanup; exit 0' HUP INT TERM
 start_android_event_watcher
 start_netlink_monitor
+probe_read_timeout
 
 now_epoch() {
   local n
@@ -82,7 +128,13 @@ now_epoch() {
   case "$n" in ''|*[!0-9]*) echo 0 ;; *) echo "$n" ;; esac
 }
 
+# Дешёвая подпись интерфейсов: только sysfs + `ip addr`, без dumpsys.
+# Резервная периодическая проверка ролей эскалируется до дорогого
+# net-role.sh role-signature (два dumpsys) лишь когда эта подпись изменилась.
+cheap_snapshot() { "$MODDIR/net-role.sh" signature 2>/dev/null; }
+
 last_roles=$(role_snapshot)
+last_cheap=$(cheap_snapshot)
 now=$(now_epoch)
 last_role_check=$now
 last_verify=$now
@@ -113,18 +165,26 @@ while :; do
     fi
   fi
 
-  # During a transient interface state, retry quickly. This is intentionally the
-  # only high-frequency path that may call the role resolver.
   if [ "$retrying" = 1 ]; then
     role_check_due=1
   elif [ "$event_pending" = 1 ] && [ $((now - event_since)) -ge "$VPN_EVENT_DEBOUNCE" ] 2>/dev/null; then
     role_check_due=1
   elif [ $((now - last_role_check)) -ge "$VPN_ROLE_RECHECK" ] 2>/dev/null; then
-    role_check_due=1
+    # Резервная проверка: сначала дешёвая sysfs-подпись. Если интерфейсы,
+    # их состояния и адреса не менялись, роли измениться не могли — dumpsys
+    # не запускаем вовсе.
+    cheap=$(cheap_snapshot)
+    if [ "$cheap" = "$last_cheap" ]; then
+      last_role_check=$now
+    else
+      last_cheap=$cheap
+      role_check_due=1
+    fi
   fi
 
   if [ "$role_check_due" = 1 ]; then
     roles=$(role_snapshot)
+    last_cheap=$(cheap_snapshot)
     last_role_check=$now
     event_pending=0
     event_since=0
@@ -139,7 +199,6 @@ while :; do
     [ "$retrying" = 1 ] && need_apply=1
   fi
 
-  # Low-frequency drift detection. It does not rebuild anything when rules match.
   if [ "$need_apply" = 0 ] && [ $((now - last_verify)) -ge "$VPN_VERIFY_INTERVAL" ] 2>/dev/null; then
     tether_ok=0; vpn_ok=0
     "$MODDIR/tether-sync.sh" verify >/dev/null 2>&1 && tether_ok=1
@@ -163,20 +222,18 @@ while :; do
     fi
 
     if [ "$tether_rc" = 0 ] && [ "$vpn_rc" = 0 ]; then
-      # Reuse the role snapshot that caused this apply when available. If apply was
-      # caused only by drift verification, refresh roles once after repair.
       [ -n "$roles" ] || roles=$(role_snapshot)
       last_roles="$roles"
       now=$(now_epoch)
       last_role_check=$now
       last_verify=$now
       retrying=0
-      sleep "$VPN_WATCH_INTERVAL"
+      wait_for_event "$VPN_WATCH_INTERVAL"
     else
       retrying=1
-      sleep "$VPN_RETRY_INTERVAL"
+      wait_for_event "$VPN_RETRY_INTERVAL"
     fi
   else
-    sleep "$VPN_WATCH_INTERVAL"
+    wait_for_event "$VPN_WATCH_INTERVAL"
   fi
 done

@@ -1,0 +1,251 @@
+#!/system/bin/sh
+
+BINDIR=${0%/*}
+MODDIR=${BINDIR%/*}
+DATA_DIR="/data/adb/AIUnblock"
+LOG_DIR="$DATA_DIR/logs"
+PUBLIC_LOG_DIR="/sdcard/eCubz/AIUnblock/logs"
+
+[ -f "$MODDIR/lib/module_meta.sh" ] && . "$MODDIR/lib/module_meta.sh"
+load_module_metadata "$MODDIR/module.prop"
+[ -f "$MODDIR/lib/config.sh" ] && . "$MODDIR/lib/config.sh"
+[ -f "$MODDIR/lib/apps.sh" ] && . "$MODDIR/lib/apps.sh"
+
+config_reload() {
+  AIUNBLOCK_CONFIG_FILE="$MODDIR/install.conf"
+  config_load "$AIUNBLOCK_CONFIG_FILE"
+}
+
+router_state() {
+  local pid cmdline
+  pid=$(cat "$MODDIR/.router.pid" 2>/dev/null)
+  case "$pid" in ""|*[!0-9]*) echo "STOPPED"; return ;; esac
+  if kill -0 "$pid" 2>/dev/null; then
+    cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+    case "$cmdline" in *aiunblock-native*router*) echo "RUNNING pid=$pid"; return ;; esac
+  fi
+  echo "STALE pid=$pid"
+}
+
+root_manager_state() {
+  local out=""
+  if command -v magisk >/dev/null 2>&1; then out="Magisk $(magisk -v 2>/dev/null | head -n 1)"; fi
+  if [ -d /data/adb/ksu ] || command -v ksud >/dev/null 2>&1; then
+    [ -n "$out" ] && out="$out + "
+    out="${out}KernelSU"
+  fi
+  if [ -d /data/adb/ap ] || [ -d /data/adb/apatch ]; then
+    [ -n "$out" ] && out="$out + "
+    out="${out}APatch"
+  fi
+  [ -n "$out" ] || out="unknown"
+  echo "$out"
+}
+
+status() {
+  local hosts_status metamodule alluids
+  config_reload
+  apps_load "$MODDIR"
+  hosts_status=$(cat "$MODDIR/.hosts_status" 2>/dev/null)
+  [ -n "$hosts_status" ] || hosts_status="unknown/reboot-needed"
+  metamodule="none"
+  if [ -e /data/adb/metamodule ] || [ -L /data/adb/metamodule ]; then
+    metamodule=$(readlink /data/adb/metamodule 2>/dev/null)
+    [ -n "$metamodule" ] || metamodule="active"
+  fi
+  alluids=$(all_target_uids)
+
+  echo "=== AI Unblock RU $MODULE_VERSION_LABEL (versionCode=$MODULE_VERSION_CODE) ==="
+  echo "Root: $(root_manager_state)"
+  echo "Android: $(getprop ro.build.version.release 2>/dev/null) / API $(getprop ro.build.version.sdk 2>/dev/null)"
+  echo "ABI: $(getprop ro.product.cpu.abi 2>/dev/null)"
+  echo "Router: $(router_state)"
+  echo "ABI core: $(cat "$MODDIR/.native_abi" 2>/dev/null || echo unknown)"
+  if [ -x "$MODDIR/bin/aiunblock-native" ]; then
+    echo "Native: $($MODDIR/bin/aiunblock-native self-test 2>&1 | head -n 1)"
+  else
+    echo "Native: MISSING"
+  fi
+  echo "Config: hosts=$ENABLE_HOSTS_ROUTING adblock=$ENABLE_ADBLOCK locale=$ENABLE_APP_LOCALE fail=$FAIL_MODE"
+  echo "Hosts stage: $hosts_status"
+  echo "KernelSU metamodule: $metamodule"
+  echo "UID Gemini-SNI: ${GEMINI_SNI_UIDS:-none}"
+  echo "UID Gemini: ${GEMINI_UIDS:-none}"
+  echo "UID NotebookLM: ${NOTEBOOK_UIDS:-none}"
+  echo "UID ChatGPT: ${CHATGPT_UIDS:-none}"
+  echo "UID Claude: ${CLAUDE_UIDS:-none}"
+  echo "UID Grok: ${GROK_UIDS:-none}"
+  [ -n "$alluids" ] || echo "UID warning: ни одно целевое приложение сейчас не найдено"
+  echo "Gateways: Gemini=$(cat "$MODDIR/gateways/gemini.current" 2>/dev/null || echo -) Notebook=$(cat "$MODDIR/gateways/notebook.current" 2>/dev/null || echo -) ChatGPT=$(cat "$MODDIR/gateways/chatgpt.current" 2>/dev/null || echo -) Claude=$(cat "$MODDIR/gateways/claude.current" 2>/dev/null || echo -) Grok=$(cat "$MODDIR/gateways/grok.current" 2>/dev/null || echo -)"
+  echo "Logs: $PUBLIC_LOG_DIR"
+}
+
+signal_refresh() { touch "$MODDIR/.force_refresh" 2>/dev/null; echo "Запрошена немедленная перепроверка UID/DNS/gateway."; }
+signal_reload() { touch "$MODDIR/.reload" 2>/dev/null; echo "Запрошена перезагрузка конфигурации и перепроверка."; }
+
+save_config_and_reload() {
+  config_write "$MODDIR/install.conf" || { echo "Ошибка записи install.conf" >&2; return 1; }
+  touch "$MODDIR/.reload" 2>/dev/null
+}
+
+set_hosts_mode() {
+  local mode="$1"
+  config_reload
+  case "$mode" in
+    off|core) ENABLE_HOSTS_ROUTING=0; ENABLE_ADBLOCK=0 ;;
+    routing|ai) ENABLE_HOSTS_ROUTING=1; ENABLE_ADBLOCK=0 ;;
+    adblock) ENABLE_HOSTS_ROUTING=0; ENABLE_ADBLOCK=1 ;;
+    full) ENABLE_HOSTS_ROUTING=1; ENABLE_ADBLOCK=1 ;;
+    *) echo "Использование: aiunblockctl hosts {off|routing|adblock|full}"; return 2 ;;
+  esac
+  save_config_and_reload || return 1
+  # Подготавливаем backing tree для следующего mount stage, но НИКОГДА не umount текущий /system/etc/hosts.
+  [ -f "$MODDIR/lib/hosts.sh" ] && . "$MODDIR/lib/hosts.sh"
+  command -v prepare_hosts_tree >/dev/null 2>&1 && prepare_hosts_tree "$MODDIR" >/dev/null 2>&1
+  echo "Hosts mode=$mode сохранён. Для гарантированного применения system overlay нужен reboot."
+}
+
+set_fail_mode() {
+  local mode="$1"
+  config_reload
+  case "$mode" in
+    0|1) FAIL_MODE="$mode" ;;
+    direct) FAIL_MODE=0 ;;
+    block) FAIL_MODE=1 ;;
+    *) echo "Использование: aiunblockctl fail {0|1}"; return 2 ;;
+  esac
+  save_config_and_reload
+  echo "FAIL_MODE=$FAIL_MODE"
+}
+
+set_locale_mode() {
+  local mode="$1"
+  config_reload
+  case "$mode" in
+    on) ENABLE_APP_LOCALE=1 ;;
+    off) ENABLE_APP_LOCALE=0 ;;
+    *) echo "Использование: aiunblockctl locale {on|off}"; return 2 ;;
+  esac
+  save_config_and_reload || return 1
+  [ -f "$MODDIR/lib/locales.sh" ] && . "$MODDIR/lib/locales.sh"
+  if [ "$mode" = on ]; then
+    apply_configured_locales "$MODDIR"
+  else
+    restore_saved_locales "$MODDIR"
+  fi
+  echo "Per-app locale: $mode"
+}
+
+restart_router() {
+  local pid cmdline
+  pid=$(cat "$MODDIR/.router.pid" 2>/dev/null)
+  case "$pid" in
+    ""|*[!0-9]*) ;;
+    *)
+      if kill -0 "$pid" 2>/dev/null; then
+        cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+        case "$cmdline" in *aiunblock-native*router*) kill "$pid" 2>/dev/null || true ;; esac
+      fi
+      ;;
+  esac
+  touch "$MODDIR/.force_refresh" 2>/dev/null
+  echo "Router restart запрошен."
+}
+
+run_capture() {
+  local file="$1"; shift
+  { echo "# $*"; "$@"; } > "$file" 2>&1 || true
+}
+
+collect_diag() {
+  local mode="${1:-manual}" ts tmp outbase archive f count=0 prefix
+  ts=$(date '+%Y%m%d_%H%M%S' 2>/dev/null || date +%s)
+  tmp="$DATA_DIR/diag.tmp.$$.${ts}"
+  mkdir -p "$tmp" || { echo "Не удалось создать $tmp" >&2; return 1; }
+
+  status > "$tmp/status.txt" 2>&1
+  cp -f "$MODDIR/module.prop" "$MODDIR/install.conf" "$MODDIR/apps.list" "$MODDIR/apps.user.list" "$MODDIR/sni_routes.conf" "$MODDIR/smartdns.conf" "$tmp/" 2>/dev/null || true
+  cp -f "$LOG_DIR"/*.log "$LOG_DIR"/*.log.1 "$tmp/" 2>/dev/null || true
+
+  run_capture "$tmp/native_selftest.txt" "$MODDIR/bin/aiunblock-native" self-test
+  run_capture "$tmp/native_version.txt" "$MODDIR/bin/aiunblock-native" version
+  cp -f "$MODDIR/.native_abi" "$tmp/native_abi.txt" 2>/dev/null || true
+  cp -f "$MODDIR/.native_sha256" "$tmp/native_sha256.txt" 2>/dev/null || true
+  run_capture "$tmp/getprop.txt" getprop
+  run_capture "$tmp/ip_addr.txt" ip addr
+  run_capture "$tmp/ip_route_v4.txt" ip -4 route
+  run_capture "$tmp/ip_route_v6.txt" ip -6 route
+  run_capture "$tmp/iptables_save.txt" iptables-save
+  run_capture "$tmp/ip6tables_save.txt" ip6tables-save
+  run_capture "$tmp/pm_users.txt" pm list users
+  run_capture "$tmp/mount_hosts.txt" sh -c "mount | grep -E 'hosts|AIUnblock|KSU|magisk|overlay'"
+  run_capture "$tmp/processes.txt" ps -A
+  if command -v ss >/dev/null 2>&1; then run_capture "$tmp/sockets.txt" ss -lntup; elif command -v netstat >/dev/null 2>&1; then run_capture "$tmp/sockets.txt" netstat -lnt; fi
+  if command -v dumpsys >/dev/null 2>&1; then
+    timeout 12 dumpsys activity lastanr > "$tmp/dumpsys_lastanr.txt" 2>&1 || true
+    timeout 12 dumpsys activity processes > "$tmp/dumpsys_activity_processes.txt" 2>&1 || true
+  fi
+  if command -v logcat >/dev/null 2>&1; then timeout 12 logcat -d -b all -t 1200 > "$tmp/logcat_tail.txt" 2>&1 || true; fi
+  if [ -d /data/anr ]; then
+    ls -la /data/anr > "$tmp/anr_listing.txt" 2>&1 || true
+    for f in $(ls -1t /data/anr/* 2>/dev/null | head -n 3); do
+      [ -f "$f" ] || continue
+      count=$((count + 1)); cp -f "$f" "$tmp/anr_trace_$count.txt" 2>/dev/null || true
+    done
+  fi
+
+  if [ -d /sdcard ] && [ -w /sdcard ]; then outbase="$PUBLIC_LOG_DIR"; else outbase="$DATA_DIR/diagnostics"; fi
+  mkdir -p "$outbase" 2>/dev/null || outbase="$DATA_DIR/diagnostics"
+  mkdir -p "$outbase" 2>/dev/null
+  case "$mode" in auto) prefix="AIUnblock_auto_diag" ;; *) prefix="AIUnblock_diag" ;; esac
+  archive="$outbase/${prefix}_${ts}.tar.gz"
+  if command -v tar >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1; then
+    (cd "$tmp" && tar -cf - . 2>/dev/null | gzip -6 > "$archive") || archive=""
+  else
+    archive=""
+  fi
+
+  if [ -n "$archive" ] && [ -s "$archive" ]; then
+    rm -rf "$tmp"
+    # Не даём автоматическим архивам бесконечно копиться: храним последние три.
+    if [ "$outbase" = "$PUBLIC_LOG_DIR" ]; then chmod 0644 "$archive" 2>/dev/null; else chmod 0600 "$archive" 2>/dev/null; fi
+    if [ "$mode" = auto ]; then
+      count=0
+      for f in $(ls -1t "$outbase"/AIUnblock_auto_diag_*.tar.gz 2>/dev/null); do
+        count=$((count + 1))
+        [ "$count" -gt 3 ] && rm -f "$f" 2>/dev/null
+      done
+    fi
+    echo "Диагностика: $archive"
+  else
+    echo "Диагностика оставлена каталогом: $tmp"
+  fi
+  echo "Папка логов: $PUBLIC_LOG_DIR"
+  echo "Примечание: диагностический архив содержит системные логи; перед публичной публикацией его лучше не выкладывать открыто."
+}
+
+help_text() {
+  cat <<'TXT'
+aiunblockctl status
+aiunblockctl refresh        # принудительно перепроверить UID/DNS/gateway
+aiunblockctl reload         # перечитать конфиги + refresh
+aiunblockctl restart        # перезапустить SNI-router
+aiunblockctl hosts off|routing|adblock|full  # reboot для system overlay
+aiunblockctl fail 0|1
+aiunblockctl locale on|off
+aiunblockctl diag           # ANR/logcat/firewall/network diagnostic bundle
+TXT
+}
+
+case "$1" in
+  ""|status) status ;;
+  refresh) signal_refresh ;;
+  reload) signal_reload ;;
+  restart) restart_router ;;
+  hosts) set_hosts_mode "$2" ;;
+  fail) set_fail_mode "$2" ;;
+  locale) set_locale_mode "$2" ;;
+  diag) collect_diag "$2" ;;
+  help|-h|--help) help_text ;;
+  *) help_text; exit 2 ;;
+esac

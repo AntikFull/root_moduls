@@ -1,6 +1,6 @@
 id=AIUnblock
 name=AI Unblock RU
-version=v2.2.7
-versionCode=229
+version=v2.3.0-rc8
+versionCode=237
 author=eCubz (https://t.me/eCubz)
-description=Избирательная разблокировка AI-сервисов (ChatGPT, Gemini, Claude, Grok, NotebookLM) через per-UID SNI-роутер и DoH без смены системного DNS. Поддержка: https://t.me/module_ecubz
+description=РћС‚РєСЂС‹РІР°РµС‚ ChatGPT, Gemini, Claude, Grok Рё NotebookLM. Р Р°Р±РѕС‚Р°РµС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Рё С‚РѕР»СЊРєРѕ РґР»СЏ РїРѕРґРґРµСЂР¶РёРІР°РµРјС‹С… РїСЂРёР»РѕР¶РµРЅРёР№. Р›РѕРіРё: /sdcard/eCubz/AIUnblock/logs вЂў РџРѕРґРґРµСЂР¶РєР°: https://t.me/module_ecubz

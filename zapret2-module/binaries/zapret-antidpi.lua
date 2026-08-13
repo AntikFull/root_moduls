@@ -73,7 +73,6 @@ standard ipfrag :
 
 ]]
 
-
 -- drop packet
 -- standard args : direction, payload
 function drop(ctx, desync)
@@ -310,7 +309,6 @@ function synack(ctx, desync)
 	end
 end
 
-
 -- nfqws1 : "--wsize"
 -- arg : wsize=N . tcp window size
 -- arg : scale=N . tcp option scale factor
@@ -537,7 +535,6 @@ function multisplit(ctx, desync)
 		end
 	end
 end
-
 
 function pos_normalize(pos, low, hi)
 	return (pos>=low and pos<hi) and (pos-low+1) or nil

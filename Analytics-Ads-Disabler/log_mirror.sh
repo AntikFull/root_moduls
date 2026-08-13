@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# Best-effort mirror of module logs to user-accessible storage.
-# Never blocks or influences the core runtime.
 MODDIR=${0%/*}
 DATA_DIR="/data/adb/analytics_ads_disabler"
 LOG_DIR="$DATA_DIR/logs"
@@ -16,9 +14,6 @@ read_conf() {
     [ -n "$val" ] && printf '%s\n' "$val" || printf '%s\n' "$def"
 }
 
-# Emulated storage is world-readable, so package-level inventories are mirrored
-# only when the user opts in. Runtime/diagnostic logs are always mirrored
-# because they are what support requests actually need.
 BASE_LOGS="debug.log debug.previous.log boot_trace.log diagnostics.log install_diagnostics.log uninstall.log"
 FULL_LOGS="component_audit.log sdk_fingerprint.log manifest_scan.log ad_surface_scan.log ad_killer.log ad_killer.previous.log"
 
@@ -43,8 +38,6 @@ while true; do
     esac
 
     if [ "$(read_conf LOG_MIRROR 1)" = "1" ]; then
-        # Skip the whole pass when nothing changed: this worker used to copy
-        # every log unconditionally every 10 seconds, around the clock.
         newest=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n1)
         changed=1
         if [ -n "$newest" ] && [ -f "$STAMP_FILE" ] && [ ! "$newest" -nt "$STAMP_FILE" ]; then

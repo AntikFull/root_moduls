@@ -1,7 +1,5 @@
 #!/system/bin/sh
 umask 077
-# Runtime diagnostics for Zapret2 eCubz. This script does not start packet capture.
-# If NFQWS_DEBUG was enabled, its existing debug log may contain domains/packet metadata.
 
 MODDIR="${0%/*}"
 CONF_FILE="$MODDIR/zapret2.conf"
@@ -89,9 +87,9 @@ pid_owned() {
   if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
   strategy_effective=$(sed -n 's/^STRATEGY_EFFECTIVE=//p' "$RUN_DIR/health.env" 2>/dev/null | head -n1)
   [ -n "$strategy_effective" ] || strategy_effective=${STRATEGY_MODE:-SMART}
-  youtube_count=$(grep -cv '^[[:space:]]*\(#\|$\)' "$MODDIR/smart_youtube.list" 2>/dev/null || echo 0)
-  auto_count=$(grep -cv '^[[:space:]]*\(#\|$\)' "$MODDIR/auto_apps.list" 2>/dev/null || echo 0)
-  manual_count=$(grep -cv '^[[:space:]]*\(#\|$\)' "$MODDIR/apps.list" 2>/dev/null || echo 0)
+  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/smart_youtube.list" 2>/dev/null || echo 0)
+  auto_count=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/auto_apps.list" 2>/dev/null || echo 0)
+  manual_count=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/apps.list" 2>/dev/null || echo 0)
   echo "STRATEGY_MODE=${STRATEGY_MODE:-SMART}"
   echo "STRATEGY_EFFECTIVE=$strategy_effective"
   echo "AUTO_APPS_ENABLED=${AUTO_APPS_ENABLED:-1}"
@@ -288,8 +286,6 @@ pid_owned() {
 } > "$OUT" 2>&1
 
 chmod 0600 "$OUT" 2>/dev/null
-# Diagnostics are built from boot-safe internal logs. Export a shareable copy only
-# after the report is complete; failure of /sdcard never invalidates diagnostics.
 if mkdir -p "$EXPORT_DIR" 2>/dev/null && cp -f "$OUT" "$EXPORT_DIR/zapret2_diagnostics_latest.txt" 2>/dev/null; then
   chmod 0644 "$EXPORT_DIR/zapret2_diagnostics_latest.txt" 2>/dev/null || true
   [ -x "$MODDIR/log-export.sh" ] && sh "$MODDIR/log-export.sh" now >/dev/null 2>&1 || true

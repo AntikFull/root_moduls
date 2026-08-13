@@ -1,8 +1,5 @@
 #!/system/bin/sh
 umask 077
-# Zapret2 eCubz — runtime-adaptive Android service.
-# Builds verified NFQUEUE/QUIC rules, resolves Android package UIDs through
-# multiple backends and records enough diagnostics to debug vendor ROMs.
 
 MODDIR="${0%/*}"
 case "$MODDIR" in /*) ;; *) MODDIR="$(cd "$MODDIR" 2>/dev/null && pwd)" ;; esac
@@ -38,17 +35,12 @@ STRATEGY_LIB="$MODDIR/strategy-lib.sh"
 
 mkdir -p "$LOG_DIR" "$RUN_DIR" 2>/dev/null
 chmod 0700 "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
-# Runtime startup must never depend on emulated/FUSE storage. /data/adb is
-# available when root-manager lifecycle scripts run; /sdcard may appear later.
 if ! : >> "$LOG_FILE" 2>/dev/null; then
   printf '[%s] pid=%s fatal: internal log is not writable: %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$$" "$LOG_FILE" >> "$RUN_DIR/boot-trace.log" 2>/dev/null
   exit 1
 fi
 chmod 0600 "$LOG_FILE" 2>/dev/null || true
 
-# Runtime PID/lock files survive a reboot on /data. A recycled PID must never be
-# mistaken for one of our old processes (or, worse, be killed by a stale pidfile).
-# Track the kernel boot UUID and discard only ephemeral runtime state on a new boot.
 init_boot_epoch() {
   local current previous tmp
   current=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
@@ -69,7 +61,6 @@ init_boot_epoch() {
 init_boot_epoch
 
 boot_trace() {
-  # Keep an internal /data trace because /sdcard may not be mounted yet during late_start.
   local size ppid pgrp sid
   if [ -f "$BOOT_TRACE_FILE" ]; then
     size=$(wc -c < "$BOOT_TRACE_FILE" 2>/dev/null)
@@ -148,7 +139,7 @@ write_health() {
     printf 'AUTO_APPS_ENABLED=%s\n' "${AUTO_APPS_ENABLED:-1}"
     printf 'AUTO_APP_UIDS=%s\n' "${AUTO_APP_UID_COUNT:-0}"
     printf 'MANUAL_APP_UIDS=%s\n' "${MANUAL_APP_UID_COUNT:-0}"
-    printf 'SMART_YOUTUBE_DOMAINS=%s\n' "$(grep -cv '^[[:space:]]*\(#\|$\)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)"
+    printf 'SMART_YOUTUBE_DOMAINS=%s\n' "$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)"
     printf 'AUTO_PROFILE=%s\n' "${AUTO_PROFILE:-UNKNOWN}"
     printf 'AUTO_PROFILE_NAME=%s\n' "${AUTO_PROFILE_NAME:-UNKNOWN}"
     printf 'AUTO_STRATEGY_SIGNATURE=%s\n' "${AUTO_STRATEGY_SIGNATURE:-UNKNOWN}"
@@ -205,7 +196,6 @@ find_owned_nfqws_pid() {
 }
 
 proc_session_fields() {
-  # /proc/<pid>/stat: field 4=PPID, 5=PGRP, 6=SESSION. nfqws2 has a simple comm.
   local pid="$1"
   awk '{printf "ppid=%s pgrp=%s sid=%s",$4,$5,$6}' "/proc/$pid/stat" 2>/dev/null
 }
@@ -258,7 +248,6 @@ IPT_SAVE="$(command_path iptables-save)"
 IP6T_SAVE="$(command_path ip6tables-save)"
 
 cmd_capture() {
-  # Usage: cmd_capture LABEL command args...
   local label="$1" out rc
   shift
   out=$("$@" 2>&1); rc=$?
@@ -310,7 +299,6 @@ cleanup_iptables() {
 }
 
 normalize_pm_output() {
-  # $1 raw file, $2 user id, append normalized "package uid user" lines to cache.
   local raw="$1" user="$2" line body pkg uid
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in package:*) ;; *) continue ;; esac
@@ -334,16 +322,27 @@ list_users() {
 }
 
 append_packages_list_all_users() {
-  local dest="$1" user
+  local dest="$1" user pkg uid usr
   [ -r /data/system/packages.list ] || return 1
   for user in $(list_users); do
-    awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list >> "$dest" 2>/dev/null
+    if [ "$user" = "0" ]; then
+      awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list >> "$dest" 2>/dev/null
+      continue
+    fi
+    # packages.list — общесистемный файл; он не говорит, в каких профилях пакет
+    # реально установлен. Без этой проверки во вторичном/клон-профиле (ColorOS
+    # MultiApp = user 999, рабочий профиль = 10 и т.п.) генерировались правила
+    # для несуществующих UID вида 99910447. Каталог данных профиля есть только
+    # у реально установленных там пакетов и читается root на любой прошивке.
+    [ -d "/data/user/$user" ] || continue
+    awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list 2>/dev/null | \
+    while read -r pkg uid usr; do
+      [ -d "/data/user/$usr/$pkg" ] && printf '%s %s %s\n' "$pkg" "$uid" "$usr"
+    done >> "$dest" 2>/dev/null
   done
 }
 
 build_package_cache_once() {
-  # Merge every source that works instead of trusting the first PackageManager answer.
-  # Some vendor ROMs return a valid but incomplete list during early boot.
   local tmp_raw="$RUN_DIR/pm_raw.$$" user pm_ok=0 cmd_ok=0 fs_ok=0 count=0 source=""
   : > "$PACKAGE_UID_CACHE.tmp"
   for user in $(list_users); do
@@ -358,8 +357,6 @@ build_package_cache_once() {
   done
   rm -f "$tmp_raw"
 
-  # Root-accessible packages.list is independent of the PackageManager shell API and
-  # is particularly useful while ColorOS/OxygenOS/MIUI are still bringing services up.
   if [ -r /data/system/packages.list ]; then
     append_packages_list_all_users "$PACKAGE_UID_CACHE.tmp" && fs_ok=1
   fi
@@ -381,8 +378,6 @@ build_package_cache_once() {
 }
 
 seed_package_cache_fast() {
-  # /data/system/packages.list is root-readable very early and contains package->UID
-  # mappings. Use it as the fast boot path; a richer pm/cmd refresh can happen later.
   if [ -r /data/system/packages.list ]; then
     : > "$PACKAGE_UID_CACHE.fast"
     append_packages_list_all_users "$PACKAGE_UID_CACHE.fast"
@@ -421,8 +416,6 @@ prepare_package_cache() {
 }
 
 resolve_pkg_direct() {
-  # Last-chance per-package lookup. A full PackageManager listing can be incomplete
-  # on some vendor ROMs even though a filtered query already sees the package.
   local pkg="$1" user raw="$RUN_DIR/pkg_direct.$$" before after
   [ -n "$pkg" ] || return 1
   before=$(wc -l < "$PACKAGE_UID_CACHE" 2>/dev/null | tr -d ' ')
@@ -647,9 +640,6 @@ ensure_conntrack_accounting() {
   [ "$CONNTRACK_ACCT" = "1" ]
 }
 
-# Root-manager lifecycle. KernelSU/KernelSU Next/APatch have a dedicated
-# boot-completed.sh stage, so late_start stays lightweight. Magisk has no module
-# boot-completed hook; its service.sh waits for sys.boot_completed itself.
 is_ksu_or_apatch=0
 if [ "${KSU:-}" = "true" ] || [ -n "${KSU_VER:-}" ] || [ -d /data/adb/ksu ] || [ -n "${APATCH:-}" ] || [ -d /data/adb/ap ]; then
   is_ksu_or_apatch=1
@@ -658,7 +648,6 @@ if [ -z "$SERVICE_ACTION" ]; then
   write_start_state "WAITING" "Ожидание завершения загрузки Android" 5
   boot_trace "late_start lifecycle entry manager_async=$is_ksu_or_apatch"
   if [ "$is_ksu_or_apatch" = "1" ]; then
-    # boot-completed.sh will invoke service.sh boot. Do not keep a detached child.
     rm -f "$LATE_START_PID_FILE" 2>/dev/null
     exit 0
   fi
@@ -678,7 +667,6 @@ if [ -z "$SERVICE_ACTION" ]; then
   sleep 2
 fi
 
-# Explicit boot/reload paths continue immediately.
 if [ "$SERVICE_ACTION" != "reload" ] && [ "$SERVICE_ACTION" != "boot" ] && [ "$SERVICE_ACTION" != "reload-apps" ] && [ "$SERVICE_ACTION" != "reload-profile" ]; then
   write_start_state "WAITING" "Ожидание sys.boot_completed" 5
   until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 2; done
@@ -690,7 +678,6 @@ fi
 : "${TETHER_IFACES:=ap+ swlan+ softap+ ap_br_wlan+ ap_br_softap+ rndis+ usb+ ncm+ bnep+ bt-pan+ pan+ tether+ wlan1 wlan2 wlan3 wlan4 wifi1 wifi2 wifi3 wifi4}" "${VPN_WATCH_INTERVAL:=2}" "${VPN_RETRY_INTERVAL:=1}" "${VPN_ROLE_RECHECK:=30}" "${VPN_EVENT_DEBOUNCE:=2}" "${VPN_NETLINK_MONITOR:=1}"
 : "${AUTO_REPLY_PACKETS:=12}" "${FLOW_CONNMARK:=0x10000000/0x10000000}"
 case "$AUTO_APPS_ENABLED" in 0|1) ;; *) AUTO_APPS_ENABLED=1 ;; esac
-# v2.8 migration safety: old SIMPLE/AUTO mean SMART; only explicit CUSTOM stays expert.
 case "$STRATEGY_MODE" in SIMPLE|AUTO|'') STRATEGY_MODE=SMART ;; SMART|CUSTOM) ;; *) STRATEGY_MODE=SMART ;; esac
 
 if [ "$SERVICE_ACTION" = "reload-apps" ]; then
@@ -732,14 +719,14 @@ reload_active_profile() {
   strategy_read "$profile" || { log_w "Быстрый reload отклонён: невалидный AUTO_PROFILE=$profile"; return 1; }
   profile_name=$STRATEGY_FILE_NAME
   profile_signature=$(strategy_catalog_signature)
-  if [ "$STRATEGY_FILE_MODE" = DIRECT ]; then
-    youtube_args="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=pass"
-  else
-    youtube_args=$STRATEGY_FILE_ARGS
-  fi
+  # Переход в DIRECT или из него меняет сам состав netfilter-правил, а быстрый
+  # путь их не трогает. В этих случаях отдаём управление полному reload.
+  [ "$STRATEGY_FILE_MODE" = DIRECT ] && return 1
+  [ -f "$RUN_DIR/direct.flag" ] && return 1
+  youtube_args=$STRATEGY_FILE_ARGS
   host=""
   [ -s "$EXCLUDE_DOMAINS_FILE" ] && host="--hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
-  special="--hostlist=$SMART_YOUTUBE_FILE $host $youtube_args --new"
+  special="$host $youtube_args --new"
   debug_arg=""; [ "$NFQWS_DEBUG" = 1 ] && debug_arg="--debug=@$NFQWS_LOG"
   [ -x "$BIN_DIR/nfqws2" ] || return 1
   stop_pid "$NFQWS_PID_FILE" "nfqws2 для смены AUTO-профиля" nfqws2
@@ -803,19 +790,14 @@ if [ "$package_cache_ok" != "1" ] && [ "${MODE:-INCLUDE}" != "GLOBAL" ]; then
 fi
 
 stop_pid "$NFQWS_PID_FILE" "nfqws2" nfqws2
-# Restart the network watcher on every reload so changed VPN/tether settings take effect.
 stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
 stop_pid "$HEALTH_WATCHER_PID_FILE" "health watcher" health-watch
 stop_owned_nfqws
 cleanup_iptables
-# Remove policy/NAT state from previous releases even if VPN Hotspot is now disabled.
 "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
 
 write_start_state "STARTING" "Проверка netfilter и возможностей ядра" 38
 CONNTRACK_ACCT=0
-# Probe extensions first. SMART_NATIVE is enabled only when the kernel can feed
-# a bounded number of server reply packets to zapret2 circular. Otherwise SMART
-# remains automatic but uses fixed service-aware profiles (SMART_COMPAT).
 probe_firewall || { write_health; write_start_state "ERROR" "Netfilter/NFQUEUE недоступен" 100; exit 1; }
 if [ "$STRATEGY_MODE" = "SMART" ] && [ "$CONNBYTES4" = "1" ] && [ "$CONNMARK4" = "1" ]; then
   ensure_conntrack_accounting || true
@@ -837,7 +819,7 @@ else
   else
     STRATEGY_EFFECTIVE="SMART_ACTIVE"
     DESYNC_ARGS="$DESYNC_ARGS_SMART_COMPAT_GENERAL"
-    AUTO_PROFILE="${AUTO_PROFILE_DEFAULT:-strategy_1}"
+    AUTO_PROFILE="${AUTO_PROFILE_DEFAULT:-strategy_2}"
     AUTO_PROFILE_NAME="UNKNOWN"
     AUTO_STRATEGY_SIGNATURE="UNKNOWN"
     AUTO_STATUS="DEFAULT"
@@ -848,15 +830,27 @@ else
       AUTO_PROFILE=$(sh "$MODDIR/auto-select.sh" current 2>/dev/null | tail -n1)
       [ -f "$AUTO_RESULT_FILE" ] && . "$AUTO_RESULT_FILE"
     fi
-    if strategy_read "$AUTO_PROFILE"; then
+    if ! strategy_read "$AUTO_PROFILE"; then
+      AUTO_PROFILE=$(strategy_first_valid)
+      strategy_read "$AUTO_PROFILE" || AUTO_PROFILE_NAME="INVALID"
+    fi
+    if [ "$AUTO_PROFILE_NAME" = "INVALID" ]; then
+      AUTO_PROFILE="${AUTO_PROFILE_DEFAULT:-strategy_2}"
+      SMART_AUTO_ARGS=""
+      SMART_YOUTUBE_ARGS="$DESYNC_ARGS_SMART_COMPAT_YOUTUBE"
+      health_warn "Каталог стратегий пуст или невалиден; используется встроенный SMART_COMPAT профиль"
+    else
       AUTO_PROFILE_NAME=$STRATEGY_FILE_NAME
       AUTO_STRATEGY_SIGNATURE=$(strategy_catalog_signature)
-      if [ "$STRATEGY_FILE_MODE" = DIRECT ]; then SMART_YOUTUBE_ARGS="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=pass"; else SMART_YOUTUBE_ARGS=$STRATEGY_FILE_ARGS; fi
-    else
-      AUTO_PROFILE=$(strategy_first_valid)
-      strategy_read "$AUTO_PROFILE" || { AUTO_PROFILE="strategy_1"; AUTO_PROFILE_NAME="INVALID"; SMART_YOUTUBE_ARGS="$DESYNC_ARGS_SMART_COMPAT_YOUTUBE"; }
-      [ "$AUTO_PROFILE_NAME" = INVALID ] || { AUTO_PROFILE_NAME=$STRATEGY_FILE_NAME; SMART_YOUTUBE_ARGS=$STRATEGY_FILE_ARGS; }
-      [ "$AUTO_PROFILE_NAME" = INVALID ] || AUTO_STRATEGY_SIGNATURE=$(strategy_catalog_signature)
+      if [ "$STRATEGY_FILE_MODE" = DIRECT ]; then
+        SMART_DIRECT=1
+      else
+        # Стратегия, прошедшая probe, обслуживает ВЕСЬ TLS/443 трафик, а не только
+        # хостлист YouTube. Встроенный SMART_COMPAT остаётся профилем-запаской и
+        # подхватывает то, что не попало под первый фильтр (в первую очередь HTTP/80).
+        SMART_AUTO_ARGS=$STRATEGY_FILE_ARGS
+        SMART_YOUTUBE_ARGS=""
+      fi
     fi
     missing=""
     [ "$CONNTRACK_ACCT" = "1" ] || missing="${missing}${missing:+, }nf_conntrack_acct"
@@ -864,6 +858,18 @@ else
     [ "$CONNBYTES4" = "1" ] || missing="${missing}${missing:+, }xt_connbytes"
     compat_notice "SMART_ACTIVE: ядро без полного bounded reply-feed (${missing:-capability}); активный профиль $AUTO_PROFILE / $AUTO_PROFILE_NAME (${AUTO_STATUS:-DEFAULT})"
   fi
+fi
+
+# DIRECT — сеть прошла probe без обхода. Не поднимаем ни NFQUEUE-правила, ни
+# nfqws2: нулевая нагрузка на CPU и батарею, пока сеть не сменится. Watcher-ы
+# остаются живыми и перезапустят подбор при смене Wi-Fi/сотовой сети.
+: "${SMART_DIRECT:=0}"
+[ "${AUTO_ALLOW_DIRECT:-1}" = "1" ] || SMART_DIRECT=0
+if [ "$SMART_DIRECT" = "1" ]; then
+  AUTO_STATUS="DIRECT"
+  COMPAT_STATUS="DIRECT"
+  COMPAT_NOTES="DIRECT: сеть ${AUTO_NETWORK_IFACE:-?} не фильтруется, обход отключён"
+  log_i "SMART_ACTIVE DIRECT: правила и nfqws2 не устанавливаются (профиль $AUTO_PROFILE / $AUTO_PROFILE_NAME)"
 fi
 log_i "SMART capabilities: acct=$CONNTRACK_ACCT connmark=$CONNMARK4 connbytes=$CONNBYTES4; requested=$STRATEGY_MODE engine=$STRATEGY_EFFECTIVE compat=$COMPAT_STATUS"
 log_i "SMART active selection: profile=${AUTO_PROFILE:-native} status=${AUTO_STATUS:-native} network=${AUTO_NETWORK_KEY:-none} iface=${AUTO_NETWORK_IFACE:-none}"
@@ -896,6 +902,17 @@ EXCLUDE_UID_COUNT=$(echo "$EXCLUDE_UIDS" | wc -w | tr -d ' ')
 log_i "Resolved UIDs: SMART effective=$APP_UID_COUNT auto=$AUTO_APP_UID_COUNT manual=$MANUAL_APP_UID_COUNT exclude=$EXCLUDE_UID_COUNT source=$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
 [ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из AUTO/ручных приложений не разрешён"
 
+DIRECT_MODE_FILE="$RUN_DIR/direct.flag"
+rm -f "$DIRECT_MODE_FILE" 2>/dev/null
+if [ "$SMART_DIRECT" = "1" ]; then
+  # Ни одной записи в netfilter и ни одного userspace-процесса: на этой сети
+  # обход не нужен. Флаг direct.flag говорит health-watcher, что отсутствие
+  # nfqws2 — это штатное состояние, а не сбой.
+  : > "$DIRECT_MODE_FILE" 2>/dev/null
+  chmod 0600 "$DIRECT_MODE_FILE" 2>/dev/null || true
+  write_start_state "STARTING" "DIRECT: обход на этой сети не требуется" 90
+  log_i "DIRECT: NFQUEUE/QUIC правила и nfqws2 не устанавливаются"
+else
 write_start_state "STARTING" "Установка AntiDPI/NFQUEUE правил" 62
 ipt4 -t mangle -N ZAPRET2_MANGLE || health_error "Не удалось создать IPv4 mangle chain"
 ipt4 -t filter -N ZAPRET2_FILTER || health_error "Не удалось создать IPv4 filter chain"
@@ -943,8 +960,6 @@ esac
 ipt4 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || health_error "Не удалось подключить ZAPRET2_MANGLE к OUTPUT"
 [ "$NFQ6" = "1" ] && ipt6 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || true
 
-# SMART_NATIVE circular keeps per-connection state and must see server replies too.
-# Queue only the first reply packets to avoid sending bulk downloads to userspace.
 if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
   ipt4 -t mangle -N ZAPRET2_MANGLE_IN || health_error "Не удалось создать IPv4 INPUT reply chain"
   ipt4 -t mangle -A ZAPRET2_MANGLE_IN -p tcp -m multiport --sports "$PORTS_TCP" -m connmark --mark "$FLOW_CONNMARK" -m connbytes --connbytes 1:"$AUTO_REPLY_PACKETS" --connbytes-dir reply --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "SMART_NATIVE IPv4 reply NFQUEUE rule failed"
@@ -957,9 +972,6 @@ if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
   log_i "SMART_NATIVE conntrack feed: server replies 1..$AUTO_REPLY_PACKETS queued on INPUT/FORWARD"
 fi
 
-# Hotspot/Tethering is scoped to interfaces Android is currently using as
-# downstream. The audited resolver uses Android roles + conservative fallbacks
-# instead of assuming wlan2, tun0 or a fixed vendor naming scheme.
 write_start_state "STARTING" "Настройка раздачи и VPN-маршрутизации" 74
 if [ "$ENABLE_HOTSPOT" = "1" ]; then
   log_i "Tether scope: dynamic role detection (Android tether state/config + network fallback)"
@@ -983,11 +995,8 @@ if [ "$ENABLE_HOTSPOT" = "1" ]; then
     fi
   fi
 
-
   "$MODDIR/tether-sync.sh" apply >/dev/null 2>&1 || health_error "Не удалось синхронизировать динамические tether AntiDPI правила"
 
-  # Clean legacy/old VPN policy first, then apply routing for whichever interface
-  # is currently the VPN role. AntiDPI remains the default fallback.
   "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
   if [ "${ENABLE_VPN_HOTSPOT:-0}" = "1" ]; then
     vpn_apply_rc=0
@@ -1034,13 +1043,15 @@ fi
 HOST_ARGS=""
 [ -s "$EXCLUDE_DOMAINS_FILE" ] && HOST_ARGS="$HOST_ARGS --hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
 SPECIAL_ARGS=""
-# SMART service profiles are intentional first-match profiles. YouTube gets a
-# dedicated strategy; everything else falls through to the general SMART engine.
-# Unlike the old DOMAIN_OVERRIDE switch, this is always part of SMART and is
-# reported explicitly in diagnostics/UI.
-if [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
+if [ "$STRATEGY_MODE" = "SMART" ] && [ -n "${SMART_AUTO_ARGS:-}" ]; then
+  # Профиль, прошедший активный probe, обслуживает весь TLS/443, а не только
+  # хостлист YouTube. SMART_COMPAT_GENERAL остаётся вторым профилем и
+  # подхватывает всё остальное (в первую очередь HTTP/80).
+  SPECIAL_ARGS="$HOST_ARGS $SMART_AUTO_ARGS --new"
+  log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
+elif [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
   SPECIAL_ARGS="--hostlist=$SMART_YOUTUBE_FILE $HOST_ARGS $SMART_YOUTUBE_ARGS --new"
-  log_i "SMART profile: YouTube=$(grep -cv '^[[:space:]]*\(#\|$\)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"
+  log_i "SMART profile: YouTube=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"
 else
   log_i "SMART service profile unavailable or CUSTOM selected; using general profile only"
 fi
@@ -1085,8 +1096,6 @@ elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; th
   nfqws_launcher_pid=$!
   boot_trace "nfqws2 launch method=toybox-setsid launcher_pid=$nfqws_launcher_pid"
 else
-  # Compatibility fallback for unusual environments. On supported root managers
-  # setsid is expected; nohup alone does not create a new session/process group.
   health_warn "setsid недоступен: nfqws2 запущен через nohup compatibility fallback"
   nohup ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
     --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
@@ -1097,9 +1106,6 @@ fi
 sleep 1
 nfqws_pid="$nfqws_launcher_pid"
 if ! pid_is_owned "$nfqws_pid" nfqws2; then
-  # Some setsid implementations fork when the caller is a process-group leader.
-  # The old launcher PID may then disappear; recover the exact nfqws2 PID by
-  # ownership (comm + cwd). service lock and stop_owned_nfqws make it unique.
   nfqws_pid=$(find_owned_nfqws_pid)
 fi
 write_start_state "STARTING" "Проверка процесса и NFQUEUE" 94
@@ -1129,9 +1135,9 @@ ipt4_quiet -t mangle -C OUTPUT -j ZAPRET2_MANGLE || health_error "Проверк
 [ "$FORCE_TCP" != "1" ] || ipt4_quiet -t filter -C OUTPUT -j ZAPRET2_FILTER || health_error "Проверка hook: ZAPRET2_FILTER не подключена к IPv4 OUTPUT"
 [ "$ENABLE_HOTSPOT" != "1" ] || ipt4_quiet -t mangle -C FORWARD -j ZAPRET2_MANGLE_FORWARD || health_error "Проверка hook: Hotspot NFQUEUE не подключён к IPv4 FORWARD"
 [ "$STRATEGY_EFFECTIVE" != "SMART_NATIVE" ] || ipt4_quiet -t mangle -C INPUT -j ZAPRET2_MANGLE_IN || health_error "Проверка hook: SMART_NATIVE reply feed не подключён к IPv4 INPUT"
+fi
 write_health
 
-# Keep one config/list watcher alive across reloads; recreate it if it died.
 watch_pid=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
 if [ -z "$watch_pid" ] || ! pid_is_owned "$watch_pid" config-watch; then
   rm -f "$WATCHER_PID_FILE" 2>/dev/null
@@ -1148,9 +1154,6 @@ if [ -z "$watch_pid" ] || ! pid_is_owned "$watch_pid" config-watch; then
   fi
 fi
 
-# Low-overhead watcher: rtnetlink + /data/misc/net are the fast path. The main loop
-# only checks a tiny event flag; expensive net-role/dumpsys resolution runs after
-# coalesced events or a low-frequency safety recheck.
 if [ "${ENABLE_HOTSPOT:-0}" = "1" ]; then
   vpn_wpid=$(cat "$VPN_WATCHER_PID_FILE" 2>/dev/null)
   if [ -z "$vpn_wpid" ] || ! pid_is_owned "$vpn_wpid" vpn-watch; then
@@ -1183,8 +1186,6 @@ log_i "Служба запущена: nfqws2 PID=$nfqws_pid health=$HEALTH"
 if [ "$STRATEGY_EFFECTIVE" = "SMART_ACTIVE" ] && [ "${AUTO_SELECT_ENABLED:-1}" = 1 ] && [ -x "$MODDIR/auto-select.sh" ]; then
   sh "$MODDIR/auto-select.sh" schedule >/dev/null 2>&1 || true
 fi
-# Compatibility export for users who collect files from /sdcard/eCubz. This is
-# deliberately post-READY and never participates in startup success/failure.
 if [ -x "$MODDIR/log-export.sh" ]; then
   if command -v setsid >/dev/null 2>&1; then
     setsid sh "$MODDIR/log-export.sh" once >/dev/null 2>&1 &

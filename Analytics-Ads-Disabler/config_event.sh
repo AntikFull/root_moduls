@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# BusyBox inotifyd callback: EVENTS WATCHED_PATH [CHILD]
-# Watches only user-editable policy/config files inside DATA_DIR.
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
@@ -14,9 +12,6 @@ case "$child" in
 esac
 
 log "CONFIG-FS event=$events file=$child"
-# Editors may emit several events for a single save (write + rename).  A tiny
-# settle delay lets the final file land; reconcile_config_if_changed re-checks
-# the hash under the global operation lock and deduplicates the event burst.
 sleep 1
 reconcile_config_if_changed "inotify:$events:$child"
 exit $?

@@ -1,3 +1,2 @@
-# NAME=USER_PADENCAP_TLSMOD
---lua-desync=fake:tcp_ts=-1000:tcp_ack=-1000:tcp_ts_up:badseq:tls_mod=padencap:repeats=4
---lua-desync=multisplit:pos=1,5:seqovl=5:seqovl_pattern=0x1603030000:padencap
+# NAME=SPLIT_SAFE
+--lua-desync=multidisorder:pos=1,sniext+1,midsld,endhost-1

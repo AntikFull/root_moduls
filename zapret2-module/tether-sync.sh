@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# Rebuild exact Hotspot/USB AntiDPI rules for the currently detected downstreams.
-# v2.7.x: idempotent apply, strict IPv4 failures, DNS UDP+TCP/53.
 
 umask 077
 MODDIR=${0%/*}
@@ -45,7 +43,6 @@ EOV
   done
   return 0
 }
-
 
 dns_statistic_available() {
   local probe="ZAPRET2_DNS_PROBE_$$"
@@ -115,8 +112,6 @@ add_dns_proto_rules_for_iface() {
     valid_ipv4 "$dns_server" || { log "invalid DNS server ignored: $dns_server"; return 1; }
     [ -n "$first" ] || first="$dns_server"
   done
-  # Multi-resolver balancing is optional. Some vendor kernels omit xt_statistic;
-  # in that case keep DNS forcing functional by using the first validated resolver.
   if [ "$server_count" -gt 1 ] && ! dns_statistic_available; then
     log "xt_statistic unavailable: DNS $proto fallback to first resolver $first"
     ipt4 -t nat -A ZAPRET2_NAT_PREROUTING -i "$tif" -p "$proto" --dport 53 -j DNAT --to "$first" || return 1

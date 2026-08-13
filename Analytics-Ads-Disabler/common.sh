@@ -1,17 +1,9 @@
 #!/system/bin/sh
-# Shared library for Analytics & Ads Disabler v4 Universal Edition.
-# POSIX/BusyBox ash compatible; intended for Magisk, KernelSU and APatch.
 
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
 LOG_DIR="${LOG_DIR:-$DATA_DIR/logs}"
 mkdir -p "$LOG_DIR" 2>/dev/null
 
-# ---- Portable toolchain bootstrap ------------------------------------------
-# Every worker is spawned through its own `#!/system/bin/sh` shebang, so the
-# root manager's BusyBox standalone mode is NOT inherited by child scripts.
-# Stock Android below API 34 ships no awk/strings at all, and inotifyd/timeout
-# are BusyBox-only everywhere. Resolve BusyBox once by absolute path and expose
-# its applets through PATH so every fallback branch in this module is real.
 AAD_APPLET_DIR="$DATA_DIR/bin"
 
 aad_resolve_busybox() {
@@ -28,8 +20,6 @@ aad_resolve_busybox() {
     return 1
 }
 
-# System binaries keep priority; BusyBox only fills the gaps. The applet dir is
-# appended, never prepended, so a working toybox implementation is still used.
 aad_setup_applet_path() {
     case ":$PATH:" in *":$AAD_APPLET_DIR:"*) return 0 ;; esac
     [ -n "$AAD_BUSYBOX" ] || return 1
@@ -54,8 +44,6 @@ AAD_BUSYBOX="$(aad_resolve_busybox 2>/dev/null)"
 export AAD_BUSYBOX
 aad_setup_applet_path >/dev/null 2>&1 || true
 
-# Single entry point for every BusyBox call site. Falls back to a bare `busybox`
-# lookup so behaviour is unchanged on setups where PATH already provides it.
 aad_bb() {
     if [ -n "$AAD_BUSYBOX" ]; then
         "$AAD_BUSYBOX" "$@"
@@ -68,14 +56,15 @@ aad_bb() {
 aad_have_bb() {
     [ -n "$AAD_BUSYBOX" ] || command -v busybox >/dev/null 2>&1
 }
-# service.sh may preselect an internal runtime log so boot/runtime never depends
-# on emulated storage readiness. Other entry points use the unified logs dir.
 if [ -z "${LOGFILE:-}" ]; then
     LOGFILE="$LOG_DIR/debug.log"
 fi
 DISABLED_LIST="$DATA_DIR/disabled_components.list"       # user|pkg/component|CATEGORY
 COMPONENT_STATE="$DATA_DIR/component_state.list"         # user|pkg/component|original_override_state
 STATE_FILE="$DATA_DIR/package_state.list"                # user|package|versionCode
+PACKAGE_VERIFIED_FILE="$DATA_DIR/package_verified.list"  # |user|package|versionCode|
+PACKAGE_VERIFIED_HASH_FILE="$DATA_DIR/.package_verified.hash"
+LAST_FULL_VERIFY_FILE="$DATA_DIR/.last_full_verify"
 RULES_FILE="$DATA_DIR/rules.conf"
 SETTINGS_FILE="$DATA_DIR/settings.conf"
 WHITELIST_FILE="$DATA_DIR/whitelist.list"
@@ -110,7 +99,6 @@ MANIFEST_CACHE_DIR="$DATA_DIR/manifest_cache/v1"
 IFW_DIR="${IFW_DIR:-/data/system/ifw}"
 IFW_RULE_FILE="$IFW_DIR/analytics_ads_disabler.xml"
 
-# Compatibility dispatcher. It selects commands once per device/ROM and never evals the profile.
 AAD_LIB_DIR="${MODDIR:-${0%/*}}"
 MODULE_PROP="$AAD_LIB_DIR/module.prop"
 module_prop_get() {
@@ -127,8 +115,6 @@ MODULE_VERSION_CODE="$(module_prop_get versionCode)"
 MODULE_VERSION_LABEL="$MODULE_NAME $MODULE_VERSION (versionCode=$MODULE_VERSION_CODE)"
 if [ -f "$AAD_LIB_DIR/compat.sh" ]; then
     . "$AAD_LIB_DIR/compat.sh"
-    # service.sh may source this before Android has completed boot. In that
-    # path defer all Binder/capability probing until sys.boot_completed=1.
     if [ "${AAD_DEFER_CAPABILITY_INIT:-0}" != "1" ]; then
         ensure_capability_profile >/dev/null 2>&1
         load_capabilities
@@ -138,10 +124,6 @@ fi
 CATEGORIES="ADS ANALYTICS"
 SYSTEM_PROTECTED="android com.android.systemui com.android.settings com.android.packageinstaller com.android.permissioncontroller com.google.android.permissioncontroller com.android.phone com.android.providers.settings com.android.providers.downloads com.android.documentsui com.android.shell com.android.bluetooth com.android.nfc com.android.location.fused com.android.networkstack com.google.android.networkstack com.android.networkstack.tethering com.google.android.networkstack.tethering com.google.android.gms com.android.vending com.google.android.gsf com.google.android.inputmethod.latin com.huawei.hwid com.huawei.hms.config.service com.sec.android.app.samsungapps com.topjohnwu.magisk me.weishu.kernelsu me.bmax.apatch"
 
-# OEM shells keep push transports, launchers and IMEs under vendor namespaces
-# that the AOSP list above does not cover. These only come into play when the
-# user opts into SCAN_SYSTEM_APPS=1, but a mistake there costs notifications or
-# a home screen, so the protection is unconditional and cheap.
 aad_oem_protected_packages() {
     _aop_id=$(getprop ro.product.manufacturer 2>/dev/null)
     _aop_id="$_aop_id $(getprop ro.product.brand 2>/dev/null)"
@@ -184,8 +166,6 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)] $*" >> "$LOGFILE"
 }
 
-# Monotonic millisecond clock for phase telemetry. /proc/uptime is available on
-# Android even when date(1) lacks GNU %N support.
 aad_now_ms() {
     if [ -r /proc/uptime ]; then
         awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime 2>/dev/null && return 0
@@ -218,12 +198,8 @@ DIAGFILE="$LOG_DIR/diagnostics.log"
 SDCARD_LOG_DIR="${SDCARD_LOG_DIR:-/sdcard/eCubz/logs/Analytics_Ads_Disabler}"
 
 sync_logs_to_sdcard() {
-    # Best-effort only: never let emulated-storage health block the core runtime.
     [ "$(read_bool_setting LOG_MIRROR 1)" = "1" ] || return 0
     mkdir -p "$SDCARD_LOG_DIR" 2>/dev/null || return 0
-    # Emulated storage cannot hold 0600 permissions, so the package-level
-    # inventories (which list every installed app and its ad SDKs) are mirrored
-    # only on explicit opt-in. Runtime/diagnostic logs are always mirrored.
     _slts_files="debug.log debug.previous.log boot_trace.log diagnostics.log install_diagnostics.log uninstall.log"
     if [ "$(read_bool_setting LOG_MIRROR_FULL 0)" = "1" ]; then
         _slts_files="$_slts_files component_audit.log sdk_fingerprint.log manifest_scan.log ad_surface_scan.log ad_killer.log ad_killer.previous.log"
@@ -304,7 +280,6 @@ collect_deep_diagnostics() {
     diag_capture_sh "root-manager-env" 'echo "KSU=$KSU KSU_VER=$KSU_VER KSU_VER_CODE=$KSU_VER_CODE APATCH=$APATCH KERNELPATCH=$KERNELPATCH MAGISK_VER=$MAGISK_VER MAGISK_VER_CODE=$MAGISK_VER_CODE"; command -v magisk 2>/dev/null; command -v ksud 2>/dev/null; command -v apd 2>/dev/null; ls -l /data/adb/ksu/bin 2>/dev/null | head -n 80'
     diag_capture_sh "tool-resolution" 'for x in sh cmd pm su runcon service dumpsys getprop toybox busybox; do printf "%s => " "$x"; command -v "$x" 2>/dev/null || echo missing; done; for x in /system/bin/cmd /system/bin/pm /system/bin/service /system/bin/runcon /system/bin/sh; do ls -lZ "$x" 2>/dev/null || ls -l "$x" 2>/dev/null; done'
 
-    # Help/capability surfaces. These are intentionally verbose and captured once per Action run.
     diag_capture_sh "cmd --help" 'cmd --help 2>&1'
     diag_capture_sh "cmd -l" 'cmd -l 2>&1'
     diag_capture_sh "cmd package help" 'cmd package help 2>&1'
@@ -314,7 +289,6 @@ collect_deep_diagnostics() {
     diag_capture_sh "service list" 'service list 2>&1'
     diag_capture_sh "service check package/activity/user" 'service check package 2>&1; service check activity 2>&1; service check user 2>&1'
 
-    # Read-only Binder smoke tests in the exact execution domains used by the cascade.
     smoke='echo "pid=$$ ppid=$PPID uid=$(id -u 2>/dev/null) gid=$(id -g 2>/dev/null) ctx=$(cat /proc/self/attr/current 2>/dev/null | tr -d "\000")"; echo "-- activity current user --"; cmd activity get-current-user 2>&1; echo "rc=$?"; echo "-- user list --"; cmd user list 2>&1 | head -n 20; echo "rc=${PIPESTATUS:-n/a}"; echo "-- package list --"; cmd package list packages --user 0 2>&1 | head -n 5; echo "-- package help head --"; cmd package help 2>&1 | head -n 20'
     diag_capture_sh "binder-smoke/direct" "$smoke"
     diag_capture_su "binder-smoke/su-2000" 2000 "$smoke"
@@ -388,7 +362,6 @@ read_setting() {
     if [ -f "$SETTINGS_FILE" ]; then
         val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$SETTINGS_FILE" | head -n1 | tr -d '\r')
     fi
-# Backward compatibility with v3 rules.conf settings.
     if [ -z "$val" ] && [ -f "$RULES_FILE" ]; then
         val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$RULES_FILE" | head -n1 | tr -d '\r')
     fi
@@ -555,19 +528,41 @@ read_global_list() {
     [ -f "$WHITELIST_FILE" ] && trim_config_lines < "$WHITELIST_FILE" | sort -u
 }
 
+aad_lock_write_owner() {
+    printf '%s
+' "$$" > "$1/pid" 2>/dev/null
+    printf '%s
+' "$(aad_proc_starttime "$$")" > "$1/starttime" 2>/dev/null
+    return 0
+}
+
+aad_lock_owner_alive() {
+    _aloa_dir="$1"
+    _aloa_pid=$(cat "$_aloa_dir/pid" 2>/dev/null)
+    case "$_aloa_pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$_aloa_pid" 2>/dev/null || return 1
+    _aloa_saved=$(cat "$_aloa_dir/starttime" 2>/dev/null)
+    [ -n "$_aloa_saved" ] || return 1
+    _aloa_live=$(aad_proc_starttime "$_aloa_pid")
+    [ -n "$_aloa_live" ] && [ "$_aloa_saved" = "$_aloa_live" ]
+}
+
 acquire_lock() {
     retries=0
-    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-        oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-        if [ -z "$oldpid" ] || ! kill -0 "$oldpid" 2>/dev/null; then
+    stale_removals=0
+    while ! (umask 077; mkdir "$LOCK_DIR") 2>/dev/null; do
+        if ! aad_lock_owner_alive "$LOCK_DIR"; then
+            log "LOCK-STALE removing owner=$(cat "$LOCK_DIR/pid" 2>/dev/null) (dead pid, reused pid or reboot leftover)"
             rm -rf "$LOCK_DIR" 2>/dev/null
+            stale_removals=$((stale_removals + 1))
+            [ "$stale_removals" -ge 5 ] && return 1
             continue
         fi
         retries=$((retries + 1))
         [ "$retries" -ge 60 ] && return 1
         sleep 1
     done
-    echo $$ > "$LOCK_DIR/pid" 2>/dev/null
+    aad_lock_write_owner "$LOCK_DIR"
     return 0
 }
 
@@ -575,24 +570,22 @@ release_lock() {
     rm -rf "$LOCK_DIR" 2>/dev/null
 }
 
-# File-level DB locks are separate from the scan/reconciliation lock. They make
-# state mutations safe even during module upgrades or unexpected overlapping
-# callbacks. BusyBox ash may preserve $$ in subshells, so never derive temp
-# filenames from $$ alone.
 aad_db_lock() {
     lock="$1"
     tries=0
-    while ! mkdir "$lock" 2>/dev/null; do
-        owner=$(cat "$lock/pid" 2>/dev/null)
-        if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
+    stale=0
+    while ! (umask 077; mkdir "$lock") 2>/dev/null; do
+        if ! aad_lock_owner_alive "$lock"; then
             rm -rf "$lock" 2>/dev/null
+            stale=$((stale + 1))
+            [ "$stale" -ge 5 ] && return 1
             continue
         fi
         tries=$((tries + 1))
         [ "$tries" -ge 100 ] && return 1
         sleep 0.1 2>/dev/null || sleep 1
     done
-    echo $$ > "$lock/pid" 2>/dev/null
+    aad_lock_write_owner "$lock"
     return 0
 }
 
@@ -605,8 +598,6 @@ aad_mktemp_near() {
     if command -v mktemp >/dev/null 2>&1; then
         mktemp "${target}.tmp.XXXXXX" 2>/dev/null && return 0
     fi
-    # Fallback for very small Android toolboxes: include uptime checksum in
-    # addition to PID so nested ash subshells do not collide on one filename.
     salt=$(cat /proc/uptime 2>/dev/null | cksum 2>/dev/null | awk '{print $1}')
     [ -n "$salt" ] || salt=0
     echo "${target}.tmp.$$.${salt}"
@@ -680,8 +671,6 @@ ad_killer_log_init() {
     fi
 }
 
-# Keep one previous generation instead of discarding all history on every
-# reconciliation, so a "the ads came back after an update" report stays debuggable.
 ad_killer_log_rotate() {
     [ -s "$AD_KILLER_LOG_FILE" ] || return 0
     mv -f "$AD_KILLER_LOG_FILE" "$LOG_DIR/ad_killer.previous.log" 2>/dev/null || true
@@ -711,14 +700,6 @@ ad_killer_extract_host_map() {
     ' "$RULES_FILE" | sort -u
 }
 
-# ---- Xposed / LSPosed bridge ------------------------------------------------
-# Component and network blocking both act around the ad, never on it: the
-# in-app view hierarchy still reserves the banner slot, so an empty gap stays
-# where the ad was. Only an in-process hook can remove that. This module does
-# not hook anything itself; when an Xposed-family framework is present it
-# publishes the completed Ad Surface evidence in a machine-readable form so a
-# companion Xposed module can consume an exact per-package target list instead
-# of re-implementing DEX discovery.
 XPOSED_TARGET_JSON="$DATA_DIR/xposed_targets.json"
 XPOSED_TARGET_LIST="$DATA_DIR/xposed_targets.list"
 
@@ -745,9 +726,6 @@ aad_xposed_bridge_enabled() {
     esac
 }
 
-# Publish one record per user/package with the SDKs, surfaces and strongest
-# evidence found. Read-only with respect to policy: nothing here disables
-# anything, it only describes what a hook layer would need to target.
 aad_export_xposed_targets() {
     [ -s "$AD_SURFACE_SCAN_FILE" ] || return 1
     aad_xposed_bridge_enabled || {
@@ -810,7 +788,6 @@ aad_export_xposed_targets() {
 
     [ -s "$_axt_json" ] || { rm -f "$_axt_json" "$_axt_list" 2>/dev/null; return 1; }
     [ -f "$_axt_list" ] || : > "$_axt_list"
-    # Readable by the companion module, not by ordinary apps.
     chmod 640 "$_axt_json" "$_axt_list" 2>/dev/null || true
     mv -f "$_axt_json" "$XPOSED_TARGET_JSON" 2>/dev/null || { rm -f "$_axt_json" "$_axt_list" 2>/dev/null; return 1; }
     mv -f "$_axt_list" "$XPOSED_TARGET_LIST" 2>/dev/null || rm -f "$_axt_list" 2>/dev/null
@@ -838,11 +815,6 @@ ad_killer_build_targets_from_surface() {
         return 1
     }
     ad_killer_extract_host_map > "$_ak_hostmap"
-    # Confidence gate. DEX evidence alone means "the SDK format is bundled"
-    # (CAPABILITY); LAYOUT_CONFIRMED/MULTI_EVIDENCE additionally prove an ad
-    # container is referenced from compiled layouts. Note that APP_OPEN and most
-    # NATIVE loaders can never reach LAYOUT_CONFIRMED, so raising this setting
-    # deliberately narrows the Killer to banner-style surfaces.
     _ak_minconf=$(ad_killer_min_confidence)
     awk -F'|' -v minconf="$_ak_minconf" '
         BEGIN {rank["CAPABILITY"]=1; rank["LAYOUT_CONFIRMED"]=2; rank["MULTI_EVIDENCE"]=3; want=rank[minconf]; if (want=="") want=1}
@@ -906,9 +878,6 @@ ad_killer_chain_cleanup_family() {
     while "$_akc_bin" -t filter -D OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1; do :; done
     "$_akc_bin" -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
     "$_akc_bin" -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
-    # Per-UID sub-chains are owned by this module too. Flush them all before
-    # deleting, because a sub-chain still referenced by the parent cannot be
-    # removed and would otherwise leak across reconciliations.
     _akc_subs=$("$_akc_bin" -t filter -S 2>/dev/null | sed -n "s/^-N \(${AD_KILLER_CHAIN}_[0-9][0-9]*\)$/\1/p")
     [ -n "$_akc_subs" ] || return 0
     for _akc_sub in $_akc_subs; do
@@ -920,8 +889,6 @@ ad_killer_chain_cleanup_family() {
     return 0
 }
 
-# One-shot probe for REJECT support. A batch transaction is all-or-nothing, so
-# the verdict must be known before the ruleset is generated.
 ad_killer_reject_target() {
     _akrt_bin="$1"; _akrt_chain="${AD_KILLER_CHAIN}R"
     "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
@@ -946,16 +913,6 @@ ad_killer_restore_bin() {
     esac
 }
 
-# Group rules into one sub-chain per UID and apply the whole family in a single
-# netfilter transaction.
-#
-# Why: with broad SDK coverage a flat chain reaches ~800 rules per family, and
-# every outgoing packet of every app had to walk all of them just to evaluate
-# the owner match. Jumping into a per-UID chain reduces that to one comparison
-# per targeted UID (~50) plus only that app's own host rules. Applying rule by
-# rule also meant ~1600 iptables invocations, which measured at over three
-# minutes on a real device; a single restore transaction is effectively instant
-# and cannot leave a half-built chain behind.
 ad_killer_apply_batch() {
     _akab_bin="$1"; _akab_restore="$2"; _akab_rules="$3"; _akab_mode="$4"; _akab_ips="$5"
     [ -n "$_akab_restore" ] && [ -s "$_akab_rules" ] || return 1
@@ -979,7 +936,6 @@ ad_killer_apply_batch() {
         printf 'COMMIT\n'
     } > "$_akab_file" 2>/dev/null || { rm -f "$_akab_file" 2>/dev/null; return 1; }
 
-    # -n keeps every other table/chain on the device untouched.
     if ! "$_akab_restore" -n "$_akab_file" >/dev/null 2>&1; then
         log "AD-KILLER batch restore failed bin=$_akab_restore file=$_akab_file; falling back to per-rule mode"
         rm -f "$_akab_file" 2>/dev/null
@@ -1009,10 +965,6 @@ ad_killer_cleanup() {
     ad_killer_status_write "$_akc_state" "$_akc_reason"
 }
 
-# Probe the two netfilter matches this layer depends on, separately, so the log
-# says which one is missing instead of a single opaque "unavailable". xt_owner
-# is present on effectively every Android kernel; xt_string is an optional
-# kernel config that many GKI builds omit.
 ad_killer_probe_match() {
     _akpm_bin="$1"; _akpm_kind="$2"; _akpm_chain="${AD_KILLER_CHAIN}P"
     [ -n "$_akpm_bin" ] || return 1
@@ -1039,7 +991,6 @@ ad_killer_probe_match() {
     return "$_akpm_rc"
 }
 
-# Resolution cascade for IP mode. No single resolver exists on every ROM.
 ad_killer_resolve_host() {
     _akrh_host="$1"
     [ -n "$_akrh_host" ] || return 1
@@ -1061,19 +1012,14 @@ ad_killer_add_ip_rule() {
     "$_akir_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j DROP >/dev/null 2>&1
 }
 
-# Cheap liveness check used by the polling watcher: netd rebuilds filter chains
-# on connectivity/VPN/tethering changes and can silently drop our OUTPUT jump.
 ad_killer_chain_alive() {
     _akca_bin=$(ad_killer_iptables_bin 4)
     [ -n "$_akca_bin" ] || return 0
     "$_akca_bin" -t filter -C OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1
 }
 
-
 ad_killer_add_tcp_rule() {
     _akar_bin="$1"; _akar_uid="$2"; _akar_host="$3"
-    # v1 deliberately limits hostname matching to HTTPS/TLS. Besides reducing
-    # rules, this avoids changing unrelated plaintext HTTP traffic for a UID.
     if "$_akar_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
         return 0
     fi
@@ -1108,8 +1054,6 @@ _reconcile_ad_surface_killer_unlocked() {
         return 0
     fi
     if [ ! -s "$AD_KILLER_TARGET_FILE" ]; then
-        # Bootstrap a newly installed Killer from the last completed surface log.
-        # A running/partial index is never trusted for persistent targets.
         if [ -s "$AD_SURFACE_SCAN_FILE" ] && grep -q '|SUMMARY|.*|COMPLETE|' "$AD_SURFACE_SCAN_FILE" 2>/dev/null; then
             if ad_killer_build_targets_from_surface; then
                 _akr_bootstrap_targets=$(grep -c . "$AD_KILLER_TARGET_FILE" 2>/dev/null)
@@ -1136,8 +1080,6 @@ _reconcile_ad_surface_killer_unlocked() {
         }
     ' "$_akr_uidmap" "$AD_KILLER_TARGET_FILE" | sort -u > "$_akr_active"
 
-    # Re-apply whitelists at reconcile time too, so a live whitelist edit removes
-    # network rules immediately without needing a fresh DEX index.
     _akr_filtered=$(aad_mktemp_near "$DATA_DIR/.adkiller_filtered")
     _akr_hostmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_allowed_hosts")
     [ -n "$_akr_filtered" ] && [ -n "$_akr_hostmap" ] || { rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null; return 1; }
@@ -1145,7 +1087,6 @@ _reconcile_ad_surface_killer_unlocked() {
     : > "$_akr_filtered"
     while IFS='|' read -r _akr_user _akr_pkg _akr_uid _akr_sdk _akr_host; do
         [ -n "$_akr_uid" ] || continue
-        # Never trust a stale persistent target after rules.conf was edited.
         grep -Fxq -- "$_akr_sdk|$_akr_host" "$_akr_hostmap" 2>/dev/null || continue
         is_system_protected "$_akr_pkg" && continue
         is_globally_whitelisted "$_akr_pkg" && continue
@@ -1169,10 +1110,6 @@ _reconcile_ad_surface_killer_unlocked() {
         return 0
     fi
 
-    # Mode selection. `string` matches the TLS SNI and is exact but depends on
-    # CONFIG_NETFILTER_XT_MATCH_STRING, which many GKI kernels omit. `ip` needs
-    # only xt_owner (universally present) but blocks resolved addresses, which
-    # can be shared by a CDN - hence explicit opt-in.
     _akr_mode=$(read_setting AD_KILLER_MODE auto | tr '[:upper:]' '[:lower:]')
     case "$_akr_mode" in auto|string|ip) ;; *) _akr_mode=auto ;; esac
     _akr_ip_optin=$(read_bool_setting AD_KILLER_IP_FALLBACK 0)
@@ -1214,7 +1151,6 @@ _reconcile_ad_surface_killer_unlocked() {
 
     _akr4ok=0; _akr6ok=0
     [ -n "$_akr4" ] && ad_killer_prepare_chain "$_akr4" && _akr4ok=1
-    # IPv6 literals cannot come from the IPv4 resolver, so IP mode is v4 only.
     if [ "$_akr_active_mode" = "string" ]; then
         [ -n "$_akr6" ] && ad_killer_prepare_chain "$_akr6" && _akr6ok=1
     fi
@@ -1232,19 +1168,11 @@ _reconcile_ad_surface_killer_unlocked() {
     printf 'timestamp|family|action|user|package|uid|sdk|host|result\n' > "$AD_KILLER_LOG_FILE" 2>/dev/null || true
     chmod 600 "$AD_KILLER_LOG_FILE" 2>/dev/null || true
 
-    # One netfilter rule per (uid, host) pair. Several SDK labels legitimately
-    # map to the same hostname (for example the classic and the Next-generation
-    # Google Mobile Ads entries), and the same package can match more than one
-    # of them, which previously emitted byte-identical duplicate rules into a
-    # chain traversed for every outgoing packet.
     _akr_rules=$(aad_mktemp_near "$DATA_DIR/.adkiller_rules")
     [ -n "$_akr_rules" ] || { rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null; return 1; }
     awk -F'|' '{k=$3 "|" $5; if (!seen[k]++) print}' "$_akr_filtered" > "$_akr_rules"
     _akr_unique=$(grep -c . "$_akr_rules" 2>/dev/null); [ -n "$_akr_unique" ] || _akr_unique=0
 
-    # Preferred path: resolve everything first, then commit each family in one
-    # transaction with per-UID sub-chains. Falls back to the per-rule cascade
-    # below if iptables-restore is missing or rejects the ruleset.
     _akr_ipmap=""
     if [ "$_akr_active_mode" = "ip" ]; then
         _akr_ipmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_ipmap")
@@ -1282,7 +1210,6 @@ _reconcile_ad_surface_killer_unlocked() {
         awk -F'|' -v ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" \
             '{printf "%s|batch|BLOCK|%s|%s|%s|%s|%s|OK\n", ts, $1, $2, $3, $4, $5}' "$_akr_rules" >> "$AD_KILLER_LOG_FILE" 2>/dev/null || true
         log "AD-KILLER batch applied mode=$_akr_active_mode ipv4=$_akr_batch4 ipv6=$_akr_batch6 uid_chains=$_akr_uidchains rules_per_family=$_akr_applied"
-        # The chains are live; only the per-rule cascade below must be skipped.
         [ "$_akr_batch4" = "1" ] && _akr4ok=0
         [ "$_akr_batch6" = "1" ] && _akr6ok=0
         _akr_quic_uids=$(awk -F'|' '{if(!s[$3]++) printf "%s ", $3}' "$_akr_rules" 2>/dev/null)
@@ -1361,8 +1288,6 @@ _reconcile_ad_surface_killer_unlocked() {
 aad_proc_starttime() {
     _apst_pid="$1"
     case "$_apst_pid" in ''|*[!0-9]*) return 1 ;; esac
-    # Field 22 is only field 22 when comm has no spaces. comm is wrapped in
-    # parentheses, so cut everything up to the LAST ')' first.
     _apst_raw=$(cat "/proc/$_apst_pid/stat" 2>/dev/null) || return 1
     [ -n "$_apst_raw" ] || return 1
     _apst_tail=${_apst_raw##*') '}
@@ -1494,7 +1419,6 @@ list_all_package_state() {
     done
 }
 
-
 list_all_installed_package_keys() {
     for user in $(list_user_ids); do
         cap_list_packages_raw "$user" 0 0 "" 2>/dev/null \
@@ -1505,8 +1429,6 @@ list_all_installed_package_keys() {
     done | sort -u
 }
 
-# Exact package-manager state change through the pre-probed device profile.
-# No command fallback chain is executed for every component.
 disable_component_smart() {
     user="$1"
     comp="$2"
@@ -1522,13 +1444,6 @@ set_component_state_smart() {
     cap_set_component_state "$user" "$comp" "$state" >/dev/null 2>&1
 }
 
-# ---- PackageManager dump cache ---------------------------------------------
-# `dumpsys package <pkg>` returns tens to hundreds of KiB and was previously
-# executed once per component (state read, post-write verification, candidate
-# discovery). On a package with dozens of managed components that is dozens of
-# identical Binder dumps. Cache the raw dump for the package currently being
-# reconciled and drop it whenever a component state is actually written, so the
-# post-write verification never reads a stale snapshot.
 AAD_PKG_DUMP_CACHE_DIR="${AAD_PKG_DUMP_CACHE_DIR:-$DATA_DIR/.pkgdump}"
 
 aad_pkg_dump_key() {
@@ -1568,8 +1483,6 @@ aad_package_dump_cached() {
     cap_package_dump "$_apd_pkg"
 }
 
-# Determine whether the component had an explicit enabled/disabled override before v4 touched it.
-# dumpsys exposes explicit enabledComponents/disabledComponents per Android user. Anything absent is default.
 get_component_override_state() {
     user="$1"
     comp="$2"
@@ -1609,7 +1522,6 @@ ensure_original_state() {
     state_record_exists "$user" "$comp" && return 0
     original=$(get_component_override_state "$user" "$comp")
     aad_db_lock "$STATE_DB_LOCK" || { log "STATE-LOCK-FAILED save u$user: $comp"; return 1; }
-    # Re-check after lock acquisition: another callback may have saved it.
     if ! state_record_exists "$user" "$comp"; then
         printf '%s|%s|%s\n' "$user" "$comp" "$original" >> "$COMPONENT_STATE"
         log "STATE-SAVE u$user: $comp -> $original"
@@ -1658,14 +1570,6 @@ restore_original_state() {
     return 1
 }
 
-# Resolver tables in dumpsys are useful but incomplete: explicit Activities with no
-# intent-filter may be absent there. v4.6.6 augments them with an APK manifest string-pool
-# probe, then validates broad activity-pattern hits through PackageManager.
-# Read-only APK path discovery. Some Android 16/OEM PackageManager shells return
-# an empty result for a per-package `path` query even though package enumeration
-# works. Prefer the direct query, but union it with an authoritative per-user
-# `list packages -f` inventory built once for a full scan. A base APK found by
-# either source expands to every sibling *.apk so split manifests are included.
 cap_list_packages_with_paths_raw() {
     user="$1"
     [ "$CAP_PACKAGE_LIST_BACKEND" != "none" ] || return 1
@@ -1715,9 +1619,6 @@ cap_package_paths_readonly() {
     raw_paths=$(printf '%s\n%s\n' "$direct_paths" "$cached_paths" | awk 'NF' | sort -u)
     [ -n "$raw_paths" ] || return 0
 
-    # Expand the package install directory so dynamic-feature/config split APK
-    # manifests are inspected even when the PackageManager path command returns
-    # only base.apk on an OEM build.
     {
         printf '%s\n' "$raw_paths"
         printf '%s\n' "$raw_paths" | while IFS= read -r base_apk; do
@@ -1734,8 +1635,6 @@ cap_package_paths_readonly() {
 cap_activity_component_exists() {
     user="$1"; comp="$2"
     cls=${comp#*/}
-    # MATCH_DISABLED_COMPONENTS=0x200 so components already disabled by us are
-    # still discoverable. Explicit -n does not depend on an intent-filter.
     out=$(cmd package query-activities --components --query-flags 0x200 --user "$user" -n "$comp" 2>/dev/null)
     printf '%s\n' "$out" | grep -Fq "/$cls" 2>/dev/null && return 0
     out=$(cmd package resolve-activity --components --query-flags 0x200 --user "$user" -n "$comp" 2>/dev/null)
@@ -1759,14 +1658,6 @@ manifest_class_strings() {
     meta_file="$2"
     [ -n "$meta_file" ] || meta_file=/dev/null
 
-    # Android binary XML does not use an arbitrary text charset. ResStringPool
-    # has exactly two on-disk encodings: UTF-8 when UTF8_FLAG (1<<8) is set,
-    # otherwise UTF-16. Parse the chunk format directly so discovery does not
-    # depend on optional strings(1) applets or NUL-stripping heuristics.
-    #
-    # The backend must be decided BEFORE the pipeline: an `if ... fi | awk`
-    # construct runs its left side in a subshell, so a `return` there never
-    # left this function and awk still overwrote the failure meta record.
     _mcs_od=""
     if command -v od >/dev/null 2>&1; then
         _mcs_od="od"
@@ -1872,7 +1763,6 @@ manifest_class_strings() {
         { for (i=1;i<=NF;i++) b[++n]=$i+0 }
         END {
             valid=0; parser="axml"
-            # RES_XML_TYPE header (0x0003) is 8 bytes; walk its child chunks.
             if (n>=8 && u16(1)==3) {
                 root_h=u16(3); root_sz=u32(5)
                 if (root_h>=8 && root_sz<=n && root_sz>=root_h) {
@@ -1885,8 +1775,6 @@ manifest_class_strings() {
                     }
                 }
             }
-            # Rare/debug APKs may contain plain XML. Keep a bounded textual
-            # fallback for UTF-8/ASCII and UTF-16LE instead of declaring failure.
             if (!valid) {
                 parser="text-fallback"; encoding="TEXT"
                 fallback_ascii(); fallback_utf16le()
@@ -1897,10 +1785,6 @@ manifest_class_strings() {
     ' | sort -u
 }
 
-# Emit diagnostic-only SDK evidence from the compiled manifest string pool.
-# Output format is intentionally a non-component candidate record:
-#   SDK|human label|evidence class
-# Downstream policy ignores kind=SDK; sdk_fingerprint.log consumes it separately.
 manifest_sdk_fingerprints() {
     classes="$1"
     [ -f "$classes" ] && [ -f "$RULES_FILE" ] || return 0
@@ -1938,17 +1822,8 @@ manifest_sdk_fingerprints() {
     ' "$RULES_FILE" "$classes"
 }
 
-
-# ---- Ad Surface Scanner ---------------------------------------------------
-# Static, diagnostic-only inventory of ad formats exposed by bundled SDKs.
-# DEX evidence means the SDK class/type exists in the APK (capability, not proof
-# that the host app calls it). RESOURCE evidence is stronger: a matching ad View
-# class is referenced from compiled res/layout XML. Nothing here mutates policy.
-
 aad_surface_rules_hash() {
     [ -f "$RULES_FILE" ] || { printf 'none\n'; return; }
-    # Semantic hash only: network-host rules, comments and whitespace must never
-    # invalidate expensive DEX/layout evidence.
     awk '
         function trim(s){sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
         /^\[ADS_SURFACE_FINGERPRINT\]$/ {inside=1; print; next}
@@ -1961,14 +1836,9 @@ aad_surface_rules_hash() {
     ' "$RULES_FILE" 2>/dev/null | cksum 2>/dev/null | awk '{print $1 ":" $2}'
 }
 
-# TODO(remove after v4.9): version-pinned migration checksums. They only apply
-# while the shipped rules still hash to the pinned value; any user edit makes
-# the branch inert and the cache is simply rebuilt, which is the safe outcome.
 aad_surface_cache_rulesig_compatible() {
     _ascrc_sig="$1"; _ascrc_current="$2"
     [ "$_ascrc_sig" = "$_ascrc_current" ] && return 0
-    # Migration from 4.6.15/4.6.16. Both signatures represent the same 77
-    # fingerprints + strict View allowlist; 4.6.16 changed only a comment.
     if [ "$_ascrc_current" = "3191335439:7119" ]; then
         case "$_ascrc_sig" in
             1259099589:7907|2768747396:7908) return 0 ;;
@@ -1977,8 +1847,6 @@ aad_surface_cache_rulesig_compatible() {
     return 1
 }
 
-# Parse the shared Info-ZIP/BusyBox/toybox `unzip -l` table. Android APK entry
-# names never contain spaces in the paths this module inspects.
 apk_parse_unzip_listing() {
     awk '
         /^[[:space:]]*[0-9]+[[:space:]]+[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+/ {
@@ -1987,10 +1855,6 @@ apk_parse_unzip_listing() {
     '
 }
 
-# `unzip -Z1` is an Info-ZIP/zipinfo extension: neither toybox (the system
-# implementation on modern Android) nor BusyBox supports it, so the previous
-# first branch could never succeed and entry discovery silently returned
-# nothing whenever BusyBox was not reachable. `-l` is supported by all three.
 apk_list_entries_readonly() {
     apk="$1"
     _ale_out=""
@@ -2028,9 +1892,6 @@ extract_apk_entry_readonly() {
     return 1
 }
 
-# Concatenate every APK entry matching a glob into one stream. Some toybox
-# builds do not expand wildcards in `unzip -p` entry arguments, so a per-entry
-# extraction fallback keeps DEX/layout discovery working on stock ROMs.
 apk_extract_entries_concat() {
     _aec_apk="$1"; _aec_pattern="$2"; _aec_out="$3"
     : > "$_aec_out"
@@ -2060,8 +1921,6 @@ apk_extract_entries_concat() {
 
 aad_surface_legacy_cache_gc() {
     [ -d "$MANIFEST_CACHE_DIR" ] || return 0
-    # Reclaim superseded surface sidecars through v4.6.13 without touching
-    # Full Manifest cache. v4.6.14 writes only surface4 sidecars.
     find "$MANIFEST_CACHE_DIR" -type f 2>/dev/null | while IFS= read -r f; do
         case "$f" in
             *.surface.dex.tokens|*.surface.res.tokens|*.surface.dexstat|*.surface.resstat|*.surface.hits|*.surface.rulesig|*.surface2.dexstat|*.surface2.resstat|*.surface2.hits|*.surface2.rulesig|*.surface3.dexstat|*.surface3.resstat|*.surface3.hits|*.surface3.rulesig)
@@ -2097,10 +1956,6 @@ surface_exact_file_has() {
     esac
 }
 
-# Deterministic matcher. Android/Toybox multi-pattern `grep -o -f` is fast but
-# has proven incomplete on real binary DEX streams. Scan one materialized file
-# against each configured fingerprint instead; the file is read from page cache
-# after the first pass and the result is complete by construction.
 surface_exact_match_file() {
     _sem_raw="$1"; _sem_patterns="$2"; _sem_out="$3"
     : > "$_sem_out"
@@ -2158,9 +2013,6 @@ aad_surface_prepare_matchers() {
     : > "$AAD_SURFACE_DEX_PATTERNS"; : > "$AAD_SURFACE_DEX_MAP"
     : > "$AAD_SURFACE_RES_PATTERNS"; : > "$AAD_SURFACE_RES_MAP"
 
-    # DEX capability rules and strict RESOURCE View rules are intentionally
-    # separate. Non-View classes such as NativeAd/NativeAdLoader can never
-    # produce LAYOUT_CONFIRMED evidence.
     awk -v dexsec='[ADS_SURFACE_FINGERPRINT]' -v ressec='[ADS_SURFACE_RESOURCE_VIEW]' \
         -v dp="$AAD_SURFACE_DEX_PATTERNS" -v dm="$AAD_SURFACE_DEX_MAP" \
         -v rp="$AAD_SURFACE_RES_PATTERNS" -v rm="$AAD_SURFACE_RES_MAP" '
@@ -2194,9 +2046,6 @@ aad_surface_prepare_matchers() {
     sort -u "$AAD_SURFACE_RES_PATTERNS" -o "$AAD_SURFACE_RES_PATTERNS" 2>/dev/null || true
     chmod 600 "$AAD_SURFACE_DEX_PATTERNS" "$AAD_SURFACE_DEX_MAP" "$AAD_SURFACE_RES_PATTERNS" "$AAD_SURFACE_RES_MAP" 2>/dev/null || true
 
-    # Select a single-pattern fixed-string grep implementation. Unlike -o/-f on
-    # a binary stream, this operation is deterministic and is used for exact
-    # verification of every fingerprint.
     _asp_grep_probe="$DATA_DIR/.surface_grep_probe.$$"
     _asp_first=$(sed -n '1p' "$AAD_SURFACE_DEX_PATTERNS" 2>/dev/null)
     {
@@ -2227,15 +2076,10 @@ aad_surface_prepare_matchers() {
     elif [ "$_asp_bb_ok" = "1" ]; then
         AAD_SURFACE_GREP_BACKEND=busybox
     else
-        # `grep` is required elsewhere by the module, but retain a named
-        # fallback for diagnostics if an OEM command behaves unexpectedly.
         AAD_SURFACE_GREP_BACKEND=grep
     fi
     rm -f "$_asp_grep_probe" 2>/dev/null
 
-    # DEX backend certification uses ALL active fingerprints, not one sample.
-    # The probe is NUL-separated like a DEX string pool. A strings backend is
-    # accepted only if exact verification recovers every configured pattern.
     _asp_probe="$DATA_DIR/.surface_strings_probe.$$"
     _asp_strings="$DATA_DIR/.surface_strings_probe_out.$$"
     _asp_hits="$DATA_DIR/.surface_strings_probe_hits.$$"
@@ -2277,7 +2121,6 @@ aad_surface_prepare_matchers() {
         AAD_SURFACE_SELFTEST_MATCHED="$AAD_SURFACE_SELFTEST_EXPECTED"
     else
         AAD_SURFACE_DEX_BACKEND=raw_exact
-        # raw_exact checks each pattern directly and needs no strings applet.
         AAD_SURFACE_SELFTEST_MATCHED="$AAD_SURFACE_SELFTEST_EXPECTED"
     fi
     rm -f "$_asp_probe" "$_asp_strings" "$_asp_hits" 2>/dev/null
@@ -2310,9 +2153,6 @@ surface_map_matches() {
     ' "$_smm_matched" "$_smm_map"
 }
 
-# RESOURCE matching is exact-per-pattern too. There are only a small number of
-# strict View rules, so correctness costs little and avoids the same multi-
-# pattern binary grep ambiguity seen in DEX.
 surface_grep_file_matches() {
     _sgf_raw="$1"; _sgf_patterns="$2"; _sgf_out="$3"
     surface_exact_match_file "$_sgf_raw" "$_sgf_patterns" "$_sgf_out"
@@ -2368,9 +2208,6 @@ surface_extract_dex_hits() {
 
 surface_extract_layout_hits() {
     _sel_apk="$1"; _sel_hits="$2"; _sel_stat="$3"
-    # Count in the pipeline instead of materializing thousands of layout names in
-    # one shell argument. Android execve rejects a single argument around 128 KiB
-    # even when total ARG_MAX is larger (seen as /system/bin/printf E2BIG).
     _sel_layout_files=$(apk_list_entries_readonly "$_sel_apk" | awk '/^res\/layout[^\/]*\/.*\.xml$/ {n++} END{print n+0}' 2>/dev/null)
     case "$_sel_layout_files" in ''|*[!0-9]*) _sel_layout_files=0 ;; esac
     _sel_raw=$(aad_mktemp_near "$DATA_DIR/.surface_layout_raw")
@@ -2471,8 +2308,6 @@ scan_ad_surfaces_for_apk() {
     if [ "$cache_state" != "FULL_HIT" ]; then
         : > "$hits"; : > "$dex_stat"; : > "$res_stat"
         surface_extract_dex_hits "$apk" "$hits" "$dex_stat"
-        # Resource layouts are only useful for UI-hosted ad formats. Gate the
-        # extra unzip on a targeted DEX capability match.
         need_layout=$(awk -F'|' '$1=="DEX" && $2 ~ /^(BANNER|BANNER_MREC|MREC|NATIVE|INLINE)$/ {found=1} END{print found+0}' "$hits" 2>/dev/null)
         if [ "$need_layout" = "1" ]; then
             surface_extract_layout_hits "$apk" "$hits" "$res_stat"
@@ -2495,8 +2330,6 @@ scan_ad_surfaces_for_apk() {
         fi
     fi
 
-    # Do not split `N|M` with ksh pattern expansion (${v%%|*}). Android mksh
-    # treats `|` as a pattern operator and produced empty/concatenated fields.
     dex_files=0; dex_matches=0; layout_files=0; layout_matches=0
     if [ -s "$dex_stat" ]; then
         IFS='|' read -r dex_files dex_matches < "$dex_stat" 2>/dev/null || true
@@ -2532,8 +2365,6 @@ $paths
 EOF
 }
 
-# Filter the manifest string pool in one awk pass. Exact allowlist hits are
-# distinguished from broad audit hits so only a small set needs PM validation.
 manifest_activity_rule_hits() {
     classes="$1"
     [ -f "$classes" ] && [ -f "$RULES_FILE" ] || return 0
@@ -2580,8 +2411,6 @@ manifest_activity_rule_hits() {
 
 aad_manifest_rules_hash() {
     [ -f "$RULES_FILE" ] || { printf 'none\n'; return; }
-    # The verified manifest layer depends only on Activity exact/audit rules.
-    # Provider, SDK, surface-network and comment edits must not invalidate it.
     awk '
         function trim(s){sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
         /^\[(ADS_ACTIVITY_IFW|ADS_ACTIVITY_AUDIT|ANALYTICS_ACTIVITY_IFW|ANALYTICS_ACTIVITY_AUDIT)\]$/ {
@@ -2595,12 +2424,9 @@ aad_manifest_rules_hash() {
     ' "$RULES_FILE" 2>/dev/null | cksum 2>/dev/null | awk '{print $1 ":" $2}'
 }
 
-# TODO(remove after v4.9): see aad_surface_cache_rulesig_compatible.
 aad_manifest_cache_rulesig_compatible() {
     _amcrc_sig="$1"; _amcrc_current="$2"
     [ "$_amcrc_sig" = "$_amcrc_current" ] && return 0
-    # Migration from the legacy full-file cache hashes. The four Activity
-    # rule sections are unchanged across these releases.
     if [ "$_amcrc_current" = "2393526744:3813" ]; then
         case "$_amcrc_sig" in
             62107431:15382|1443295594:15890) return 0 ;;
@@ -2634,7 +2460,6 @@ aad_manifest_cache_prefix() {
     cache_dir="$MANIFEST_CACHE_DIR/u$user/$pkg_safe/v$vc_safe"
     printf '%s/%s.%s\n' "$cache_dir" "$apk_safe" "$path_key"
 }
-
 
 aad_manifest_cache_commit_file() {
     src="$1"; dst="$2"
@@ -2679,7 +2504,6 @@ get_manifest_activity_candidates() {
     user="$1"; pkg="$2"
     mode=$(read_component_mode)
     backend=$(read_component_backend)
-    # Activity blocking is actionable only in AGGRESSIVE PM or HYBRID.
     [ "$mode" = "AGGRESSIVE" ] || [ "$backend" = "HYBRID" ] || return 0
 
     paths=$(cap_package_paths_readonly "$user" "$pkg")
@@ -2767,8 +2591,6 @@ get_manifest_activity_candidates() {
         [ -n "$token_count" ] || token_count=0
         [ -n "$valid" ] || valid=0
 
-        # Fingerprints are cheap to regenerate from cached class tokens and stay
-        # current when the module's SDK classifier changes.
         manifest_sdk_fingerprints "$classes"
 
         exact_hits=0
@@ -2816,8 +2638,6 @@ get_manifest_activity_candidates() {
             verify_miss=0
             : > "$verified_tmp"
 
-            # Do not invoke PackageManager while stdin is backed by /data/adb.
-            # The hit list is kept in shell memory.
             old_ifs=$IFS
             IFS='
 '
@@ -2861,7 +2681,6 @@ EOF
     rm -f "$axml" "$classes" "$meta" "$verified_tmp" 2>/dev/null
 }
 
-# Typed candidate source: resolver tables + manifest-level Activity discovery.
 get_typed_component_candidates() {
     user="$1"; pkg="$2"
     {
@@ -2892,7 +2711,6 @@ get_typed_component_candidates() {
     } | sort -u
 }
 
-# One candidate snapshot is cached per Android user/package for the whole scan.
 get_typed_component_candidates_cached() {
     user="$1"; pkg="$2"
     if [ -n "$SCAN_CANDIDATE_CACHE_DIR" ] && [ -d "$SCAN_CANDIDATE_CACHE_DIR" ]; then
@@ -2910,12 +2728,6 @@ get_typed_component_candidates_cached() {
     get_typed_component_candidates "$user" "$pkg"
 }
 
-# Literal rules are matched against the COMPONENT CLASS only, not against the
-# whole "package/class" string. Matching the full string meant a rule such as
-# `applovin` or `sentry` also fired on every component of any package whose own
-# name happened to contain that substring, which produced large false-positive
-# batches that only the MAX_MATCHES safety guard kept in check. Regex (`re:`)
-# rules still see the full component so existing anchored patterns keep working.
 component_rule_match_class() {
     _crmc_comp="$1"
     case "$_crmc_comp" in
@@ -2961,8 +2773,6 @@ component_matches_disable_rule() {
         SERVICE|RECEIVER)
             component_matches_rule_section "$comp" "${cat}_${kind}" && return 0
             component_matches_rule_section "$comp" "$cat" && return 0
-            # Push-capable SDKs (OneSignal, Braze) are report-only unless the
-            # user explicitly accepts losing their notifications.
             [ "$(read_bool_setting BLOCK_PUSH_SDK 0)" = "1" ] || return 1
             component_matches_rule_section "$comp" "${cat}_PUSH_RISK"
             ;;
@@ -3099,8 +2909,6 @@ record_package_audit() {
         -v global_white="$global_white" -v ads_white="$ads_white" -v analytics_white="$analytics_white" '
         BEGIN {OFS="|"}
         function trim(s) {sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
-        # Mirrors component_rule_match_class(): literal rules see the class only,
-        # regex rules still see the whole package/class component name.
         function match_class(component,    slash,cls) {
             slash=index(component,"/")
             if (slash==0) return component
@@ -3181,10 +2989,6 @@ record_package_audit() {
     return "$rc"
 }
 
-# IFW is global across Android users. A component may be put into the owned
-# IFW file only when every installed user of that package agrees that the
-# component should be blocked. This prevents a work profile / secondary user
-# whitelist from being overridden by a rule requested only by another user.
 ifw_filter_global_candidates() {
     raw="$1"; pair_file="$2"; installed="$3"; out="$4"
     : > "$out"
@@ -3210,8 +3014,8 @@ ifw_filter_global_candidates() {
     done < "$raw"
 }
 
-# IFW не умеет блокировать Provider и действует глобально для всех пользователей.
-# Модуль владеет только одним отдельным XML и никогда не изменяет файлы App Manager/Blocker.
+# IFW РЅРµ СѓРјРµРµС‚ Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ Provider Рё РґРµР№СЃС‚РІСѓРµС‚ РіР»РѕР±Р°Р»СЊРЅРѕ РґР»СЏ РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№.
+# РњРѕРґСѓР»СЊ РІР»Р°РґРµРµС‚ С‚РѕР»СЊРєРѕ РѕРґРЅРёРј РѕС‚РґРµР»СЊРЅС‹Рј XML Рё РЅРёРєРѕРіРґР° РЅРµ РёР·РјРµРЅСЏРµС‚ С„Р°Р№Р»С‹ App Manager/Blocker.
 reconcile_owned_ifw_rules() {
     backend=$(read_component_backend)
     if [ "$backend" != "HYBRID" ]; then
@@ -3247,12 +3051,9 @@ reconcile_owned_ifw_rules() {
 
     awk -F'|' 'NF>=3 && $2!="" {print $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed"
     awk -F'|' 'NF>=3 && $1!="" && $2!="" {print $1 "|" $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed_pairs"
-    # Непустой первый вход устраняет неоднозначность NR==FNR в старых awk.
+    # РќРµРїСѓСЃС‚РѕР№ РїРµСЂРІС‹Р№ РІС…РѕРґ СѓСЃС‚СЂР°РЅСЏРµС‚ РЅРµРѕРґРЅРѕР·РЅР°С‡РЅРѕСЃС‚СЊ NR==FNR РІ СЃС‚Р°СЂС‹С… awk.
     printf '#\n' >> "$managed"
 
-    # IFW rules are global, therefore an authoritative user/package snapshot is
-    # mandatory before emitting them. On snapshot failure we prefer PM-only
-    # behavior over a rule that could override another user's whitelist.
     list_all_installed_package_keys > "$installed" 2>/dev/null
     if [ ! -s "$installed" ]; then
         rm -f "$IFW_RULE_FILE" "$managed" "$managed_pairs" "$installed" \
@@ -3262,7 +3063,7 @@ reconcile_owned_ifw_rules() {
         return 1
     fi
 
-    # Двойной слой IFW+PM применяется только к компонентам, которыми модуль реально владеет.
+    # Р”РІРѕР№РЅРѕР№ СЃР»РѕР№ IFW+PM РїСЂРёРјРµРЅСЏРµС‚СЃСЏ С‚РѕР»СЊРєРѕ Рє РєРѕРјРїРѕРЅРµРЅС‚Р°Рј, РєРѕС‚РѕСЂС‹РјРё РјРѕРґСѓР»СЊ СЂРµР°Р»СЊРЅРѕ РІР»Р°РґРµРµС‚.
     awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="RECEIVER" && owned[$8] {print $8}' \
         "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$receivers_raw"
     awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="SERVICE" && owned[$8] {print $8}' \
@@ -3270,10 +3071,7 @@ reconcile_owned_ifw_rules() {
     ifw_filter_global_candidates "$receivers_raw" "$managed_pairs" "$installed" "$receivers"
     ifw_filter_global_candidates "$services_raw" "$managed_pairs" "$installed" "$services"
 
-    # Activity разрешаются только отдельными точными правилами и с лимитом на пакет/категорию.
-    # HYBRID+AGGRESSIVE duplicates exact fullscreen Activity blocking with PM+IFW;
-    # other HYBRID modes remain IFW-only for Activities. Global IFW agreement comes
-    # from the audit plan because IFW itself is not per-user.
+    # Activity СЂР°Р·СЂРµС€Р°СЋС‚СЃСЏ С‚РѕР»СЊРєРѕ РѕС‚РґРµР»СЊРЅС‹РјРё С‚РѕС‡РЅС‹РјРё РїСЂР°РІРёР»Р°РјРё Рё СЃ Р»РёРјРёС‚РѕРј РЅР° РїР°РєРµС‚/РєР°С‚РµРіРѕСЂРёСЋ.
     awk -F'|' 'FNR>1 && $2!="" && $5=="ACTIVITY" && ($7=="IFW_BLOCK" || ($7=="DISABLE" && $6=="HYBRID")) {print $2 "|" $8}' \
         "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activity_pairs"
     ifw_limit=$(read_ifw_activity_limit)
@@ -3356,8 +3154,60 @@ reconcile_owned_ifw_rules() {
     return 0
 }
 
+aad_pkg_snapshot_load() {
+    _apsl_user="$1"; _apsl_pkg="$2"
+    aad_pkg_snapshot_clear
+    AAD_PKG_MEMBERSHIPS=$(awk -F'|' -v u="$_apsl_user" -v p="$_apsl_pkg/" \
+        'index($2,p)==1 && $1==u {print "|" $1 "|" $2 "|" $3 "|"}' "$DISABLED_LIST" 2>/dev/null) || {
+        log "SNAPSHOT-FALLBACK u$_apsl_user: $_apsl_pkg (membership query failed; using per-component lookups)"
+        aad_pkg_snapshot_clear
+        return 1
+    }
+    AAD_PKG_DISABLED_SET=$(aad_package_dump_cached "$_apsl_pkg" 2>/dev/null | awk -v uid="$_apsl_user" '
+        function trim(s){gsub(/^[ 	]+|[ 	]+$/,"",s); return s}
+        /^[ 	]*User [0-9]+:/ {
+            line=$0; gsub(/^[ 	]*/,"",line)
+            if (line ~ ("^User " uid ":")) {inuser=1; sec=""; next}
+            if (inuser) exit
+        }
+        !inuser {next}
+        /^[ 	]*disabledComponents:/ {sec="disabled"; next}
+        /^[ 	]*enabledComponents:/ {sec="enabled"; next}
+        /^[ 	]*[A-Za-z][A-Za-z0-9_-]*:/ {sec=""}
+        sec=="disabled" {x=trim($0); if (x!="") print "|" x "|"}
+    ') || {
+        log "SNAPSHOT-FALLBACK u$_apsl_user: $_apsl_pkg (state query failed; using per-component lookups)"
+        aad_pkg_snapshot_clear
+        return 1
+    }
+    AAD_PKG_SNAPSHOT_KEY="$_apsl_user|$_apsl_pkg"
+    export AAD_PKG_SNAPSHOT_KEY
+    return 0
+}
+
+aad_pkg_snapshot_clear() {
+    unset AAD_PKG_MEMBERSHIPS AAD_PKG_DISABLED_SET AAD_PKG_SNAPSHOT_KEY
+}
+
+aad_pkg_component_disabled() {
+    _apcd_user="$1"; _apcd_comp="$2"
+    [ "$AAD_PKG_SNAPSHOT_KEY" = "$_apcd_user|${_apcd_comp%%/*}" ] || return 2
+    _apcd_cls=${_apcd_comp#*/}
+    case "$_apcd_cls" in .*) _apcd_full="${_apcd_comp%%/*}$_apcd_cls" ;; *) _apcd_full="$_apcd_cls" ;; esac
+    case "$AAD_PKG_DISABLED_SET" in
+        *"|$_apcd_full|"*|*"|$_apcd_cls|"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 membership_exists() {
     user="$1"; comp="$2"; cat="$3"
+    if [ "${AAD_PKG_SNAPSHOT_KEY:-}" = "$user|${comp%%/*}" ]; then
+        case "$AAD_PKG_MEMBERSHIPS" in
+            *"|$user|$comp|$cat|"*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
     [ -f "$DISABLED_LIST" ] && awk -F'|' -v u="$user" -v c="$comp" -v k="$cat" '$1==u && $2==c && $3==k {found=1; exit} END{exit !found}' "$DISABLED_LIST"
 }
 
@@ -3416,14 +3266,16 @@ aad_fail_fast_note_failure() {
 add_membership_and_disable() {
     user="$1"; comp="$2"; cat="$3"
 
-    # Policy membership and execution transport are separate concerns. If this
-    # component is already managed by the module and still disabled, no Binder
-    # write is needed during a reconciliation scan.
     if membership_exists "$user" "$comp" "$cat"; then
-        current_override=$(get_component_override_state "$user" "$comp")
-        if [ "$current_override" = "disabled" ]; then
+        aad_pkg_component_disabled "$user" "$comp"
+        case $? in
+            0) _amd_disabled=1 ;;
+            1) _amd_disabled=0 ;;
+            *) [ "$(get_component_override_state "$user" "$comp")" = "disabled" ] && _amd_disabled=1 || _amd_disabled=0 ;;
+        esac
+        if [ "$_amd_disabled" = "1" ]; then
             aad_fail_fast_reset
-            log "ALREADY-DISABLED ($cat) u$user: $comp"
+            AAD_ALREADY_DISABLED_COUNT=$((${AAD_ALREADY_DISABLED_COUNT:-0} + 1))
             return 0
         fi
     else
@@ -3435,6 +3287,10 @@ add_membership_and_disable() {
             if aad_db_lock "$MEMBERSHIP_DB_LOCK"; then
                 if ! membership_exists "$user" "$comp" "$cat"; then
                     printf '%s|%s|%s\n' "$user" "$comp" "$cat" >> "$DISABLED_LIST"
+                    if [ "${AAD_PKG_SNAPSHOT_KEY:-}" = "$user|${comp%%/*}" ]; then
+                        AAD_PKG_MEMBERSHIPS="$AAD_PKG_MEMBERSHIPS
+|$user|$comp|$cat|"
+                    fi
                 fi
                 aad_db_unlock "$MEMBERSHIP_DB_LOCK"
             else
@@ -3506,7 +3362,6 @@ restore_all_for_package() {
     done
 }
 
-# Reconcile one package/user against the complete desired policy, including overlapping categories.
 process_package_user() {
     user="$1"
     pkg="$2"
@@ -3519,10 +3374,9 @@ process_package_user() {
         return 1
     fi
     : > "$desired"
-    # One PackageManager dump is reused for this package only; the cache is
-    # bounded to the package currently being reconciled.
     aad_package_dump_cache_reset
-    # Ad Surface indexing runs in a separate read-only worker after policy is ready.
+    aad_pkg_snapshot_load "$user" "$pkg"
+    AAD_ALREADY_DISABLED_COUNT=0
     AAD_PACKAGE_AUDIT_READY=0
     record_package_audit "$user" "$pkg" && AAD_PACKAGE_AUDIT_READY=1
 
@@ -3547,8 +3401,6 @@ process_package_user() {
                 max=$(read_aggressive_ads_max_matches)
             fi
             if [ "$count" -gt "$max" ]; then
-                # Safety must be fail-safe for state: preserve existing memberships for
-                # this category instead of interpreting the guard as policy removal.
                 frozen=$(awk -F'|' -v u="$user" -v p="$pkg/" -v k="$cat" '$1==u && $3==k && index($2,p)==1 {print $1 "|" $2 "|" $3}' "$DISABLED_LIST" 2>/dev/null)
                 [ -n "$frozen" ] && printf '%s\n' "$frozen" >> "$desired"
                 frozen_count=$(printf '%s\n' "$frozen" | grep -c . 2>/dev/null)
@@ -3563,7 +3415,6 @@ process_package_user() {
     fi
     sort -u "$desired" > "$desired.sorted" 2>/dev/null && mv "$desired.sorted" "$desired"
 
-# Remove obsolete memberships first. Restoration happens only when no other category still needs the component.
     awk -F'|' -v u="$user" -v p="$pkg/" '$1==u && index($2,p)==1' "$DISABLED_LIST" 2>/dev/null > "$existing"
     log "PACKAGE-RECONCILE u$user: $pkg existing_memberships=$(grep -c . "$existing" 2>/dev/null) desired_memberships=$(grep -c . "$desired" 2>/dev/null)"
     while IFS='|' read -r eu ec ek; do
@@ -3593,6 +3444,8 @@ process_package_user() {
         fi
     done < "$desired"
 
+    [ "${AAD_ALREADY_DISABLED_COUNT:-0}" -gt 0 ] &&         log "ALREADY-DISABLED u$user: $pkg components=$AAD_ALREADY_DISABLED_COUNT"
+    aad_pkg_snapshot_clear
     rm -f "$desired" "$existing"
     echo "$disabled_now"
     if [ -n "$AAD_FAIL_FAST_ABORT" ] && [ -f "$AAD_FAIL_FAST_ABORT" ]; then
@@ -3622,10 +3475,6 @@ process_package_all_users() {
     for user in $users; do
         log "CONFIG-DELTA user=$user package=$pkg begin"
         if package_installed_in_snapshot "$snapshot" "$user" "$pkg"; then
-            # Avoid command substitution here. Besides hiding progress, ash can
-            # preserve $$ in subshells and makes debugging/temporary-file
-            # ownership unnecessarily confusing. The delta path does not need
-            # the numeric disabled counter.
             process_package_user "$user" "$pkg" >/dev/null
             rc=$?
             log "CONFIG-DELTA user=$user package=$pkg end installed=yes rc=$rc"
@@ -3651,12 +3500,6 @@ cleanup_stale_records() {
         own_snapshot=1
     fi
 
-    # SAFETY: an empty package snapshot is a PackageManager failure, never proof
-    # that every managed package was uninstalled. Without this guard a single
-    # unavailable Binder call wiped both the membership DB and the saved original
-    # override states, leaving every component disabled with nothing to roll back
-    # to. reconcile_owned_ifw_rules already refuses to act on an empty snapshot;
-    # the state DB must be at least as careful.
     if [ ! -s "$installed_keys" ]; then
         log "STALE-SKIP: installed-package snapshot is empty (PackageManager unavailable); membership/state DB left untouched."
         [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
@@ -3676,8 +3519,6 @@ cleanup_stale_records() {
     fi
     : > "$tmp"
     stale_dropped=0
-    # The record list is read from a copy in memory so no /data/adb descriptor
-    # stays attached while remove_state_record runs PackageManager-adjacent work.
     stale_records=$(cat "$DISABLED_LIST" 2>/dev/null)
     old_ifs=$IFS
     IFS='
@@ -3699,6 +3540,11 @@ cleanup_stale_records() {
     done
     IFS=$old_ifs
 
+    _scr_before=$(grep -c . "$tmp" 2>/dev/null); [ -n "$_scr_before" ] || _scr_before=0
+    if sort -u "$tmp" -o "$tmp" 2>/dev/null; then
+        _scr_after=$(grep -c . "$tmp" 2>/dev/null); [ -n "$_scr_after" ] || _scr_after=0
+        [ "$_scr_before" -gt "$_scr_after" ] &&             log "MEMBERSHIP-DEDUP removed $((_scr_before - _scr_after)) duplicate row(s)"
+    fi
     if ! mv -f "$tmp" "$DISABLED_LIST" 2>/dev/null; then
         log "MEMBERSHIP-COMMIT-FAILED stale-cleanup temp=$tmp"
         rm -f "$tmp" 2>/dev/null
@@ -3708,7 +3554,6 @@ cleanup_stale_records() {
     fi
     aad_db_unlock "$MEMBERSHIP_DB_LOCK"
 
-    # State records are dropped only after the membership commit succeeded.
     if [ "$stale_dropped" -gt 0 ] && [ -f "$COMPONENT_STATE" ]; then
         state_records=$(cat "$COMPONENT_STATE" 2>/dev/null)
         old_ifs=$IFS
@@ -3736,12 +3581,6 @@ retry_orphan_restores() {
     work="$COMPONENT_STATE.orphans.$$"
     cp "$COMPONENT_STATE" "$work" 2>/dev/null || return
 
-    # Do not execute PackageManager mutations while a /data/adb state file is
-    # attached to a shell read loop. BusyBox/ash can retain the loop fd across
-    # nested function/exec boundaries; when the PM transport switches to
-    # u:r:shell:s0, OEM SELinux then reports attempts to read adb_data_file.
-    # Snapshot the small state DB into memory, close/remove the backing file,
-    # and only then perform restore operations.
     orphan_records=$(cat "$work" 2>/dev/null)
     rm -f "$work" 2>/dev/null
     [ -n "$orphan_records" ] || return 0
@@ -3832,9 +3671,6 @@ reconcile_whitelist_delta_locked() {
     fi
 
     log "CONFIG-DELTA: whitelist package changes=$count; reconciling affected packages only."
-    # Strip audit/fingerprint rows for every affected package in ONE pass. The
-    # per-package cleanup inside record_package_audit rewrote the whole log for
-    # each package, which is quadratic once the audit has thousands of rows.
     for _cdl_file in "$COMPONENT_AUDIT_FILE" "$SDK_FINGERPRINT_FILE"; do
         [ -f "$_cdl_file" ] || continue
         _cdl_tmp=$(aad_mktemp_near "$_cdl_file")
@@ -3867,6 +3703,7 @@ reconcile_whitelist_delta_locked() {
         log "CONFIG-DELTA: IFW reconciliation failed."
         return 1
     }
+    rm -f "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null
     log "CONFIG-DELTA: reconciliation complete."
     return 0
 }
@@ -3877,16 +3714,9 @@ refresh_policy_caches() {
     read_global_list > "$CACHE_GLOBAL"
 }
 
-# Reconcile config changes under the same operation lock used by scans.  The hash
-# is re-checked *after* lock acquisition so duplicate inotify events and the
-# polling safety net collapse into a single full reconciliation.
 reconcile_config_if_changed() {
     reason="${1:-unknown}"
 
-    # Config callbacks should never sit for a minute behind another scan. If a
-    # reconciliation already owns the global lock, defer this duplicate/event;
-    # the hash polling safety net will retry if the active operation did not
-    # consume the new config.
     if [ -d "$LOCK_DIR" ]; then
         owner=$(cat "$LOCK_DIR/pid" 2>/dev/null)
         if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
@@ -3928,10 +3758,38 @@ reconcile_config_if_changed() {
     return "$rc"
 }
 
+AAD_FULL_VERIFY_MAX_AGE=${AAD_FULL_VERIFY_MAX_AGE:-86400}
+
+aad_full_verify_due() {
+    _afvd_now=$(date +%s 2>/dev/null)
+    case "$_afvd_now" in ''|*[!0-9]*) return 0 ;; esac
+    _afvd_last=$(cat "$LAST_FULL_VERIFY_FILE" 2>/dev/null)
+    case "$_afvd_last" in ''|*[!0-9]*) return 0 ;; esac
+    [ $((_afvd_now - _afvd_last)) -ge "$AAD_FULL_VERIFY_MAX_AGE" ]
+}
+
+aad_mark_full_verify() {
+    date +%s > "$LAST_FULL_VERIFY_FILE" 2>/dev/null || true
+}
+
+aad_verified_set_load() {
+    _avsl_hash="$1"
+    AAD_VERIFIED_SET=""
+    [ -f "$PACKAGE_VERIFIED_FILE" ] || return 1
+    [ "$(cat "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null)" = "$_avsl_hash" ] || return 1
+    AAD_VERIFIED_SET=$(cat "$PACKAGE_VERIFIED_FILE" 2>/dev/null)
+    [ -n "$AAD_VERIFIED_SET" ]
+}
+
+aad_package_verified() {
+    case "$AAD_VERIFIED_SET" in
+        *"|$1|$2|$3|"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 full_rescan_locked() {
     AAD_TIMING_TOTAL_START=$(aad_now_ms)
-    # Build one authoritative all-package snapshot first. Stale cleanup must not
-    # use PackageManager's flaky per-package filter on some Android 16 ROMs.
     installed_keys="$DATA_DIR/.installed_keys.$$"
     list_all_installed_package_keys > "$installed_keys"
     cleanup_stale_records "$installed_keys"
@@ -3940,7 +3798,27 @@ full_rescan_locked() {
     list_all_package_state > "$new_state"
     total=0
     processed=0
+    skipped=0
     aborted=0
+    AAD_AUDIT_CARRY="$COMPONENT_AUDIT_FILE.carry"
+    AAD_SDK_CARRY="$SDK_FINGERPRINT_FILE.carry"
+    rm -f "$AAD_AUDIT_CARRY" "$AAD_SDK_CARRY" 2>/dev/null
+    [ -s "$COMPONENT_AUDIT_FILE" ] && cp "$COMPONENT_AUDIT_FILE" "$AAD_AUDIT_CARRY" 2>/dev/null
+    [ -s "$SDK_FINGERPRINT_FILE" ] && cp "$SDK_FINGERPRINT_FILE" "$AAD_SDK_CARRY" 2>/dev/null
+
+    AAD_POLICY_FINGERPRINT=$(compute_config_hash)
+    AAD_SKIPPED_KEYS="$DATA_DIR/.scan_skipped.$$"
+    AAD_VERIFIED_NEW="$PACKAGE_VERIFIED_FILE.new.$$"
+    : > "$AAD_SKIPPED_KEYS"; : > "$AAD_VERIFIED_NEW"
+    aad_fast_path=0
+    if aad_full_verify_due; then
+        log "FAST-PATH disabled: periodic full verification due (max_age=${AAD_FULL_VERIFY_MAX_AGE}s)"
+    elif aad_verified_set_load "$AAD_POLICY_FINGERPRINT"; then
+        aad_fast_path=1
+        log "FAST-PATH enabled: reusing verification for unchanged packages policy=$AAD_POLICY_FINGERPRINT"
+    else
+        log "FAST-PATH unavailable: no verified set for policy=$AAD_POLICY_FINGERPRINT (rules/settings changed or first run)"
+    fi
     printf 'timestamp|user|package|category|type|risk|action|component\n' > "$COMPONENT_AUDIT_FILE" 2>/dev/null
     chmod 600 "$COMPONENT_AUDIT_FILE" 2>/dev/null
     printf 'timestamp|user|package|category|sdk|evidence\n' > "$SDK_FINGERPRINT_FILE" 2>/dev/null
@@ -3991,11 +3869,21 @@ full_rescan_locked() {
     while IFS='|' read -r user pkg vc; do
         [ -z "$pkg" ] && continue
         processed=$((processed + 1))
+        if [ "$aad_fast_path" = "1" ] && aad_package_verified "$user" "$pkg" "$vc"; then
+            printf '|%s|%s|%s|
+' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
+            printf '%s|%s
+' "$user" "$pkg" >> "$AAD_SKIPPED_KEYS"
+            skipped=$((skipped + 1))
+            continue
+        fi
         [ "$AAD_SHOW_PROGRESS" = "1" ] && echo "[$processed/$scan_total] u$user $pkg"
         AAD_CURRENT_VERSION_CODE="$vc"
         export AAD_CURRENT_VERSION_CODE
         n=$(process_package_user "$user" "$pkg")
         rc=$?
+        [ "$rc" -eq 0 ] && printf '|%s|%s|%s|
+' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
         case "$n" in ''|*[!0-9]*) n=0 ;; esac
         total=$((total + n))
         if [ "$rc" -eq 2 ] || [ -f "$AAD_FAIL_FAST_ABORT" ]; then
@@ -4004,6 +3892,31 @@ full_rescan_locked() {
         fi
     done < "$new_state"
     AAD_TIMING_PACKAGE_END=$(aad_now_ms)
+
+    if [ "$skipped" -gt 0 ]; then
+        for _cf in "$AAD_AUDIT_CARRY:$COMPONENT_AUDIT_FILE" "$AAD_SDK_CARRY:$SDK_FINGERPRINT_FILE"; do
+            _csrc=${_cf%%:*}; _cdst=${_cf#*:}
+            [ -s "$_csrc" ] || continue
+            awk -F'|' -v kf="$AAD_SKIPPED_KEYS" '
+                BEGIN {while ((getline line < kf) > 0) if (line != "") keep[line]=1; close(kf)}
+                NR==1 {next}
+                (($2 "|" $3) in keep) {print}
+            ' "$_csrc" >> "$_cdst" 2>/dev/null
+        done
+        log "FAST-PATH carried audit rows for $skipped skipped package(s)"
+    fi
+    rm -f "$AAD_AUDIT_CARRY" "$AAD_SDK_CARRY" "$AAD_SKIPPED_KEYS" 2>/dev/null
+
+    if [ "$aborted" -ne 1 ] && [ -s "$AAD_VERIFIED_NEW" ]; then
+        chmod 600 "$AAD_VERIFIED_NEW" 2>/dev/null || true
+        if mv -f "$AAD_VERIFIED_NEW" "$PACKAGE_VERIFIED_FILE" 2>/dev/null; then
+            printf '%s
+' "$AAD_POLICY_FINGERPRINT" > "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null
+            [ "$aad_fast_path" = "1" ] || aad_mark_full_verify
+        fi
+    fi
+    rm -f "$AAD_VERIFIED_NEW" 2>/dev/null
+    log "SCAN-EFFICIENCY packages=$processed reconciled=$((processed - skipped)) skipped_unchanged=$skipped fast_path=$aad_fast_path"
 
     rm -rf "$SCAN_CANDIDATE_CACHE_DIR" 2>/dev/null
     unset SCAN_CANDIDATE_CACHE_DIR
@@ -4014,9 +3927,6 @@ full_rescan_locked() {
     unset AAD_MANIFEST_STATS_FILE
     unset AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH AAD_CURRENT_VERSION_CODE
     rm -f "$AAD_FAIL_FAST_STATE" 2>/dev/null
-    # Never let a failed enumeration overwrite the package-state baseline: an
-    # empty file would make the next incremental pass treat every package as
-    # changed and re-run the whole reconciliation.
     if [ -s "$new_state" ]; then
         mv -f "$new_state" "$STATE_FILE"
     else
@@ -4090,12 +4000,20 @@ full_rescan() {
     acquire_lock || { log "LOCK timeout: full rescan skipped"; return 1; }
     full_rescan_locked
     _fr_rc=$?
-    # release_lock is an `rm -rf` and always succeeds; without capturing the rc
-    # first this function reported success for every failed or fail-fast scan,
-    # which silently hid boot-scan failures and made the Action fail-fast
-    # summary unreachable.
     release_lock
     return "$_fr_rc"
+}
+
+aad_verified_forget() {
+    [ -f "$PACKAGE_VERIFIED_FILE" ] || return 0
+    _avf_tmp=$(aad_mktemp_near "$PACKAGE_VERIFIED_FILE")
+    [ -n "$_avf_tmp" ] || return 1
+    if grep -v "^|$1|$2|" "$PACKAGE_VERIFIED_FILE" > "$_avf_tmp" 2>/dev/null; then
+        mv -f "$_avf_tmp" "$PACKAGE_VERIFIED_FILE" 2>/dev/null || rm -f "$_avf_tmp" 2>/dev/null
+    else
+        rm -f "$_avf_tmp" 2>/dev/null
+    fi
+    return 0
 }
 
 rescan_changed_packages_locked() {
@@ -4104,20 +4022,12 @@ rescan_changed_packages_locked() {
     list_all_package_state > "$current"
     new_count=$(grep -c '|' "$current" 2>/dev/null); [ -n "$new_count" ] || new_count=0
     AAD_PACKAGE_CHANGES=0
-    # Same fail-safe as the full scan: an empty enumeration is a PM failure.
     if [ ! -s "$current" ]; then
         rm -f "$current" 2>/dev/null
         log "PACKAGE-DELTA-SKIP: enumeration returned no packages; nothing reconciled."
         return 0
     fi
 
-    # A freshly installed package is the exact case where the per-package
-    # `cmd package path` query is least reliable: PackageManager has already
-    # published the package to `list packages` while the path query can still
-    # return empty for a short window. Without the authoritative
-    # `list packages -f` inventory the delta path logged MANIFEST-PATH-MISS and
-    # silently skipped AXML Activity discovery for the new app until the next
-    # full scan, so in AGGRESSIVE its exact ad Activities stayed unblocked.
     AAD_APK_PATH_CACHE="$DATA_DIR/.apk_paths.delta.$$"
     export AAD_APK_PATH_CACHE
     if build_apk_path_inventory "$AAD_APK_PATH_CACHE"; then
@@ -4135,7 +4045,7 @@ rescan_changed_packages_locked() {
         if ! grep -Fxq -- "$user|$pkg|$vc" "$STATE_FILE" 2>/dev/null; then
             AAD_PACKAGE_CHANGES=$((AAD_PACKAGE_CHANGES + 1))
             log "PACKAGE-CHANGE u$user: $pkg ($vc)"
-            # Keeps the manifest cache keyed by version like the full scan does.
+            aad_verified_forget "$user" "$pkg"
             AAD_CURRENT_VERSION_CODE="$vc"
             export AAD_CURRENT_VERSION_CODE
             process_package_user "$user" "$pkg" >/dev/null
@@ -4153,10 +4063,6 @@ rescan_changed_packages_locked() {
 PACKAGE_RESCAN_PENDING="$DATA_DIR/.package_rescan.pending"
 
 rescan_changed_packages() {
-    # A package event that arrives while a full scan owns the lock used to be
-    # dropped after the 60s timeout, leaving the new app unhandled until the
-    # safety poll (up to 15 minutes later). Record the request instead; the
-    # polling watcher retries it on its next cycle.
     if ! acquire_lock; then
         : > "$PACKAGE_RESCAN_PENDING" 2>/dev/null
         log "LOCK timeout: incremental rescan deferred (queued for retry)"

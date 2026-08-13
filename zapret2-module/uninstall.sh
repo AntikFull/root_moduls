@@ -1,6 +1,6 @@
 #!/system/bin/sh
 umask 077
-# Очистка только процессов и правил, принадлежащих этому модулю.
+# РћС‡РёСЃС‚РєР° С‚РѕР»СЊРєРѕ РїСЂРѕС†РµСЃСЃРѕРІ Рё РїСЂР°РІРёР», РїСЂРёРЅР°РґР»РµР¶Р°С‰РёС… СЌС‚РѕРјСѓ РјРѕРґСѓР»СЋ.
 
 MODDIR=${0%/*}
 RUN_DIR="$MODDIR/run"
@@ -28,7 +28,6 @@ for spec in "nfqws2.pid:nfqws2" "watcher.pid:config" "vpn-watcher.pid:vpn" "heal
   pid_owned "$pid" "$kind" && kill -TERM "$pid" 2>/dev/null
   rm -f "$pid_file" 2>/dev/null
 done
-# Also terminate an orphaned nfqws2 only when its cwd proves it belongs to this module.
 for proc in /proc/[0-9]*; do
   [ "$(cat "$proc/comm" 2>/dev/null)" = nfqws2 ] || continue
   [ "$(readlink "$proc/cwd" 2>/dev/null)" = "$MODDIR/bin" ] || continue
@@ -39,7 +38,7 @@ sh "$MODDIR/vpn-routing.sh" cleanup 2>/dev/null
 IPT="iptables -w 5"
 IP6T="ip6tables -w 5"
 
-# Временная очередь активного AUTO использует только этот диапазон sport.
+# Р’СЂРµРјРµРЅРЅР°СЏ РѕС‡РµСЂРµРґСЊ Р°РєС‚РёРІРЅРѕРіРѕ AUTO РёСЃРїРѕР»СЊР·СѓРµС‚ С‚РѕР»СЊРєРѕ СЌС‚РѕС‚ РґРёР°РїР°Р·РѕРЅ sport.
 while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
 while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN 2>/dev/null; do :; done
 while $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
@@ -54,8 +53,6 @@ $IPT -t mangle -X ZAPRET2_MANGLE_FORWARD 2>/dev/null
 $IPT -t mangle -F ZAPRET2_MANGLE 2>/dev/null
 $IPT -t mangle -X ZAPRET2_MANGLE 2>/dev/null
 
-# AUTO/circular uses ZAPRET2_MANGLE_IN. Remove every hook instance first;
-# keep legacy ZAPRET2_INPUT cleanup for upgrades from older builds.
 while $IPT -t mangle -D INPUT -j ZAPRET2_MANGLE_IN 2>/dev/null; do :; done
 $IPT -t mangle -F ZAPRET2_MANGLE_IN 2>/dev/null
 $IPT -t mangle -X ZAPRET2_MANGLE_IN 2>/dev/null

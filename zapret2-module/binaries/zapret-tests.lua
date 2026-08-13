@@ -11,13 +11,11 @@ function test_run(tests,...)
 	end
 end
 
-
 function test_all(...)
 	test_run({
 		test_crypto, test_bin, test_time, test_gzip, test_ipstr, test_dissect, test_csum, test_resolve,
 		test_get_source_ip, test_ifaddrs, test_rawsend, test_timer},...)
 end
-
 
 function test_crypto(...)
 	test_run({test_random, test_bop, test_aes, test_aes_gcm, test_aes_ctr, test_hkdf, test_hash},...)
@@ -503,7 +501,6 @@ function test_ipstr()
 	test_assert(s_ip==s_ip2)
 end
 
-
 function test_dissect()
 	print("* dissect")
 
@@ -690,7 +687,6 @@ function test_csum()
 	print( raw==ip4b and "IP4 RECONSTRUCT+CSUM OK" or "IP4 RECONSTRUCT+CSUM FAILED" )
 	test_assert(raw==ip4b)
 
-
 	local tcp = {
 		th_sport = math.random(0,0xFFFF),
 		th_dport = math.random(0,0xFFFF),
@@ -735,7 +731,6 @@ function test_csum()
 	dis2 = dissect(ip4b..tcpb..payload)
 	print( dis1.tcp.th_sum==dis2.tcp.th_sum and "TCP+IP4 CSUM OK" or "TCP+IP4 CSUM FAILED" )
 	test_assert(dis1.tcp.th_sum==dis2.tcp.th_sum)
-
 
 	local ip6 = {
 		ip6_flow = 0x60000000 + math.random(0,0xFFFFFFF),
@@ -960,7 +955,6 @@ function test_timer(opts)
 	print_current_time()
 	print()
 end
-
 
 function test_rawsend(opts)
 	print("* rawsend")

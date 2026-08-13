@@ -1,3 +1,3 @@
-# NAME=USER_PADENCAP_MD5
---lua-desync=fake:blob=0x00000000:tcp_ts=-1000:tcp_ack=-1000:tcp_ts_up:badseq:tcp_md5:repeats=4
+# NAME=USER_PADENCAP_TLSMOD
+--lua-desync=fake:blob=0x00000000:tcp_ts=-1000:tcp_ack=-1000:tcp_ts_up:badseq:tls_mod=padencap:repeats=4
 --lua-desync=multisplit:pos=1,5:seqovl=5:seqovl_pattern=0x1603030000:padencap

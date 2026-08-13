@@ -1,4 +1,3 @@
-# Zapret2 eCubz v2.9.0 SMART ACTIVE
 
 Android root-модуль AntiDPI на базе `nfqws2` для KernelSU / KernelSU Next / Magisk / APatch.
 
@@ -12,7 +11,6 @@ SMART_ACTIVE читает отдельные файлы из каталога `s
 В файл вставляются обычные строки аргументов nfqws2:
 
 ```text
-# NAME=MY_STRATEGY
 --lua-desync=fake:blob=0x00000000:repeats=4
 --lua-desync=multisplit:pos=1,midsni
 ```
@@ -25,8 +23,6 @@ TLS/443, `out-range=-d10` и `payload=tls_client_hello`. Полный профи
 Явный DIRECT-файл выглядит так:
 
 ```text
-# NAME=DIRECT
-# MODE=DIRECT
 ```
 
 Пользовательский каталог сохраняется при обновлении. Изменение содержимого или
@@ -37,7 +33,7 @@ TLS/443, `out-range=-d10` и `payload=tls_client_hello`. Полный профи
 На ядрах без `xt_connbytes` режим SMART теперь использует `SMART_ACTIVE`, а не один
 постоянный compatibility-профиль. После подключения к сети модуль отдельной очередью
 проверяет YouTube, YouTube API, изображения и Google Video в порядке файлов
-`strategy_1`, `strategy_2` и далее. В комплекте шесть стартовых профилей:
+`strategy_1`, `strategy_2` и далее. В комплекте семь стартовых профилей (первый — `DIRECT`):
 `COMPAT_FAKE`, `SIMPLE_ALT4`, `SPLIT_SAFE` и три пользовательские стратегии.
 
 Успешный профиль сохраняется отдельно для каждой сети: Wi-Fi на 24 часа, мобильная
@@ -61,8 +57,6 @@ AUTO только при реальной смене роли/default upstream.
 На ядрах с полным bounded reply-feed по-прежнему используется `SMART_NATIVE`/circular.
 
 ## Что изменилось в 2.8.1
-
-### Low-CPU network role watcher
 
 В 2.8.0 `vpn-watch.sh` каждые 2 секунды запускал `net-role.sh signature`. Тот обходил все сетевые интерфейсы и для каждого вызывал `ip`; дополнительно каждые 10 секунд выполнялся строгий role snapshot с `dumpsys connectivity/tethering`. На устройствах с большим числом Android/rmnet/ifb интерфейсов это давало заметную постоянную CPU-нагрузку.
 
@@ -104,7 +98,11 @@ AUTO только при реальной смене роли/default upstream.
 
 ### Сервисные SMART-профили
 
-SMART содержит явный YouTube / Google Video профиль и общий General-профиль. YouTube-профиль проверяется первым только для узкого встроенного списка YouTube-доменов; весь остальной выбранный трафик попадает в General.
+В SMART_ACTIVE подобранная активным probe стратегия применяется ко всему TLS/443-трафику, а встроенный General-профиль остаётся вторым и обслуживает то, что не попало под первый фильтр (в первую очередь HTTP/80). Отдельный YouTube-хостлист используется только в SMART_NATIVE.
+
+Активный probe проверяет две группы контрольных хостов — `AUTO_PROBE_HOSTS_GENERAL` (обычные сайты) и `AUTO_PROBE_HOSTS_GOOGLE` (YouTube/Google Video). Кандидат засчитывается, только когда проходят обе группы.
+
+`strategy_1` — профиль `DIRECT`. Если сеть проходит весь probe без обхода, модуль не создаёт ни одного правила netfilter и не запускает nfqws2. Поведение отключается через `AUTO_ALLOW_DIRECT="0"`.
 
 `smart_youtube.list` специально не содержит широкие корневые `googleapis.com`, `gstatic.com`, `googleusercontent.com` или `ggpht.com`, чтобы YouTube-профиль не затрагивал посторонний Google-трафик браузеров.
 

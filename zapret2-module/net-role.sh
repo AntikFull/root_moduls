@@ -1,7 +1,4 @@
 #!/system/bin/sh
-# Zapret2 eCubz strict network role resolver.
-# Prefer Android-reported roles, reject physical/default upstreams as VPN/tether,
-# and use configured tether interface patterns only as a conservative fallback.
 
 umask 077
 MODDIR=${0%/*}
@@ -14,9 +11,6 @@ IP_BIN=$(command -v ip 2>/dev/null); [ -n "$IP_BIN" ] || IP_BIN=/system/bin/ip
 DUMPSYS=$(command -v dumpsys 2>/dev/null); [ -n "$DUMPSYS" ] || DUMPSYS=/system/bin/dumpsys
 RT_TABLES=/data/misc/net/rt_tables
 
-# Per-invocation caches. role-signature used to re-run dumpsys connectivity/tethering
-# many times through nested helpers. Keep each Android snapshot at most once per
-# net-role.sh invocation; child command substitutions inherit these cached values.
 _CONNECTIVITY_READY=0
 _CONNECTIVITY_PHYSICAL=""
 _CONNECTIVITY_VPNS=""
@@ -119,8 +113,6 @@ ensure_connectivity_roles() {
   _CONNECTIVITY_READY=1
 }
 
-# Physical/non-VPN networks as reported by Android. Also include actual main/default
-# upstreams so wlan0 can never become tether merely because dumpsys is incomplete.
 physical_ifaces_from_connectivity() {
   ensure_connectivity_roles
   ensure_default_upstreams
@@ -135,8 +127,6 @@ iface_is_physical_android() {
   physical_ifaces_from_connectivity | grep -Fxq "$needle"
 }
 
-# Current tether state from Android's IpServer history. The last observed state
-# for each interface is authoritative when such records are available.
 ensure_tether_states() {
   [ "$_TETHER_STATES_READY" = 1 ] && return 0
   if [ -x "$DUMPSYS" ]; then
@@ -187,9 +177,6 @@ detect_downstreams() {
     [ -n "$tethered" ] && { printf '%s\n' "$tethered"; return 0; }
   fi
 
-  # Conservative fallback for vendor dumpsys formats we do not parse: only
-  # configured tether-name families with a private IPv4 address, never an
-  # Android NOT_VPN/default upstream and never a tunnel interface.
   physical=" $(physical_ifaces_from_connectivity | tr '\n' ' ') "
   for iface in $(ls /sys/class/net 2>/dev/null); do
     iface_matches_tether_config "$iface" || continue
@@ -319,8 +306,6 @@ signature() {
 }
 
 role_signature() {
-  # Prime once in the parent shell so all command substitutions below inherit the
-  # same Android snapshot instead of executing dumpsys repeatedly.
   ensure_connectivity_roles
   ensure_default_upstreams
   ensure_tether_states

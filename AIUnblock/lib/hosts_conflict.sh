@@ -1,46 +1,45 @@
 #!/system/bin/sh
-# AI Unblock RU — общая проверка конфликта system/etc/hosts с другими модулями.
-# Magic mount у Magisk/KernelSU/APatch может конфликтовать, если два модуля
-# одновременно предоставляют собственный system/etc/hosts: у некоторых
-# менеджеров (в первую очередь KernelSU/его форки и APatch) это приводит
-# не просто к "тихой" победе одного модуля, а к обнаружению конфликта
-# монтирования и автоматическому отключению модуля на следующей загрузке.
-# hosts_conflict_detected <own_module_id>
-# Возвращает 0 и печатает id первого найденного конфликтующего модуля,
-# если есть другой АКТИВНЫЙ модуль с непустым system/etc/hosts.
-# Возвращает 1, если конфликтов не найдено.
+# AI Unblock RU вЂ” РѕР±РЅР°СЂСѓР¶РµРЅРёРµ РґСЂСѓРіРѕРіРѕ Р°РєС‚РёРІРЅРѕРіРѕ hosts-РјРѕРґСѓР»СЏ.
 
 hosts_conflict_detected() {
-  local own_id="$1"
-  local dir id
+  local own_id="$1" dir id
 
-# Прямая и быстрая проверка известных модулей hosts во избежание проблем с раскрытием маски
-  if [ -d "/data/adb/modules/bindhosts" ] && [ ! -f "/data/adb/modules/bindhosts/disable" ] && [ ! -f "/data/adb/modules/bindhosts/remove" ]; then
-    echo "bindhosts"
+  for id in bindhosts Systemless_Hosts systemless_hosts hosts; do
+    dir="/data/adb/modules/$id"
+    [ -d "$dir" ] || continue
+    [ "$id" = "$own_id" ] && continue
+    [ -f "$dir/disable" ] && continue
+    [ -f "$dir/remove" ] && continue
+    echo "$id"
     return 0
-  fi
-  if [ -d "/data/adb/modules/Systemless_Hosts" ] && [ ! -f "/data/adb/modules/Systemless_Hosts/disable" ] && [ ! -f "/data/adb/modules/Systemless_Hosts/remove" ]; then
-    echo "Systemless_Hosts"
-    return 0
-  fi
+  done
 
-# Универсальный сканер для остальных модулей
   for dir in /data/adb/modules/*/; do
     [ -d "$dir" ] || continue
-
     id="${dir%/}"
     id="${id##*/}"
 
     [ "$id" = "$own_id" ] && continue
-    [ "$id" = "meta-overlayfs" ] && continue
     [ -f "${dir}disable" ] && continue
     [ -f "${dir}remove" ] && continue
     [ -f "${dir}skip_mount" ] && continue
 
-    if [ -s "${dir}system/etc/hosts" ] || [ -f "${dir}mode" ]; then
+    if [ -s "${dir}system/etc/hosts" ] || [ -s "/data/adb/metamodule/mnt/$id/system/etc/hosts" ]; then
       echo "$id"
       return 0
     fi
+  done
+
+  # РќРµРєРѕС‚РѕСЂС‹Рµ KernelSU metamodules РґРµСЂР¶Р°С‚ РѕР±СЉРµРґРёРЅС‘РЅРЅРѕРµ РґРµСЂРµРІРѕ РѕС‚РґРµР»СЊРЅРѕ РѕС‚ metadata-dir.
+  # РџСЂРѕРІРµСЂСЏРµРј РµРіРѕ С‚РѕР»СЊРєРѕ РєР°Рє РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє, РЅРµ СЃС‡РёС‚Р°СЏ СЃР°Рј С„Р°РєС‚ РЅР°Р»РёС‡РёСЏ metamodule РєРѕРЅС„Р»РёРєС‚РѕРј.
+  for dir in /data/adb/metamodule/mnt/*/; do
+    [ -d "$dir" ] || continue
+    id="${dir%/}"
+    id="${id##*/}"
+    [ "$id" = "$own_id" ] && continue
+    [ -s "${dir}system/etc/hosts" ] || continue
+    echo "$id"
+    return 0
   done
 
   return 1

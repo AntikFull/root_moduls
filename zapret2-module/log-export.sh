@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# Best-effort export of boot-safe internal logs to shared storage.
-# Never used as a prerequisite for service startup.
 umask 077
 MODDIR=${0%/*}
 INTERNAL_DIR="$MODDIR/logs"
@@ -27,7 +25,7 @@ wait_for_export_dir() {
 }
 
 if ! wait_for_export_dir; then
-  [ "$MODE" = now ] && echo "Shared storage /sdcard ещё недоступно" >&2 && exit 1
+  [ "$MODE" = now ] && echo "Shared storage /sdcard РµС‰С‘ РЅРµРґРѕСЃС‚СѓРїРЅРѕ" >&2 && exit 1
   exit 0
 fi
 mkdir -p "$INTERNAL_DIR" 2>/dev/null

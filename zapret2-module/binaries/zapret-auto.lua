@@ -295,7 +295,6 @@ function automate_failure_check(desync, hrec, crec)
 	return false
 end
 
-
 -- circularily change strategy numbers when failure count reaches threshold ('fails')
 -- this orchestrator requires redirection of incoming traffic to cache RST and http replies !
 -- each orchestrated instance must have strategy=N arg, where N starts from 1 and increment without gaps

@@ -355,7 +355,6 @@ function synhide(ctx, desync)
 		opt=""
 	end
 
-
 	local xorseq
 	if desync.arg.xorseq then
 		xorseq = parse_hex(desync.arg.xorseq)

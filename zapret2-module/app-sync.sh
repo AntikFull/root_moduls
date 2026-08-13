@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# Fast per-app rule synchronizer. Updates package UIDs + OUTPUT NFQUEUE/QUIC
-# chains without restarting nfqws2 or touching VPN/tether routing.
 
 umask 077
 MODDIR=${0%/*}
@@ -32,11 +30,21 @@ list_users() {
   [ -n "$users" ] && printf '%s\n' "$users" || echo 0
 }
 refresh_fast_cache() {
-  local tmp="$CACHE.tmp.$$" user
+  local tmp="$CACHE.tmp.$$" user pkg uid usr
   [ -r /data/system/packages.list ] || return 0
   : > "$tmp"
   for user in $(list_users); do
-    awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list >> "$tmp"
+    if [ "$user" = "0" ]; then
+      awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list >> "$tmp"
+      continue
+    fi
+    # РЎРј. service.sh: packages.list РЅРµ Р·РЅР°РµС‚ РїСЂРѕ РїСЂРѕС„РёР»Рё, РїРѕСЌС‚РѕРјСѓ РІРѕ РІС‚РѕСЂРёС‡РЅРѕРј
+    # РїСЂРѕС„РёР»Рµ РїР°РєРµС‚ СЃС‡РёС‚Р°РµС‚СЃСЏ СѓСЃС‚Р°РЅРѕРІР»РµРЅРЅС‹Рј С‚РѕР»СЊРєРѕ РїСЂРё РЅР°Р»РёС‡РёРё РєР°С‚Р°Р»РѕРіР° РґР°РЅРЅС‹С….
+    [ -d "/data/user/$user" ] || continue
+    awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list 2>/dev/null | \
+    while read -r pkg uid usr; do
+      [ -d "/data/user/$usr/$pkg" ] && printf '%s %s %s\n' "$pkg" "$uid" "$usr"
+    done >> "$tmp"
   done
   [ -s "$tmp" ] && sort -u "$tmp" > "$tmp.sorted" && mv -f "$tmp.sorted" "$CACHE"
   rm -f "$tmp" "$tmp.sorted" 2>/dev/null
@@ -130,10 +138,8 @@ if [ "$FORCE_TCP" = 1 ] && [ "$QUIC_MODE" != OFF ]; then
   esac
 fi
 
-# Detect packages that share a UID with another selected/excluded package. The
-# kernel owner matcher works by UID, so such packages cannot be isolated separately.
 shared_want="$RUN_DIR/.shared-want.$$"
-{ grep -v '^[[:space:]]*\(#\|$\)' "$AUTO_APPS_LIST" 2>/dev/null; grep -v '^[[:space:]]*\(#\|$\)' "$APPS_LIST" 2>/dev/null; grep -v '^[[:space:]]*\(#\|$\)' "$EXCLUDE_LIST" 2>/dev/null; } | sort -u > "$shared_want"
+{ grep -vE '^[[:space:]]*(#|$)' "$AUTO_APPS_LIST" 2>/dev/null; grep -vE '^[[:space:]]*(#|$)' "$APPS_LIST" 2>/dev/null; grep -vE '^[[:space:]]*(#|$)' "$EXCLUDE_LIST" 2>/dev/null; } | sort -u > "$shared_want"
 awk 'NR==FNR{want[$1]=1;next} ($1 in want){p[$2]=p[$2]" "$1;c[$2]++} END{for(u in c) if(c[u]>1) print u":"p[u]}' "$shared_want" "$CACHE" 2>/dev/null | while read -r shared; do log "shared UID: $shared"; done
 rm -f "$shared_want" 2>/dev/null
 log "rules synced without nfqws/VPN restart; mode=$MODE smart_app_uids=$(echo $APP_UIDS|wc -w) auto=$(echo $AUTO_APP_UIDS|wc -w) manual=$(echo $MANUAL_APP_UIDS|wc -w) exclude_uids=$(echo $EXCLUDE_UIDS|wc -w)"

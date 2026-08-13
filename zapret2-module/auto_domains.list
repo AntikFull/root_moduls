@@ -1,8 +1,8 @@
-# Список доменов для DPI-десинка Zapret2 eCubz (--hostlist)
-# Автор: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
-# Поддомены включаются автоматически (youtube.com включает *.youtube.com).
+# РЎРїРёСЃРѕРє РґРѕРјРµРЅРѕРІ РґР»СЏ DPI-РґРµСЃРёРЅРєР° Zapret2 eCubz (--hostlist)
+# РђРІС‚РѕСЂ: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
+# РџРѕРґРґРѕРјРµРЅС‹ РІРєР»СЋС‡Р°СЋС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё (youtube.com РІРєР»СЋС‡Р°РµС‚ *.youtube.com).
 
-# --- YouTube и Google Video ---
+# --- YouTube Рё Google Video ---
 youtube.com
 youtu.be
 googlevideo.com
@@ -19,14 +19,12 @@ returnyoutubedislikeapi.com
 googleapis.com
 googleusercontent.com
 
-# --- Discord ---
 discord.com
 discord.gg
 discordapp.com
 discord.media
 discordapp.net
 
-# --- Meta (Instagram, Facebook) ---
 instagram.com
 cdninstagram.com
 facebook.com
@@ -36,14 +34,13 @@ fb.com
 fbsbx.com
 threads.net
 
-# --- X (Twitter) ---
 twitter.com
 x.com
 twimg.com
 t.co
 twitpic.com
 
-# --- Другие сервисы ---
+# --- Р”СЂСѓРіРёРµ СЃРµСЂРІРёСЃС‹ ---
 github.com
 githubusercontent.com
 github.io
@@ -61,7 +58,7 @@ jtvnw.net
 viber.com
 signal.org
 
-# --- Прочие CDN и сервисы ---
+# --- РџСЂРѕС‡РёРµ CDN Рё СЃРµСЂРІРёСЃС‹ ---
 akamaized.net
 cloudflare.com
 cloudflare-dns.com

@@ -1,7 +1,5 @@
 #!/system/bin/sh
 umask 077
-# Handler for manual edits. WebUI/CLI writes are reloaded synchronously by control
-# and are suppressed here to avoid a second delayed restart.
 
 MODDIR="${0%/*}"
 LOG_DIR="$MODDIR/logs"
@@ -39,12 +37,12 @@ echo $$ > "$LOCKDIR/pid" 2>/dev/null
 trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT HUP INT TERM
 case "$1" in
   *apps.list|*auto_apps.list|*exclude.list)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: ручное изменение списка приложений ($1), быстрый sync через 1с" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: СЂСѓС‡РЅРѕРµ РёР·РјРµРЅРµРЅРёРµ СЃРїРёСЃРєР° РїСЂРёР»РѕР¶РµРЅРёР№ ($1), Р±С‹СЃС‚СЂС‹Р№ sync С‡РµСЂРµР· 1СЃ" >> "$LOG_FILE"
     sleep 1
     sh "$MODDIR/app-sync.sh" apply >/dev/null 2>&1 || sh "$MODDIR/service.sh" reload
     ;;
   *)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: ручное изменение ($1 $2), полная перезагрузка через 2с" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: СЂСѓС‡РЅРѕРµ РёР·РјРµРЅРµРЅРёРµ ($1 $2), РїРѕР»РЅР°СЏ РїРµСЂРµР·Р°РіСЂСѓР·РєР° С‡РµСЂРµР· 2СЃ" >> "$LOG_FILE"
     sleep 2
     sh "$MODDIR/service.sh" reload
     ;;

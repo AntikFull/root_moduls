@@ -1,7 +1,4 @@
-# AIUnblock RU — пользовательские резолверы Smart DNS
-# Скопируйте файл как smartdns.user.conf и раскомментируйте/добавьте строки.
-# Файл smartdns.user.conf сохраняется при обновлении модуля.
-#
-# DOH https://example.org/dns-query
-# DOT example.org
-# DNS 203.0.113.53
+# РџРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёРµ СЂРµР·РѕР»РІРµСЂС‹. РЎРєРѕРїРёСЂСѓР№С‚Рµ РІ smartdns.user.conf.
+# Р¤РѕСЂРјР°С‚:
+# DOH https://example.com/dns-query
+# DoT РЅР°РјРµСЂРµРЅРЅРѕ РЅРµ РїСЂРёРЅРёРјР°РµС‚СЃСЏ: РІ AIUnblock РЅРµС‚ DoT-РєР»РёРµРЅС‚Р°.

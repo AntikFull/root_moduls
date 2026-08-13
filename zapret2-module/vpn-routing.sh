@@ -1,7 +1,4 @@
 #!/system/bin/sh
-# Standalone VPN sharing for Hotspot/USB.
-# v2.7.x: strict dynamic roles, idempotent state machine, exact downstream policy,
-# active-VPN leak guards and AntiDPI/BLOCK fallback without broad RFC1918 rules.
 
 umask 077
 MODDIR=${0%/*}
@@ -114,9 +111,6 @@ cleanup_rules() {
 }
 
 next_free_pref() {
-  # Android tether/VPN implementations commonly reserve priorities around this
-  # band. Stay inside the audited 20500..20900 window instead of wandering into
-  # unrelated policy rules if many priorities are occupied.
   local pref="$1" max=20900
   [ "$VPN_ROUTE_PREF_BASE" -le "$max" ] 2>/dev/null || max=$VPN_ROUTE_PREF_BASE
   while [ "$pref" -le "$max" ]; do
@@ -130,15 +124,15 @@ next_free_pref() {
 
 setup_private_route_table() {
   local vpn_if="$1" has4=0 has6=0
-  valid_number "$VPN_ROUTE_TABLE" || { log "некорректный VPN_ROUTE_TABLE=$VPN_ROUTE_TABLE"; return 1; }
+  valid_number "$VPN_ROUTE_TABLE" || { log "РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ VPN_ROUTE_TABLE=$VPN_ROUTE_TABLE"; return 1; }
   "$IP_BIN" -o -4 addr show dev "$vpn_if" 2>/dev/null | grep -q ' inet ' && has4=1
   "$IP_BIN" -o -6 addr show dev "$vpn_if" 2>/dev/null | grep -q ' inet6 ' && has6=1
   "$IP_BIN" -4 route flush table "$VPN_ROUTE_TABLE" 2>/dev/null || true
   "$IP_BIN" -6 route flush table "$VPN_ROUTE_TABLE" 2>/dev/null || true
-  [ "$has4" = 1 ] || { log "VPN=$vpn_if не имеет IPv4-адреса; IPv4 VPN sharing недоступен"; return 1; }
-  "$IP_BIN" -4 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || { log "не удалось создать IPv4 default dev $vpn_if table $VPN_ROUTE_TABLE"; return 1; }
+  [ "$has4" = 1 ] || { log "VPN=$vpn_if РЅРµ РёРјРµРµС‚ IPv4-Р°РґСЂРµСЃР°; IPv4 VPN sharing РЅРµРґРѕСЃС‚СѓРїРµРЅ"; return 1; }
+  "$IP_BIN" -4 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || { log "РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ IPv4 default dev $vpn_if table $VPN_ROUTE_TABLE"; return 1; }
   if [ "$has6" = 1 ]; then
-    "$IP_BIN" -6 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || log "IPv6 default через $vpn_if не создан; leak guard блокирует физический выход"
+    "$IP_BIN" -6 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || log "IPv6 default С‡РµСЂРµР· $vpn_if РЅРµ СЃРѕР·РґР°РЅ; leak guard Р±Р»РѕРєРёСЂСѓРµС‚ С„РёР·РёС‡РµСЃРєРёР№ РІС‹С…РѕРґ"
   fi
   return 0
 }
@@ -174,12 +168,12 @@ setup_guard_only() {
     "$IP6T" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
     for down in $downs; do "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || true; done
   fi
-  log "fallback=BLOCK: VPN не готов, интернет клиентов раздачи заблокирован"
+  log "fallback=BLOCK: VPN РЅРµ РіРѕС‚РѕРІ, РёРЅС‚РµСЂРЅРµС‚ РєР»РёРµРЅС‚РѕРІ СЂР°Р·РґР°С‡Рё Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ"
 }
 
 setup_vpn_nat_forward_guard() {
   local vpn_if="$1" downs="$2" down subnet
-  [ -x "$IPT" ] || { log "iptables недоступен: VPN sharing не применён"; return 1; }
+  [ -x "$IPT" ] || { log "iptables РЅРµРґРѕСЃС‚СѓРїРµРЅ: VPN sharing РЅРµ РїСЂРёРјРµРЅС‘РЅ"; return 1; }
   "$IPT" -w 5 -t filter -N ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
   "$IPT" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
   if [ "$VPN_HOTSPOT_MASQUERADE" = "1" ]; then
@@ -191,11 +185,9 @@ setup_vpn_nat_forward_guard() {
     if "$IPT" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$vpn_if" -o "$down" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1; then :; else
       "$IPT" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$vpn_if" -o "$down" -m state --state ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || return 1
     fi
-    # Active VPN must be fail-closed for packets that would otherwise escape via a
-    # physical upstream. ANTIDPI is restored only after VPN disappears and cleanup runs.
     "$IPT" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" ! -o "$vpn_if" -j REJECT >/dev/null 2>&1 || return 1
     if [ "$VPN_HOTSPOT_MASQUERADE" = "1" ]; then
-      subnet=$(subnet_for_iface "$down"); [ -n "$subnet" ] || { log "не удалось определить подсеть downstream=$down для MASQUERADE"; return 1; }
+      subnet=$(subnet_for_iface "$down"); [ -n "$subnet" ] || { log "РЅРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ РїРѕРґСЃРµС‚СЊ downstream=$down РґР»СЏ MASQUERADE"; return 1; }
       "$IPT" -w 5 -t nat -A ZAPRET2_VPN_NAT -s "$subnet" -o "$vpn_if" -j MASQUERADE >/dev/null 2>&1 || return 1
       log "MASQUERADE: downstream=$down subnet=$subnet -> $vpn_if"
     fi
@@ -226,8 +218,6 @@ verify_current_rules() {
   local sig="$1" line pref selector value table downs down vpn_if subnet
   [ "$(cat "$META_FILE" 2>/dev/null)" = "$sig" ] || return 1
   [ "$sig" != disabled ] || return 0
-  # No active tether means no VPN forwarding/policy objects should exist. The
-  # state machine records this desired state and must not rebuild it every verify.
   case "$sig" in down='|'*) return 0 ;; esac
   case "$sig" in *'|vpn=|'*)
     if fallback_is_block; then
@@ -281,23 +271,23 @@ release_lock() { [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOC
 apply_rules() {
   local vpn_if downs pref down sig
   [ "$ENABLE_HOTSPOT" = "1" ] && [ "$ENABLE_VPN_HOTSPOT" = "1" ] || { cleanup_rules; atomic_meta_write disabled; return 0; }
-  [ -x "$IP_BIN" ] || { log "команда ip не найдена"; return 1; }
+  [ -x "$IP_BIN" ] || { log "РєРѕРјР°РЅРґР° ip РЅРµ РЅР°Р№РґРµРЅР°"; return 1; }
 
   sig=$(desired_signature)
   verify_current_rules "$sig" && return 0
   cleanup_rules
   downs=$(detect_downstreams)
   if [ -z "$downs" ]; then
-    if downstream_candidate_exists; then log "downstream появился, но ещё не готов; повторим"; return 3; fi
-    log "VPN sharing включён, но активный tether downstream пока не найден"
+    if downstream_candidate_exists; then log "downstream РїРѕСЏРІРёР»СЃСЏ, РЅРѕ РµС‰С‘ РЅРµ РіРѕС‚РѕРІ; РїРѕРІС‚РѕСЂРёРј"; return 3; fi
+    log "VPN sharing РІРєР»СЋС‡С‘РЅ, РЅРѕ Р°РєС‚РёРІРЅС‹Р№ tether downstream РїРѕРєР° РЅРµ РЅР°Р№РґРµРЅ"
     atomic_meta_write "$sig"
     return 0
   fi
 
   vpn_if=$(detect_vpn_iface)
   if [ -z "$vpn_if" ]; then
-    if fallback_is_block; then setup_guard_only "$downs" || return 1; log "VPN недоступен: fallback=BLOCK"; else log "VPN недоступен: fallback=ANTIDPI, обычный upstream + Zapret2"; fi
-    if vpn_candidate_exists; then log "VPN-кандидат ещё в переходном состоянии"; return 3; fi
+    if fallback_is_block; then setup_guard_only "$downs" || return 1; log "VPN РЅРµРґРѕСЃС‚СѓРїРµРЅ: fallback=BLOCK"; else log "VPN РЅРµРґРѕСЃС‚СѓРїРµРЅ: fallback=ANTIDPI, РѕР±С‹С‡РЅС‹Р№ upstream + Zapret2"; fi
+    if vpn_candidate_exists; then log "VPN-РєР°РЅРґРёРґР°С‚ РµС‰С‘ РІ РїРµСЂРµС…РѕРґРЅРѕРј СЃРѕСЃС‚РѕСЏРЅРёРё"; return 3; fi
     atomic_meta_write "$sig"
     return 0
   fi
@@ -306,11 +296,11 @@ apply_rules() {
   STATE_BUILD="$STATE_FILE.tmp.$$"; : > "$STATE_BUILD"
   pref="$VPN_ROUTE_PREF_BASE"
   for down in $downs; do
-    pref=$(next_free_pref "$pref") || { log "нет свободного policy priority"; cleanup_rules; fallback_is_block && setup_guard_only "$downs"; return 1; }
-    add_policy_rule "$pref" "$down" || { log "не удалось добавить policy rule для $down"; cleanup_rules; fallback_is_block && setup_guard_only "$downs"; return 1; }
+    pref=$(next_free_pref "$pref") || { log "РЅРµС‚ СЃРІРѕР±РѕРґРЅРѕРіРѕ policy priority"; cleanup_rules; fallback_is_block && setup_guard_only "$downs"; return 1; }
+    add_policy_rule "$pref" "$down" || { log "РЅРµ СѓРґР°Р»РѕСЃСЊ РґРѕР±Р°РІРёС‚СЊ policy rule РґР»СЏ $down"; cleanup_rules; fallback_is_block && setup_guard_only "$downs"; return 1; }
     pref=$((pref + 1))
   done
-  setup_vpn_nat_forward_guard "$vpn_if" "$downs" || { log "не удалось настроить VPN NAT/FORWARD/guard"; cleanup_rules; fallback_is_block && setup_guard_only "$downs"; return 1; }
+  setup_vpn_nat_forward_guard "$vpn_if" "$downs" || { log "РЅРµ СѓРґР°Р»РѕСЃСЊ РЅР°СЃС‚СЂРѕРёС‚СЊ VPN NAT/FORWARD/guard"; cleanup_rules; fallback_is_block && setup_guard_only "$downs"; return 1; }
   mv -f "$STATE_BUILD" "$STATE_FILE" || { cleanup_rules; return 1; }; STATE_BUILD=""; chmod 0600 "$STATE_FILE" 2>/dev/null || true
   sig=$(desired_signature); atomic_meta_write "$sig"
   log "VPN sharing ACTIVE: downstream=$(echo $downs | tr '\n' ',') -> $vpn_if private_table=$VPN_ROUTE_TABLE fallback=$VPN_FALLBACK_MODE leak_guard=ACTIVE"

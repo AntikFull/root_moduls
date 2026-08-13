@@ -1,21 +1,8 @@
 #!/system/bin/sh
-# Exact-state rollback; runtime version is read from module.prop.
-#
-# IMPORTANT: root managers execute this script in post-fs-data, long before
-# PackageManager exists. Restoring component states there is impossible, and the
-# previous version still deleted DATA_DIR afterwards - which destroyed the only
-# record of the original override states and left every managed component
-# disabled forever. The rollback is therefore split in two:
-#   * if the system is already booted, restore inline and clean up;
-#   * otherwise write a self-contained deferred rollback worker into
-#     /data/adb (outside the module tree, which is about to disappear), which
-#     waits for sys.boot_completed and then performs the exact same rollback.
 MODDIR=${0%/*}
 [ -f "$MODDIR/common.sh" ] && . "$MODDIR/common.sh"
 
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
-# Defaults in case common.sh was unavailable: never fall through to "no saved
-# state" (and therefore to deleting DATA_DIR) just because a variable was empty.
 COMPONENT_STATE="${COMPONENT_STATE:-$DATA_DIR/component_state.list}"
 IFW_RULE_FILE="${IFW_RULE_FILE:-/data/system/ifw/analytics_ads_disabler.xml}"
 LOG_DIR="$DATA_DIR/logs"
@@ -37,10 +24,9 @@ stop_owned_pidfile "$LOG_MIRROR_PID_FILE" "log_mirror.sh"
 stop_owned_pidfile "$DATA_DIR/category_watch.pid" "category_watch.sh"
 stop_owned_pidfile "$AD_SURFACE_PID_FILE" "ad_surface_indexer.sh"
 
-# Remove only this module's own OUTPUT chains. Safe at any boot stage.
 ad_killer_cleanup >/dev/null 2>&1 || true
 
-# Удаляется только собственный IFW-файл; правила App Manager, Blocker и других программ не затрагиваются.
+# РЈРґР°Р»СЏРµС‚СЃСЏ С‚РѕР»СЊРєРѕ СЃРѕР±СЃС‚РІРµРЅРЅС‹Р№ IFW-С„Р°Р№Р»; РїСЂР°РІРёР»Р° App Manager, Blocker Рё РґСЂСѓРіРёС… РїСЂРѕРіСЂР°РјРј РЅРµ Р·Р°С‚СЂР°РіРёРІР°СЋС‚СЃСЏ.
 if [ -e "$IFW_RULE_FILE" ]; then
     if rm -f "$IFW_RULE_FILE" 2>/dev/null; then
         ulog "IFW REMOVED $IFW_RULE_FILE"
@@ -93,9 +79,6 @@ if [ "$boot_state" = "1" ]; then
     ulog "Some components could not be restored; scheduling a deferred retry instead of deleting state."
 fi
 
-# --- Deferred rollback -------------------------------------------------------
-# Copy everything the worker needs outside the module directory, because the
-# root manager deletes /data/adb/modules/<id> right after this script returns.
 mkdir -p "$DEFERRED_DIR" 2>/dev/null
 chmod 700 "$DEFERRED_DIR" 2>/dev/null
 cp "$COMPONENT_STATE" "$DEFERRED_DIR/component_state.list" 2>/dev/null
@@ -103,15 +86,11 @@ cp "$COMPONENT_STATE" "$DEFERRED_DIR/component_state.list" 2>/dev/null
 [ -f "$DATA_DIR/capabilities.conf" ] && cp "$DATA_DIR/capabilities.conf" "$DEFERRED_DIR/capabilities.conf" 2>/dev/null
 
 cat > "$DEFERRED_DIR/rollback.sh" <<'DEFERRED'
-#!/system/bin/sh
-# Deferred exact-state rollback for Analytics & Ads Disabler.
-# Written by uninstall.sh when PackageManager was not available yet.
 DEFERRED_DIR="/data/adb/analytics_ads_disabler_rollback"
 LOGFILE="$DEFERRED_DIR/rollback.log"
 SDCARD_LOG_DIR="/sdcard/eCubz/logs/Analytics_Ads_Disabler"
 STATE="$DEFERRED_DIR/component_state.list"
 
-# compat.sh expects these before it is sourced.
 DATA_DIR="$DEFERRED_DIR"
 CAPABILITIES_FILE="$DEFERRED_DIR/capabilities.conf"
 export DATA_DIR CAPABILITIES_FILE
@@ -127,7 +106,6 @@ while [ "$(getprop sys.boot_completed 2>/dev/null)" != "1" ]; do
     [ "$waited" -ge 180 ] && { log "boot_completed never observed; giving up for this boot."; exit 1; }
     sleep 5
 done
-# PackageManager accepts component writes slightly after boot_completed.
 sleep 20
 
 if [ ! -f "$DEFERRED_DIR/compat.sh" ] || [ ! -s "$STATE" ]; then
@@ -157,14 +135,11 @@ cp "$LOGFILE" "$SDCARD_LOG_DIR/uninstall_deferred.log" 2>/dev/null || true
 if [ "$failed" -eq 0 ]; then
     rm -rf "$DEFERRED_DIR"
 else
-    # Keep the state so the next boot can retry rather than losing it forever.
     log "Retaining $DEFERRED_DIR for a retry on next boot."
 fi
 DEFERRED
 chmod 755 "$DEFERRED_DIR/rollback.sh" 2>/dev/null
 
-# Boot-time re-arm: a general-purpose boot service module that runs the worker
-# again if it could not finish. Harmless and self-deleting once rollback is done.
 mkdir -p /data/adb/modules/analytics_ads_disabler_rollback 2>/dev/null
 cat > /data/adb/modules/analytics_ads_disabler_rollback/module.prop <<'PROP'
 id=analytics_ads_disabler_rollback
@@ -175,13 +150,11 @@ author=eCubz
 description=Temporary helper: restores component states saved by Analytics & Ads Disabler, then removes itself.
 PROP
 cat > /data/adb/modules/analytics_ads_disabler_rollback/service.sh <<'SVC'
-#!/system/bin/sh
 DEFERRED_DIR="/data/adb/analytics_ads_disabler_rollback"
 if [ -x "$DEFERRED_DIR/rollback.sh" ]; then
     "$DEFERRED_DIR/rollback.sh"
 fi
 if [ ! -d "$DEFERRED_DIR" ]; then
-    # Rollback completed: remove this helper module on the next boot.
     touch /data/adb/modules/analytics_ads_disabler_rollback/remove 2>/dev/null
 fi
 SVC
@@ -191,9 +164,6 @@ ulog "Deferred rollback armed at $DEFERRED_DIR (boot_completed=${boot_state:-0})
 ulog "Component states are preserved there and will be restored on the next boot."
 mirror_log
 
-# Start the worker right now too, so a rollback triggered from a booted system
-# (module removed via the manager without reboot) completes without waiting.
 "$DEFERRED_DIR/rollback.sh" >/dev/null 2>&1 &
 
-# Persistent module state is removed only after the rollback data was copied out.
 rm -rf "$DATA_DIR" 2>/dev/null

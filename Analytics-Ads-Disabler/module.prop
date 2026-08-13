@@ -1,7 +1,7 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v4.8.5
-versionCode=805
+version=v4.9.1
+versionCode=901
 author=eCubz (https://t.me/eCubz)
-description=[v4.8.0: хосты для 17 рекламных SDK, отключение init-провайдеров, мост для Xposed] Адаптивное отключение аналитики, рекламы и трекеров: SAFE/BALANCED/AGGRESSIVE, AXML Full Activity Scanner + background Ad Surface Indexer (DEX/resources) + persistent cache, Banner/Native/App-Open Network Killer, Action-настройки, точный PM rollback и опциональный HYBRID IFW+PM. Логи: /data/adb/analytics_ads_disabler/logs. Поддержка: https://t.me/module_ecubz
+description=[v4.8.0: С…РѕСЃС‚С‹ РґР»СЏ 17 СЂРµРєР»Р°РјРЅС‹С… SDK, РѕС‚РєР»СЋС‡РµРЅРёРµ init-РїСЂРѕРІР°Р№РґРµСЂРѕРІ, РјРѕСЃС‚ РґР»СЏ Xposed] РђРґР°РїС‚РёРІРЅРѕРµ РѕС‚РєР»СЋС‡РµРЅРёРµ Р°РЅР°Р»РёС‚РёРєРё, СЂРµРєР»Р°РјС‹ Рё С‚СЂРµРєРµСЂРѕРІ: SAFE/BALANCED/AGGRESSIVE, AXML Full Activity Scanner + background Ad Surface Indexer (DEX/resources) + persistent cache, Banner/Native/App-Open Network Killer, Action-РЅР°СЃС‚СЂРѕР№РєРё, С‚РѕС‡РЅС‹Р№ PM rollback Рё РѕРїС†РёРѕРЅР°Р»СЊРЅС‹Р№ HYBRID IFW+PM. Р›РѕРіРё: /data/adb/analytics_ads_disabler/logs. РџРѕРґРґРµСЂР¶РєР°: https://t.me/module_ecubz
 minMagisk=20400
