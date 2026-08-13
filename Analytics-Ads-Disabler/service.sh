@@ -12,10 +12,19 @@ trace() {
 
 trace "service.sh ENTER pid=$$ module=$MODDIR"
 trace "EARLY-WAIT begin"
+# Bounded wait: some AOSP/custom builds never publish sys.boot_completed, and an
+# unbounded loop meant the module never started and never logged why. After the
+# cap we continue anyway; the capability probe still refuses to act if Binder is
+# genuinely unavailable.
 wait_loops=0
+wait_max=180
 while [ "$(/system/bin/getprop sys.boot_completed 2>/dev/null)" != "1" ]; do
     wait_loops=$((wait_loops + 1))
     [ $((wait_loops % 12)) -eq 0 ] && trace "EARLY-WAIT loops=$wait_loops boot=$(/system/bin/getprop sys.boot_completed 2>/dev/null)"
+    if [ "$wait_loops" -ge "$wait_max" ]; then
+        trace "EARLY-WAIT TIMEOUT after $((wait_max * 5))s; continuing without sys.boot_completed=1"
+        break
+    fi
     sleep 5
 done
 trace "BOOT-COMPLETE observed loops=$wait_loops"
@@ -69,7 +78,8 @@ trace "CONFIG-ALIASES checked"
 log "CONFIG-PATH runtime=$DATA_DIR module_alias=$MODDIR"
 log "=== $MODULE_VERSION_LABEL starting pid=$$ ==="
 log "BOOT-TRACE: service entry recorded at $BOOT_TRACE"
-log "BOOT-READY: sys.boot_completed=1 (observed before common.sh)"
+log "BOOT-READY: sys.boot_completed=$(/system/bin/getprop sys.boot_completed 2>/dev/null) (observed before common.sh)"
+log "TOOLCHAIN busybox=${AAD_BUSYBOX:-none} applet_dir=$AAD_APPLET_DIR awk=$(command -v awk 2>/dev/null || echo missing) unzip=$(command -v unzip 2>/dev/null || echo missing) od=$(command -v od 2>/dev/null || echo missing) inotifyd=$(command -v inotifyd 2>/dev/null || echo missing)"
 trace "DEBUG-LOG initialized path=$LOGFILE"
 
 # Capability work is safe only now.
@@ -93,6 +103,16 @@ boot_scan_rc=$?
 log "BOOT-SCAN: finished rc=$boot_scan_rc"
 trace "BOOT-SCAN end rc=$boot_scan_rc"
 
+# The /data/app watcher only starts below, so any package installed while the
+# boot scan was running produced no event and is absent from the snapshot the
+# scan took at its start. One delta pass closes that window immediately instead
+# of leaving the app unhandled until the safety poll.
+if [ "$boot_scan_rc" -eq 0 ]; then
+    trace "POST-BOOT-DELTA begin"
+    rescan_changed_packages
+    trace "POST-BOOT-DELTA end rc=$?"
+fi
+
 # Seed watcher caches only after boot reconciliation attempt.
 refresh_policy_caches
 if [ "$boot_scan_rc" -eq 0 ]; then
@@ -106,6 +126,7 @@ stop_owned_pidfile "$DATA_DIR/category_watch.pid" "category_watch.sh"
 stop_owned_pidfile "$CONFIG_INOTIFY_PID_FILE" "config_event.sh"
 stop_owned_pidfile "$WATCH_PID_FILE" "config_watch.sh"
 stop_owned_pidfile "$LOG_MIRROR_PID_FILE" "log_mirror.sh"
+stop_owned_pidfile "$AD_SURFACE_PID_FILE" "ad_surface_indexer.sh"
 
 start_and_verify_bg() {
     label="$1"; pidfile="$2"; shift 2
@@ -141,3 +162,7 @@ start_and_verify_bg "CONFIG-POLL" "$WATCH_PID_FILE" "$MODDIR/config_watch.sh"
 start_and_verify_bg "LOG-MIRROR" "$LOG_MIRROR_PID_FILE" "$MODDIR/log_mirror.sh"
 log "RUNTIME-READY: app_watch=$([ -f "$INOTIFY_PID_FILE" ] && echo yes || echo no) config_inotify=$([ -f "$CONFIG_INOTIFY_PID_FILE" ] && echo yes || echo no) config_poll=$([ -f "$WATCH_PID_FILE" ] && echo yes || echo no) log_mirror=$([ -f "$LOG_MIRROR_PID_FILE" ] && echo yes || echo no) interval=$(read_poll_interval)s"
 trace "service.sh RUNTIME_READY pid=$$"
+# Re-apply last known-good Banner/Native/App-Open network targets immediately.
+# The background surface index will refresh them after it completes.
+reconcile_ad_surface_killer "boot" >/dev/null 2>&1 || true
+launch_ad_surface_indexer_bg "boot" >/dev/null 2>&1 || true

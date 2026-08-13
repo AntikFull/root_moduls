@@ -1,298 +1,289 @@
-# Changelog
-
-## v4.6.5 (605) — AGGRESSIVE ads mode
-
-- Добавлен отдельный `COMPONENT_MODE=AGGRESSIVE`; существующие `SAFE` и `BALANCED` не меняют поведение.
-- AGGRESSIVE наследует BALANCED и дополнительно отключает только точные рекламные Provider-компоненты из отдельного allowlist (`Vungle`, `LevelPlay`, `MBridge`, `InMobi`, альтернативный Yandex Ads initializer и др.).
-- При backend `PM` AGGRESSIVE может отключать только точные рекламные Activity из существующего `ADS_ACTIVITY_IFW`; при `HYBRID` они, как и раньше, блокируются через IFW.
-- Неоднозначные analytics-init Provider (`FirebaseInitProvider`, `FacebookInitProvider`, `Sentry` и др.) намеренно остаются `REPORT_ONLY` даже в AGGRESSIVE.
-- Audit-summary теперь отдельно показывает `aggressive=N`. Exact original-state rollback, whitelist semantics, PM transport и multi-user IFW safety не изменены.
-
-## v4.6.4 (604) — universal FD isolation + multi-user IFW safety
-
-- PM `runcon_shell_uid0` теперь перед SELinux-переходом в дочернем процессе закрывает только унаследованные fd, указывающие в `/data/adb/analytics_ads_disabler` или каталог модуля. Это обобщает фиксы `.desired.tmp`/`component_state.list.orphans.*` без расширения sepolicy и без изменения parent shell.
-- Рабочий OEM-совместимый transport `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."` сохранён; direct PM, learned backend и обязательная post-state verification не менялись.
-- HYBRID IFW получил multi-user safety gate: глобальное IFW-правило создаётся только если все Android users, у которых установлен пакет, согласны блокировать данный компонент. Whitelist/work-profile одного user больше не может быть перекрыт решением другого user.
-- При невозможности построить authoritative user/package snapshot IFW fail-closed в сторону безопасности: собственное IFW-правило не создаётся, PM-состояние не расширяется.
-- Атомарная запись IFW через временный файл без `.xml` и rename сохранена; это соответствует механизму AOSP Intent Firewall, который наблюдает только XML-файлы в `/data/system/ifw`.
-- Default backend остаётся `PM`; HYBRID по-прежнему опционален. Policy/rules/whitelist semantics и exact rollback не расширялись.
-
-## v4.6.3 (603) — закрытие orphan FD перед PM restore
-
-- `retry_orphan_restores()` больше не выполняет PackageManager restore из цикла, чьим входом является `component_state.list.orphans.*` в `/data/adb`.
-- Snapshot orphan-state сначала считывается в память, backing-файл закрывается и удаляется, и только после этого запускаются restore-операции.
-- Устраняет подтверждённый на Xiaomi 14 Ultra / HyperOS 3 / Android 16 SELinux AVC `u:r:shell:s0 -> adb_data_file` для `component_state.list.orphans.*` без расширения sepolicy.
-- PM transport, IFW, SAFE/BALANCED/HYBRID, whitelist semantics, exact rollback и update-race fix v4.6.2 не изменялись.
-
-## v4.6.2 (602) — исправление гонки обновления на HyperOS
-
-- Процессы старой версии теперь останавливаются до изменения persistent-конфигурации и до проверки Package Manager.
-- Активный boot/action-скан без watcher pid-файла также безопасно завершается, но только после проверки `/proc/<pid>/cmdline` на принадлежность модулю.
-- Старые operation/state/membership locks снимаются сразу после остановки прежних watcher-процессов, поэтому установщик не запускает параллельный пересчёт на частично обновлённых файлах.
-- Исправление основано на диагностике Xiaomi 14 Ultra, Android 16 / HyperOS 3: во время обновления старый скан и PM-проба пересекались, вызывая `Failed transaction`, `Broken pipe` и незавершённые временные каталоги. После загрузки сама v4.4.14 работала штатно.
-
-## v4.6.1 (601) — точность Activity-аудита
-
-- Ложное подстрочное правило `adactivity` заменено на точное окончание класса `AdActivity`.
-- `UploadActivity`, `DownloadActivity`, `NFCReadActivity` и похожие классы больше не считаются рекламными только из-за окончания имени.
-- Точная Huawei Ads Activity `com.huawei.openalliance.ad.ppskit.activity.InterstitialAdActivity` добавлена в HYBRID IFW.
-- Установщик мигрирует только прежнюю точную строку `adactivity` и добавляет новое правило без перезаписи остальных пользовательских правил.
-
-## v4.6.0 (600) — PM/IFW-контур после сверки с App Manager и Blocker
-
-- Проверены актуальные исходники `MuntashirAkon/AppManager` и `lihenggui/blocker`, включая PM, IFW и комбинированные контроллеры.
-- Сохранён основной PM-контур модуля: он точнее сторонних реализаций восстанавливает исходный override и проверяет фактическое состояние после каждой операции.
-- Добавлен опциональный `COMPONENT_BACKEND=HYBRID`: Services/Receivers получают второй IFW-слой, а точные рекламные Activities блокируются только через IFW.
-- Providers по-прежнему изменяются только через Package Manager, поскольку Android Intent Firewall их не поддерживает.
-- IFW хранится в отдельном файле `/data/system/ifw/analytics_ads_disabler.xml`, заменяется атомарно и удаляется при переходе на PM или деинсталляции.
-- Добавлены проверка доступности IFW, лимит Activity на пакет/категорию и отдельные действия `IFW_BLOCK` в аудите.
-- `PM` остаётся безопасным backend по умолчанию; включение HYBRID выполняется явно в установщике или настройках.
-
-## v4.5.0 (500) — типизированный аудит и режимы SAFE/BALANCED
-
-- Сохранена универсальная capability-логика Magisk, KernelSU/Next и APatch без списков моделей и прошивок.
-- `COMPONENT_MODE=SAFE` сохраняет прежнее отключение Services/Receivers и остаётся режимом по умолчанию.
-- `COMPONENT_MODE=BALANCED` дополнительно отключает только Providers из точных секций `*_PROVIDER_SAFE`.
-- Activities и неоднозначные Providers обнаруживаются, но записываются только в `component_audit.log` без изменения состояния.
-- Добавлены типизированные секции правил, миграция новых секций без перезаписи пользовательских правил и статистика `AUDIT-SUMMARY`.
-- Сетевой DNS/hosts-слой не добавлялся.
-
-## v4.4.14 (454) — KernelSU/Android 16 Binder FD compatibility
-
-- PackageManager-команды теперь всегда запускаются со stdin из `/dev/null`.
-- Исправлено наследование временных файлов политики из `/data/adb/analytics_ads_disabler/.desired.tmp.*` через Binder в `system_server`.
-- Устраняет `translate fd failed` и `Failed transaction` на Android 16 с KernelSU/ReSukiSU при включённом SELinux.
-- Сохранены проверки реального результата операции и все прежние безопасные варианты транспорта PM.
-
-## v4.4.13 (453) — OEM runcon execution compatibility
-
-- Restored the proven Android 16 `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."` PM transport after v4.4.12 showed OEM SELinux can deny direct execution of `/system/bin/cmd`/`pm` from the transitioned shell domain.
-- The shell-domain scope still contains only the PackageManager command; no module state, whitelist, rule, or scratch file under `/data/adb` is read there.
-- Keeps Android 16+ real shell-UID (`su 2000` / `su shell`) component mutations excluded.
-- No policy, whitelist, state-machine, watcher, or restore semantics changed.
-
-## v4.4.12 (452) — Android 16 PM Transport Hardening
-
-- Preserved the proven 4.4.11 policy, whitelist delta/restore, state DB, watcher and logging behavior.
-- Android 16+ no longer tries real shell UID 2000 (`su 2000` / `su shell`) for component-state mutations. Legacy candidates remain available below API 36.
-- `runcon_shell_uid0` now executes `/system/bin/cmd` or `/system/bin/pm` directly in `u:r:shell:s0` while retaining uid 0; it no longer wraps PackageManager mutations in `/system/bin/sh -c`.
-- Added explicit PM mutation-model diagnostics for API level, shell-UID policy and runcon availability/scope.
-- Existing verified learned backends are retained; direct root remains the first compatibility baseline and every write still requires post-state verification.
-
-## v4.4.11 (451) — module.prop as version source of truth
-
-- Runtime, Action, installer diagnostics, deep diagnostics, and uninstall logs now read `name`, `version`, and `versionCode` from `module.prop`.
-- Removed current-release version literals from executable log/status output.
-- Added a shared `MODULE_VERSION_LABEL` so changing the release version only requires updating `module.prop`.
-- Historical compatibility comments remain intentionally versioned where they describe old behavior/migrations.
-
-## v4.4.10 (450) — Unified Live Log Reliability
-- Keeps v4.4.9 policy/scanner behavior unchanged; this release is log-infrastructure only.
-- Adds a dedicated non-blocking log mirror worker (~10 s) from authoritative `/data/adb/.../logs` to `/sdcard/eCubz/logs/Analytics_Ads_Disabler`.
-- Adds `debug.previous.log` rotation before each boot clears `debug.log`.
-- Preserves `uninstall.log` externally before deleting persistent state.
-- Migrates legacy pre-unified debug/diagnostic/install logs into `*.legacy.log` files when found.
-- Fixes stale v4.4.5/v4.4.6/v4.4.8/v4.4.9 runtime/diagnostic labels.
-
-## 4.4.9 (449) — Unified Log Directory
-
-- All log files (`debug.log`, `diagnostics.log`, `boot_trace.log`, `install_diagnostics.log`, `uninstall.log`) are now stored in one unified directory: `/data/adb/analytics_ads_disabler/logs/`.
-- External user-accessible logs on `/sdcard` are mirrored into a single folder: `/sdcard/eCubz/logs/Analytics_Ads_Disabler/`.
-- Keeps all whitelist delta snapshot performance optimizations, DB race locks, and runtime log reliability from v4.4.8.
-
-## 4.4.8 (448) — Delta Snapshot / Hang Diagnostics
-- Whitelist delta no longer performs per-user PackageManager package-list Binder calls. It builds one authoritative `user|package` snapshot and exact-matches affected packages.
-- Added `CONFIG-DELTA user=... begin/end`, package completion, snapshot-ready, and package reconcile membership diagnostics.
-- Removed command-substitution around per-user delta reconciliation and switched delta scratch files to unique `mktemp` paths.
-- Keeps v4.4.7 runtime-log reliability, v4.4.6 DB locking, and managed-state whitelist restore behavior.
-
-## 4.4.7 (447) — Runtime Log Reliability
-
-- Runtime boot no longer depends on `/sdcard` being writable after `sys.boot_completed=1`.
-- Authoritative live debug log moved to `/data/adb/analytics_ads_disabler/analytics_ads_disabler_debug.log`.
-- `/sdcard/eCubz/analytics_ads_disabler_debug.log` is now a best-effort mirror after runtime becomes ready.
-- Added post-common boot checkpoints to isolate state-dir, config-alias, runtime-log and capability stages.
-- Preserves v4.4.6 DB race/atomic-write protections and v4.4.5 whitelist delta reconciliation.
-
-## 4.4.6 (446) — State DB Race Fix
-
-- Stops runtime workers from the previous module version during installation/update before persistent state is mutated.
-- Adds independent locks for `component_state.list` and `disabled_components.list`.
-- Uses `mktemp`-based unique transactional files instead of `*.tmp.$$`, avoiding BusyBox ash/subshell PID collisions.
-- State/membership commits now log explicit rewrite/commit failures instead of terminating on a missing temp file.
-- Keeps v4.4.5 whitelist delta reconciliation and Android 16 installed-package snapshot fix.
-
-## 4.4.5 (445) — Whitelist Delta Restore
-
-- `whitelist.list`, `white_ads.list`, and `white_analytics.list` now reconcile only package names whose normalized whitelist membership changed; a one-package edit no longer triggers a full device scan.
-- Global whitelist changes remove all module memberships for the affected package and restore exact saved original component states.
-- ADS whitelist changes remove only ADS memberships; restoration occurs only when ANALYTICS no longer owns the same component. ANALYTICS whitelist behavior is symmetric.
-- Removing a package from any whitelist is also incremental: only that package is rescanned and required memberships are re-applied.
-- Fixes false `STALE ... package not installed` records on Android 16 vendor PackageManager builds by using one authoritative all-package snapshot per full scan instead of filtered package-list probes.
-- Duplicate config events no longer wait 60 seconds and emit `LOCK timeout`; they log `CONFIG-DEFER` while the active reconciliation owns the lock.
-- `settings.conf` or `rules.conf` changes still intentionally trigger a full policy reconciliation.
-
-## 4.4.4 (444) — Unified Config Paths
-
-- Fixes the confusing duplicate-config layout: module-directory `settings.conf`, `rules.conf`, `whitelist.list`, `white_ads.list`, and `white_analytics.list` now alias the persistent files in `/data/adb/analytics_ads_disabler`.
-- Editing config from `/data/adb/modules/analytics_ads_disabler/` or from the persistent data directory now changes the same watched file.
-- Boot repairs missing/replaced config aliases and logs both runtime and alias paths.
-- Realtime inotify + hash polling remain active and deduplicated.
-
-## 4.4.3 (443) — Boot-Safe Runtime / Trace Checkpoints
-
-- `service.sh` no longer sources `common.sh` before Android reports `sys.boot_completed=1`.
-- Early boot uses only `/data/adb/analytics_ads_disabler/boot_trace.log`; `/sdcard/eCubz` is touched only after boot completion.
-- Adds trace checkpoints for early wait, common source, capability initialization, boot scan, and runtime-ready.
-- Full policy reconciliation still runs on every successful boot.
-- Fixes stale v4.4.1 labels in install/deep-diagnostics output.
-- Keeps realtime config inotify plus hash-poll fallback and verified PM backend persistence.
-
-## 4.4.2 (442) — Boot Reliability / Watcher Health
-
-- Defers PackageManager capability probing until `sys.boot_completed=1`; `common.sh` no longer performs early Binder work when sourced by `service.sh`.
-- Adds `/data/adb/analytics_ads_disabler/boot_trace.log`, written before `common.sh`, so a missing runtime log can be distinguished from an early startup failure.
-- Full policy reconciliation is explicitly logged and runs on every successful Android boot (`BOOT-SCAN`).
-- Verifies app-inotify, config-inotify and polling watcher PIDs one second after launch and reports `RUNNING` or `FAILED-TO-STAY-RUNNING`.
-- Explicitly sets executable permission on `config_event.sh` during installation.
-
-# Changelog
-
-## v4.4.1 (441) — Realtime Config Watch
-
-- Added realtime BusyBox `inotifyd` monitoring for `settings.conf`, `rules.conf`, `whitelist.list`, `white_ads.list`, and `white_analytics.list`.
-- Watches the config directory for close-write/create/delete/move events so both in-place saves and editor atomic-renames are detected.
-- Added `config_event.sh` with strict filename filtering; state DB/cache/hash changes cannot recursively trigger policy scans.
-- Added lock-aware hash deduplication: multiple filesystem events from one save collapse into one reconciliation.
-- Existing hash polling remains active as a safety net and for devices without `inotifyd`.
-- Realtime config watcher has its own PID file and is stopped safely on module restart/uninstall.
-- Policy/whitelist/restore behavior from v4.4.0 is unchanged.
-
-## v4.4.0 (440) — Policy/Transport Separation
-
-- Kept policy decisions (system protection, global/category whitelist, ADS/ANALYTICS rules) strictly before any state-changing backend call.
-- Added explicit `WHITELIST-SKIP`, `WHITELIST-RESTORE`, `POLICY-SKIP`, and `ALREADY-DISABLED` logging.
-- A package added to a whitelist restores only components previously managed by this module, using the exact saved original override state.
-- Restore now tries the verified learned write transport first (for example `runcon_shell_uid0`) before the generic compatibility cascade.
-- Added a full restore cascade across direct, shell-UID, shell-su, and verified `runcon` transports.
-- Reconciliation no longer performs redundant Binder writes for memberships that are already actually disabled.
-- Existing v4.3.9 install diagnostics, learned-backend persistence, and manual Action fail-fast behavior are retained.
-
-## v4.3.8 (438)
-- Action fail-fast: stop a manual full scan after 3 consecutive components exhaust the complete disable cascade.
-- A successful component operation resets the consecutive-failure counter.
-- Fail-fast is Action-only; background/incremental scans keep normal behavior.
-- Early abort preserves debug/diagnostic logs and does not mark the configuration hash as successfully reconciled.
-
-## 4.3.7 (437) — Runcon Shell-Domain Fix
-
-- Fixes a v4.3.5/v4.3.6 logic bug that required UID 2000 and `u:r:shell:s0` simultaneously before enabling the runcon fallback.
-- On tested KernelSU Next, `runcon u:r:shell:s0` correctly changes SELinux domain while retaining UID 0; this is now treated as its own execution backend (`runcon_shell_uid0`).
-- The runcon backend is attempted only after the original direct cascade and `su 2000`/`su shell` fallbacks fail.
-- A candidate is learned only after the real component state verifies as disabled.
-- Keeps deep diagnostics and full help/Binder smoke logging from v4.3.6.
-
-## 4.3.5 (435) — SELinux Context Cascade
-
-- Keeps the v4.3.4 original/direct cascade and uid-2000 fallbacks.
-- Adds execution diagnostics (UID + SELinux context) to Action output.
-- Adds a last-resort `runcon u:r:shell:s0` backend when a real shell-domain transition is supported.
-- The new backend is accepted only after a transition probe confirms both UID 2000 and `u:r:shell:s0`.
-- No package-wide suspend/hide and no direct packages.xml/service-call hacks.
-
-# Changelog
-
-## v4.3.4 (434) — Hybrid Cascade Edition
-- Restored the original v4.3.0 direct cmd/pm fallback cascade as the compatibility baseline.
-- Added verified learned fast-path: a method is cached only after a real component reaches disabled state.
-- Added `--user current` fallback only when it matches the scanned foreground Android user.
-- Added shell-UID execution fallbacks (`su 2000`, `su shell`) after the complete original cascade fails.
-- Every candidate is validated by the actual component override state, not exit code alone.
-- Kept v4.3.3 scan dump caching and Action progress output.
-- Deliberately avoids package-wide hide/suspend and unstable raw Binder transaction calls.
-
-## v4.3.3
-- Full scan caches parsed Services/Receivers once per package and reuses the result across ADS/ANALYTICS and Android users/profiles.
-- Action button shows live `[current/total] user package` progress plus a final summary.
-- Background scans remain quiet.
-
 # Changelog (Журнал изменений)
 
-## v4.3.1 — Binder Context Adaptive Edition
+## v4.8.5 (805)
 
-- **Исправлен HyperOS 3 / Android 16 кейс с Binder `FAILED_TRANSACTION`:** если PackageManager-команды из текущего root-контекста не проходят Binder, модуль непрерывно не перебирает одинаково нерабочие `cmd`/`pm` варианты.
-- **Добавлен runtime-профиль контекста исполнения:** capability probe теперь выбирает не только backend/verb/`--user`, но и `direct`, `su_uid2000` или `su_shell`. Shell UID используется только если безопасный probe на заведомо отсутствующем компоненте подтвердил доступ к PackageManager.
-- **Без OEM-хардкода:** нет привязки к Xiaomi/HyperOS/Android 16/KernelSU; обычные устройства продолжают использовать `direct`, поэтому модуль остаётся универсальным для Magisk / KernelSU / APatch и разных ROM.
-- **Убран fallback storm на каждом компоненте:** после профилирования выполняется одна рабочая команда. При hard Binder failure профиль один раз инвалидируется, заново определяется и операция повторяется один раз.
-- **Восстановление состояния использует отдельный профилированный action:** `enabled`, `disabled` и `default` выбирают соответствующий рабочий профиль, включая execution context.
-- **Capability schema поднята до v8:** старый `capabilities.conf` автоматически будет пересоздан.
+Устранены две проблемы при обработке свежеустановленных приложений (обнаружены при установке реальных APK на двух устройствах и замере отклика):
+
+- **Пакет, установленный во время активной блокировки сканирования, больше не теряется.** Функция `rescan_changed_packages` сдавалась после 60-секундного таймаута блокировки и выводила одну строку в лог, из-за чего приложение оставалось необработанным до страховочного опроса (до 15 минут при активном inotify-наблюдателе). Запрос теперь записывается в `.package_rescan.pending`, а фоновый опрос подхватывает его на следующем цикле (~10 с).
+- **Пакет, установленный во время начального сканирования при загрузке, больше не становится «невидимым».** Наблюдатель `/data/app` запускается строго *после* завершения первичной сверки при загрузке, а сам скан при загрузке работает со снапшотом, сделанным до его старта. Поэтому приложение, установленное в этом окне, не создавало событий и отсутствовало в базовом снапшоте. Теперь сразу после завершения загрузочного сканирования запускается однократный дельта-проход, закрывающий это окно.
+
+Замерено на реальном устройстве: приложение, установленное в 00:54:55 во время загрузочного сканирования, было обработано в 00:58:12 (сразу после завершения сканирования) вместо ожидания 15-минутного опроса.
+
+## v4.8.4 (804)
+
+- **Свежие установки снова получают поиск Activity на основе манифеста.** Инкрементальный путь не формировал инвентарь `list packages -f`, используемый полным сканированием, и полагался на точечный запрос `cmd package path` для каждого пакета — наиболее ненадёжный именно для только что установленного пакета, так как PackageManager публикует его в `list packages` раньше, чем отвечает запрос пути. В результате возникала одиночная ошибка `MANIFEST-PATH-MISS` и молчаливый пропуск AXML-поиска, из-за чего в режиме AGGRESSIVE точные рекламные Activity нового приложения оставались незаблокированными до следующего полного сканирования. Теперь дельта-путь строит такой же авторитетный инвентарь и включает кэш манифеста с ключом по versionCode пакета, аналогично полному сканированию.
+
+Замеренное время отклика для новой установки при активном реалтайм-наблюдателе (измерено на POCO X3 Pro): политика компонентов применяется примерно через 25 секунд после завершения установки, правила IFW — через 60 секунд, цели сетевого Killer и повторный проход индексатора поверхностей — через 95 секунд. Сетевой Killer получает правила для нового приложения только после завершения *следующего* полного прохода индексатора, так как цели фиксируются исключительно из полностью завершённого индекса.
+
+## v4.8.3 (803)
+
+- **Пересборка без UTF-8 BOM в `module.prop`.** Артефакт версии v4.8.2 был упакован с меткой BOM в начале файла, из-за чего root-менеджер считывал ID модуля как `analytics_ads_disabler` с невидимым символом BOM и устанавливал *вторую* директорию модуля вместо обновления существующей — в результате две копии runtime конкурировали за одну директорию состояния. Проблема затрагивала только упакованный ZIP-архив, но не логику самого модуля. Теперь процесс сборки проверяет отсутствие BOM и CRLF во всех файлах перед упаковкой.
+
+Проверено на втором устройстве (POCO X3 Pro / vayu, Android 16 API 36 на кастомной прошивке, ядро 4.14, KernelSU 3.3.0) при обновлении с версии v4.2.5 (шесть релизов назад):
+
+- **Слияние правил поверх устаревшей базы работает штатно.** Все 15 секций были добавлены, а записи объединены: 69 сетевых хостов и 9 записей риска для пушей успешно внесены в `rules.conf`, созданный до их появления, а `onesignal` удалён из автоматически отключаемой секции `[ANALYTICS]`.
+- **Защита OEM-пакетов распознаётся по вендору.** На устройстве Xiaomi/POCO пакеты `com.xiaomi.xmsf`, `com.miui.home` и `com.miui.securitycenter` защищены, тогда как записи Samsung корректно не затрагиваются.
+- **Xposed-мост активируется при обнаружении.** При наличии LSPosed завершённый индекс экспортировал 7 целей; формат JSON корректен, а в одной из игр обнаружен бандл из 12 рекламных SDK.
+- **Зондирование возможностей ядра.** Ядро 4.14 поддерживает и `xt_owner`, и `xt_string`, также присутствует `iptables-restore`, поэтому Killer использовал бы режим `string`; он остался в состоянии `DISABLED`, так как устройство работает в режиме `SAFE`, где сетевой слой не применяется.
+- Сверка при загрузке: 33 пакета/пользователя, 53 операции, 15 секунд.
+
+## v4.8.2 (802)
+
+Выявлено и исправлено при тестировании на реальном устройстве (OnePlus PJA110, Android 16 / API 36, KernelSU 3.3.0, обновление с версии 4.6.17).
+
+### Сетевой Killer масштабируется с увеличением хостов
+Расширение покрытия с 3 до 17 SDK увеличило активный набор правил со 135 до 783 правил на семейство на тестовом устройстве, что вскрыло две проблемы производительности:
+
+- **Применение правил занимало 3 минуты 5 секунд** — по одному процессу `iptables` на правило (около 1600 вызовов), причём цепочка большую часть времени оставалась полусобранной. Теперь правила генерируются в виде единой атомарной транзакции `iptables-restore -n`: те же 783 правила на семейство применяются примерно за 1 секунду. Поправилочный каскад сохранён как фолбэк на случай, если `iptables-restore` недоступен или отклоняет набор правил.
+- **Каждый исходящий пакет проходил все 783 правила** только для проверки совпадения по владельцу (owner match). Теперь правила сгруппированы в отдельные подцепочки для каждого UID (`AAD_ADKILL_<uid>`), поэтому родительская цепочка содержит всего по одному переходу на каждый целевой UID, а пакет сравнивается с ~54 проверками владельца плюс правилами хостов только своего приложения — это сократило объем работы на пакет в 14 раз при том же покрытии.
+- Очистка цепочек удаляет и подцепочки для каждого UID, сбрасывая их перед удалением, чтобы цепочка, на которую ссылается родитель, не утекала.
+- Поддержка `REJECT --reject-with tcp-reset` проверяется один раз заранее, так как пакетная транзакция работает по принципу «всё или ничего»; набор правил откатывается к `DROP`, если REJECT недоступен.
+
+Проверено на устройстве: 54 подцепочки, 783 правила на семейство, 54 правила в родительской цепочке, применены IPv4 и IPv6, пройден сквозной тест: целевой хост возвращает `Connection reset by peer`, тогда как контрольный хост на том же UID работает без помех.
+
+### Подтверждена дедупликация
+С расширенной картой хостов 801 цель свернулась в 783 уникальные пары `(uid, host)`: исключено 18 дублирующихся правил на семейство, которые установил бы предыдущий релиз из-за приложения, совпадающего одновременно с метками классического и нового поколения Google Mobile Ads SDK, использующих общие хосты.
+
+### Исправления
+- `printf --` внутри генератора правил использовал синтаксис shell `printf(1)`; в `awk` символы `--` разбираются как оператор декремента, создавая синтаксическую ошибку. Ошибка перехвачена юнит-тестом генератора до сборки.
+- Правила для явного включения QUIC теперь проверяют доступность цепочки вместо флага, который сбрасывается пакетным режимом, благодаря чему `AD_KILLER_FORCE_TCP=1` продолжает работать после пакетного коммита.
+
+### Примечание к заявлениям предыдущего релиза
+Две проблемы из v4.7.0 оказались менее критичными, чем было заявлено:
+
+- Ошибка с `unzip -Z1` реальна — toybox отклоняет этот параметр (подтверждено на устройстве), однако в KernelSU фолбэк на BusyBox доступен через PATH, поэтому индексирование поверхностей там продолжало работать. Фикс важен для систем, где BusyBox отсутствует в PATH, а не абсолютно для всех устройств.
+- Дублирующиеся правила фаервола были скрытыми, а не активными при старом покрытии из 3 SDK: на устройстве было 135 целей и 135 уникальных пар. Они проявились бы только при расширении карты хостов в версии 4.8.0.
+
+## v4.8.1 (801)
+- **Исправлен путь обновления содержимого правил (выявлено при реальном тестировании обновления с 4.6.17 до 4.8.0 на устройстве).** Установщик раньше добавлял только *отсутствующие* целиком секции, из-за чего новые записи внутри уже существующих секций не доходили до обновляющихся пользователей: у существующей установки оставалось 6 сетевых хостов и 8 агрессивных провайдеров, хотя модуль сообщал о новой версии. Теперь правила объединяются поЗаписно, а сами записи читаются из поставляемого `rules.conf`, поэтому будущие дополнения правил распространяются автоматически без необходимости зашивать список миграции в каждый релиз. Это заменяет прежние зашитые списки слияния Activity. Правило, которое пользователь намеренно удалил, добавляется заново — аналогично логике слияния Activity.
+- Устаревшие рабочие файлы `.ad_surface_scan.running.*` теперь удаляются при старте индексатора. Завершённый до выполнения ловушки EXIT воркер каждый раз оставлял около 200 КБ; на тестовом устройстве скопилось три таких файла.
+- Парсинг секций в установщике больше не зависит от сохранения экранирования слэшей (`[^[:print:]]`/`[[:space:]]` вместо `\n`/`\t`), проверено на файле правил с CRLF-окончаниями.
+
+## v4.8.0 (800)
+
+### Покрытие сетевого Killer: с 3 до 17 SDK
+- Секция `[ADS_NETWORK_HOST]` выросла с 6 правил для 3 SDK до **69 правил для 17 SDK** — каждый рекламный SDK, чьи рекламные поверхности (BANNER, MREC, NATIVE, APP_OPEN) обнаруживаются индексатором, теперь имеет соответствующие имена хостов: Google Mobile Ads (классический и Next), Яндекс, AppLovin MAX, Unity Ads, LevelPlay/ironSource (текущий и устаревший), Meta Audience Network, InMobi, Pangle/TikTok, Vungle/Liftoff, MBridge/Mintegral, myTarget, BidMachine, Chartboost, Start.io, Smaato. Ранее Killer мог воздействовать лишь на шестую часть того, что находил индексатор.
+- Где возможно, список нацелен на **эндпоинты инициализации/конфигурации/аукциона, а не на CDN с баннерами** (например, `config.unityads.unity3d.com`, `init.supersonicads.com`, `configure.rayjump.com`): их блокировка предотвращает инициализацию SDK в принципе вместо блокировки одного баннера уже после отправки запроса.
+- Секция документирует свою модель безопасности: ошибочный хост безвреден, так как просто никогда не совпадет, но хост, передающий нерекламный трафик, опасен, так как правило применяется ко всему UID приложения. Хост `an.facebook.com` внесён для Meta Audience Network, тогда как `graph.facebook.com` намеренно исключён — его блокировка сломала бы Facebook Login и запросы Graph API в приложении.
+- Bigo Ads намеренно оставлен с задокументированным пропуском вместо угадывания хостов; блокировка на уровне компонентов работает без изменений.
+- Каждая метка хоста сверена с метками поверхностей, поэтому «мёртвые» записи исключены.
+
+### Блокировка инициализации рекламных SDK
+- Секция `[ADS_PROVIDER_AGGRESSIVE]` расширена с 8 до 16 точных провайдеров плюс один шаблон по неймспейсу. Рекламные SDK инициализируются через ContentProvider, который Android создаёт *до* вызова `Application.onCreate()`, поэтому удаление провайдера останавливает инициализацию SDK полностью — запросы баннеров даже не формируются. Это экономнее и надёжнее блокировки запроса постфактум.
+- Добавлены точные провайдеры для Pangle (`TTMultiProvider`, `TTFileProvider`), Unity Ads, AppLovin, Chartboost, Smaato, Start.io и Tapjoy.
+- Добавлено регулярное выражение с привязкой к известным рекламным неймспейсам и символу `/` для проверки класса компонента:
+  `re:/(com[.](applovin|unity3d|ironsource|vungle|mbridge|...)|io[.]bidmachine|sg[.]bigo[.]ads)[.][a-z0-9_.$]*(initprovider|initializeprovider|lifecycleprovider)$`
+  Оно охватывает init/lifecycle провайдеры новых версий SDK, классы которых ещё не внесены в список, при этом структурно не способно задеть `FirebaseInitProvider`, `SentryInitProvider`, `androidx.startup.InitializationProvider` или нерекламные провайдеры. Проверено на 18 тестах.
+- Провайдеры по-прежнему работают только в режиме AGGRESSIVE и ограничены лимитом `MAX_AGGRESSIVE_ADS_MATCHES`; неоднозначные провайдеры аналитики остаются в режиме только аудита.
+
+### Мост Xposed / LSPosed (только экспорт данных)
+- Блокировка компонентов и сетевая блокировка действуют *вокруг* рекламы: иерархия View в приложении продолжает резервировать место под баннер, поэтому остается пустая рамка. Убрать сам контейнер может только инпроцесс-хук. **Данный модуль сам по себе ничего не хукает.** При наличии фреймворка Xposed модуль экспортирует данные о рекламных поверхностях, чтобы сторонний модуль Xposed мог использовать точный список целей для каждого пакета без повторного DEX-сканирования.
+- Детектирует LSPosed (варианты Zygisk и Riru), LSPatch, EdXposed и классический Xposed.
+- После *завершённого* сканирования поверхностей записываются файлы `xposed_targets.json` (схема 1: пользователь, пакет, SDK, поверхности, уровень уверенности) и `xposed_targets.list` (режим 640). Неполный или аварийный индекс никогда не публикует данные.
+- Управляется параметром `XPOSED_BRIDGE=auto|1|0`; `auto` экспортирует данные только при обнаружении фреймворка и удаляет файлы при его отсутствии. Статус детектирования выводится в установщике и в кнопке Action.
+
+## v4.7.0 (700)
+
+### Критические исправления
+- **База состояний больше не уничтожается при сбое PackageManager.** Раньше `cleanup_stale_records` воспринимал пустой список пакетов как «все управляемые приложения удалены» и очищал файлы `disabled_components.list` и `component_state.list`, оставляя компоненты отключёнными без сохранённых исходных состояний для отката. Теперь пустой снапшот распознаётся как сбой PM, и базы данных остаются нетронутыми (`STALE-SKIP`). Такая же защита добавлена в сканирование при загрузке и инкрементальные сканы.
+- **Деинсталляция теперь действительно восстанавливает состояния компонентов.** Root-менеджеры выполняют `uninstall.sh` в стадии post-fs-data, где PackageManager ещё недоступен, из-за чего попытки восстановления падали, а последующий `rm -rf` навечно уничтожал данные. Откат сделан двухфазным: если система уже загружена, откат происходит сразу; иначе сохранённые состояния и `compat.sh` копируются в `/data/adb/analytics_ads_disabler_rollback`, создаётся небольшой самоудаляющийся вспомогательный модуль, который ожидает `sys.boot_completed` и выполняет восстановление. При ошибке данные сохраняются для повторной попытки.
+- **`full_rescan()` возвращал код возврата `release_lock` (всегда 0)** вместо результата сканирования. Сканирование при загрузке сохраняло хэши конфигурации даже после ошибок, а сводка fail-fast в Action была недоступна. Теперь код возврата пробрасывается корректно.
+- **Индексатор рекламных поверхностей молча не находил ничего на стоковых прошивках.** Функция `apk_list_entries_readonly` запускала `unzip -Z1` (расширение Info-ZIP/zipinfo, которое не поддерживается ни toybox, ни BusyBox), из-за чего ветка всегда падала. Без BusyBox в PATH поиск файлов ничего не возвращал, счётчики DEX/layout были 0, а Network Killer зависал в `WAITING`. Теперь список файлов получаются через `-l` (поддерживается всеми реализациями), а извлечение использует пофайловый unzip, если toybox не раскрывает шаблоны.
+- **База подписок на категории теперь записывается под блокировкой во время очистки устаревших записей**, аналогично остальным модификаторам, а записи состояний удаляются только после успешного коммита.
+- **`manifest_class_strings` не мог сообщить об отсутствии `od`.** Конструкция `if ... fi | awk` запускала левую часть в subshell, поэтому `return 1` не выходил из функции, и awk перезаписывал маркер ошибки фиктивной записью `text-fallback`. Определение бэкенда теперь происходит до конвейера.
+
+### Универсальность для ROM и Root-менеджеров
+- **Явный поиск BusyBox.** Восстанавливаемые воркеры запускаются через собственный шебанг `#!/system/bin/sh` и не наследовали standalone-режим root-менеджера; на стоковом Android ниже API 34 нет утилит `awk`/`strings`, а `inotifyd`/`timeout` доступны только в BusyBox. Теперь BusyBox ищется по абсолютным путям (Magisk, KernelSU, KernelSU Next, APatch, busybox-ndk, system), а его апплеты добавляются в PATH (с сохранением приоритета системных бинарников). Все вызовы `command -v busybox` переведены на единый хелпер. Найденный инструментарий логируется при загрузке и выводится в Action.
+- `cap_runcon_bin` больше не ищет BusyBox только в папке KernelSU.
+- **Ограничение ожидания `sys.boot_completed`** (до 15 минут). Прошивки, не публикующие это свойство, ранее заставляли модуль зависать навсегда без вывода логов.
+- **Защита критичных OEM-пакетов** для оболочек Xiaomi/HyperOS, Samsung, OPPO/realme/OnePlus, vivo/iQOO, Huawei/Honor, Motorola и Transsion (системные пуши, лаунчеры, клавиатуры), определяемая по `ro.product.*`. Применяется при включённом `SCAN_SYSTEM_APPS=1`.
+- **Опросам клавиш громкости задан таймаут** в установщике и кнопке Action; без `timeout` блокирующий `getevent` мог зависнуть навсегда.
+- `cap_backend_verb_has_user` корректно проверяет текст справки бэкенда вместо возврата успеха при наличии `cmd` или `pm`, из-за чего обработка без `--user` ранее не вызывалась. Версия профиля возможностей поднята до 13.
+- Парсинг времени запуска из `/proc/<pid>/stat` больше не ломается, если имя процесса (`comm`) содержит пробелы.
+
+### Сетевой Killer
+- **Устранены дублирующиеся правила.** Несколько SDK соответствуют одному имени хоста (классический и Next Google Mobile Ads), из-за чего для приложения создавались идентичные правила фаервола. Теперь правила дедуплицируются по парам `(uid, host)`.
+- **Новый режим `ip`.** Фильтрация TLS-SNI требует `CONFIG_NETFILTER_XT_MATCH_STRING`, отсутствующий во многих GKI-ядрах. Режим `AD_KILLER_MODE=auto|string|ip` и параметр `AD_KILLER_IP_FALLBACK` применяют резолвнутые IP-адреса рекламных хостов для UID приложения с использованием только `xt_owner` (доступен везде). По умолчанию выключен, так как общий IP CDN может затронуть иной трафик приложения.
+- **Точная диагностика недоступности.** `xt_owner` и `xt_string` зондируются раздельно, поэтому лог указывает конкретную отсутствующую функцию ядра вместо общей строки `iptables_string_owner=no`.
+- **Проверка активности цепочки.** Демон netd перестраивает цепочки фаервола при смене сети/VPN, что могло сбрасывать переход в `OUTPUT`, пока модуль сообщал `ACTIVE`. Фоновый опрос теперь обнаруживает это и повторно применяет цепочку.
+- **Настраиваемый порог уверенности** через `AD_KILLER_MIN_CONFIDENCE` (`CAPABILITY` по умолчанию, `LAYOUT_CONFIRMED`, `MULTI_EVIDENCE`). Повышение порога сужает Killer до баннерных поверхностей, так как APP_OPEN и большинство NATIVE-загрузчиков не создают layout-доказательств.
+- Файл `ad_killer.log` сохраняет одну предыдущую копию вместо перезаписи при каждой сверке.
+
+### Производительность
+- **Кэширование дампов PackageManager.** Команда `dumpsys package <pkg>` возвращает сотни килобайт и вызывалась для каждого компонента при чтении состояния, верификации и поиске кандидатов — десятки одинаковых вызовов Binder на пакет. Теперь дамп кэшируется для проверяемого пакета и сбрасывается сразу после записи состояния.
+- **Дельта-сверка больше не является квадратичной.** Строки аудита и отпечатков для всех затронутых пакетов удаляются за один проход вместо перезаписи всего файла лога для каждого пакета.
+- **Зеркалирование логов работает по изменениям** (интервал по умолчанию 60 с вместо постоянного копирования каждые 10 секунд), настраивается через `LOG_MIRROR*`.
+- **События установки приложений объединяются (debounce).** Установка одного APK вызывает всплеск событий в `/data/app`, каждое из которых запускало полный пересчёт; теперь всплеск объединяется в одну сверку.
+
+### Правила и точность
+- **SDK с поддержкой PUSH-уведомлений больше не ломают сообщения.** `onesignal`, `braze`/`appboy` находились в автоматически отключаемом списке `[ANALYTICS]` даже в режиме SAFE, что блокировало полезные уведомления. Они перенесены в секцию аудита `[ANALYTICS_PUSH_RISK]` (дополненную Pushwoosh, Airship, CleverTap, Customer.io), которая активируется только при `BLOCK_PUSH_SDK=1`. Существующие файлы `rules.conf` автоматически мигрируют при обновлении.
+- **Литеральные правила проверяют класс компонента, а не `пакет/класс`.** Правила вида `applovin` или `sentry` ранее задевали любой компонент приложения, если сама папка пакета содержала эту подстроку. Правила с регулярными выражениями (`re:`) по-прежнему видят полное имя компонента.
+- Списки компонентов по пакетам (`component_audit.log`, `sdk_fingerprint.log`, `manifest_scan.log`, `ad_surface_scan.log`) больше не копируются на публичный `/sdcard`, если не включён `LOG_MIRROR_FULL=1`.
+
+### Очистка кода
+- Удалён мёртвый код: `dex_java_class_tokens` (определён дважды, не вызывался), `resource_java_class_tokens`, `surface_rule_hits_fallback`, `aad_manifest_cache_prepare_prefix`, `package_installed_for_user`, `ad_killer_probe_family` и скрипт-обёртка `category_watch.sh`.
+
+## v4.6.17 (617)
+- Исправлены границы сброса кэша: изменения сетевых хостов и комментариев в `rules.conf` больше не инвалидируют кэш DEX/layout и кэш манифеста.
+- Добавлена миграция подписей кэша v4.6.15/v4.6.16 без повторного DEX/layout или manifest-сканирования.
+- Вывод индексатора поверхностей сделан атомарным (last-known-good): активное сканирование пишет во временный файл и заменяет `ad_surface_scan.log` только после успешного завершения `SUMMARY`. Неполный вывод сохраняется отдельно как `ad_surface_scan.log.failed`.
+- Вновь установленный Network Killer может загружать цели из ранее завершённого файла лога поверхностей перед началом фонового переиндексирования.
+
+## v4.6.16 (616)
+- Исправлена гонка переиспользуемого PID при блокировке фонового индексатора поверхностей. Владелец блокировки теперь считается живым только при активном PID **и** соответствии `/proc/<pid>/cmdline` скрипту `ad_surface_indexer.sh`.
+- Добавлена отдельная блокировка фаервола по PID и времени запуска процесса (`/proc/<pid>/stat`), исключающая одновременную пересборку цепочки `AAD_ADKILL`.
+- Добавлен **Banner / Native / App-Open Network Killer v1** для режима `AGGRESSIVE`. Доказательства рекламных поверхностей сопоставляются с точными сетевыми хостами рекламных SDK и применяются ко всему UID приложения через изолированную цепочку `AAD_ADKILL`. В режимах SAFE/BALANCED и `BLOCK_ADS=0` сетевая цепочка снимается.
+- Первоначальный список сетевых хостов покрывает Google Mobile Ads, Yandex Mobile Ads и AppLovin MAX.
+- Сетевые цели сохраняются как `пользователь|пакет|sdk|хост`, без использования статических UID (UID определяется заново из PackageManager при каждой сверке).
+
+## v4.6.15 (615)
+- Выбор сканирования системных приложений сделан безопасным в установщике: **VOL+ = НЕТ (безопасно)**, **VOL- = ДА (явный opt-in)**.
+- При обновлении: если ранее было сохранено `SCAN_SYSTEM_APPS=1`, установщик требует **VOL- для подтверждения**, а VOL+ сбрасывает параметр в `0`.
+- Исправлен замер времени сканирования поверхностей (`AD-SURFACE-PROGRESS elapsed_ms` и итоговое время).
+- Добавлен итоговый статус `/data/adb/analytics_ads_disabler/ad_surface_index.status` (`RUNNING`, `COMPLETE`, `FAILED`, `SKIPPED`).
+
+## v4.6.14 (614)
+- Исправлен парсинг `mksh` для пар `N|M` в логах поверхностей; устранены ошибки `Argument list too long` (`E2BIG`) при вызове `printf` с тысячами путей layout.
+- Поиск DEX переведён на детерминированную пофайловую проверку каждого отпечатков после сертифицированного `strings`-прохода.
+- Схема кэша поверхностей обновлена до `surface4`.
+
+## v4.6.13 (613)
+- Поиск рекламных поверхностей полностью вынесен из критического пути выполнения политики PM/IFW. Сверка политики выполняется первой, а `ad_surface_indexer.sh` запускается следом в фоновом режиме.
+- Добавлено приоритетное индексирование: пакеты с уже найденными рекламными SDK обрабатываются первыми.
+- Добавлены уровни уверенности: `CAPABILITY`, `LAYOUT_CONFIRMED`, `MULTI_EVIDENCE`.
+
+## v4.6.12 (612)
+- Поиск рекламных поверхностей в DEX переведён с полного извлечения классов на целевой поиск отпечатков прямо в потоке данных.
+- Схема кэша поверхностей переведена на компактный формат `surface2`.
+
+## v4.6.11 (611)
+- Добавлен диагностический сканер рекламных поверхностей (BANNER, MREC, NATIVE, APP_OPEN, INTERSTITIAL, REWARDED, SPLASH, VIDEO) по DEX и скомпилированным ресурсам.
+- Добавлен `ad_surface_scan.log` (данные использовались только для аудита без расширения отключения компонентов).
+
+## v4.6.10 (610)
+- Добавлен постоянный кэш сканера манифестов в `/data/adb/analytics_ads_disabler/manifest_cache/v1`.
+- Кэш переиспользует токен-классы при неизменном APK или перезапуске правил.
+
+## v4.6.9 (609)
+- Превышение лимита безопасности теперь замораживает существующее владение вместо скрытого включения компонентов.
+- Добавлен отдельный лимит для AGGRESSIVE ADS (`MAX_AGGRESSIVE_ADS_MATCHES=64`) и лимит IFW Activity (`MAX_AGGRESSIVE_IFW_ACTIVITIES_PER_CATEGORY=64`).
+- Расширен allowlist точных полноэкранных рекламных Activity.
+
+## v4.6.8 (608)
+- Исправлено извлечение строк манифеста: добавлен парсер скомпилированного Android binary XML (`ResStringPool`), поддерживающий UTF-8 и UTF-16.
+- Добавлены интерактивные настройки кнопки Action (вход в меню по нажатию VOL+ в течение 5 секунд).
+
+## v4.6.7 (607)
+- Переход на прямой парсинг `ResStringPool` AXML без зависимости от утилиты `strings`.
+
+## v4.6.6 (606) — Full Activity Scanner / Fullscreen Ads Killer
+- AGGRESSIVE/HYBRID дополнены чтением `AndroidManifest.xml` из base/split APK.
+- Добавлен точный allowlist полноэкранных рекламных Activity для всех главных рекламных SDK.
+- Добавлен `sdk_fingerprint.log` для учета обнаруженных SDK.
+
+## v4.6.5 (605) — AGGRESSIVE ads mode
+- Добавлен режим `COMPONENT_MODE=AGGRESSIVE`.
+- AGGRESSIVE дополнительно отключает точные рекламные Provider-компоненты.
+
+## v4.6.4 (604) — universal FD isolation + multi-user IFW safety
+- Добавлена изоляция файловых дескрипторов перед вызовом PM в дочернем процессе.
+- Добавлен multi-user safety gate для IFW.
+
+## v4.6.3 (603) — закрытие orphan FD перед PM restore
+- Устранены ошибки SELinux AVC при восстановлении состояний компонентов.
+
+## v4.6.2 (602) — исправление гонки обновления на HyperOS
+- Процессы прежней версии останавливаются до изменения конфигурации.
+
+## v4.6.1 (601) — точность Activity-аудита
+- Правило `adactivity` заменено на точное окончание класса `AdActivity`.
+
+## v4.6.0 (600) — PM/IFW-контур
+- Добавлен опциональный `COMPONENT_BACKEND=HYBRID`.
+
+## v4.5.0 (500) — типизированный аудит и режимы SAFE/BALANCED
+- Введены типы аудита и подписки на категории.
+
+## v4.4.14 (454) — KernelSU/Android 16 Binder FD compatibility
+- PackageManager-команды запускаются со stdin из `/dev/null`.
+
+## v4.4.13 (453) — OEM runcon execution compatibility
+- Сохранён транспорт `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."`.
+
+## v4.4.12 (452) — Android 16 PM Transport Hardening
+- Исключено использование real shell UID 2000 на API 36+.
+
+## v4.4.11 (451) — module.prop как единственный источник версии
+- Версия читается динамически из `module.prop`.
+
+## v4.4.10 (450) — Unified Live Log Reliability
+- Зеркалирование логов в `/sdcard/eCubz/logs/Analytics_Ads_Disabler`.
+
+## 4.4.9 (449) — Unified Log Directory
+- Все логи сохранены в единую папку `/data/adb/analytics_ads_disabler/logs/`.
+
+## 4.4.8 (448) — Delta Snapshot / Hang Diagnostics
+- Оптимизирована работа со снапшотами пользователей.
+
+## 4.4.7 (447) — Runtime Log Reliability
+- Лог загрузки перемещён в `/data/adb/analytics_ads_disabler/analytics_ads_disabler_debug.log`.
+
+## 4.4.6 (446) — State DB Race Fix
+- Атомарная запись состояний и блокировка фалов DB.
+
+## 4.4.5 (445) — Whitelist Delta Restore
+- Инкрементальное восстановление из белых списков.
+
+## 4.4.4 (444) — Unified Config Paths
+- Символические ссылки между путями конфигурации.
+
+## 4.4.3 (443) — Boot-Safe Runtime / Trace Checkpoints
+- Безопасная инициализация на этапе загрузки.
+
+## 4.4.2 (442) — Boot Reliability / Watcher Health
+- Задержка зондирования PM до `sys.boot_completed=1`.
+
+## v4.4.1 (441) — Realtime Config Watch
+- Реалтайм-наблюдатель изменений `inotifyd`.
+
+## v4.4.0 (440) — Policy/Transport Separation
+- Разделение принятия решений политики и способов выполнения.
+
+## v4.3.8 (438)
+- Ограничение последовательных ошибок в ручном сканировании (fail-fast).
+
+## 4.3.7 (437) — Runcon Shell-Domain Fix
+- Исправление режима `runcon_shell_uid0`.
+
+## 4.3.5 (435) — SELinux Context Cascade
+- Каскад контекстов исполнения SELinux.
+
+## v4.3.4 (434) — Hybrid Cascade Edition
+- Гибридный каскад способов выполнения PM-команд.
+
+## v4.3.3
+- Кэширование результатов парсинга компонентов для каждого пакета.
+
+## v4.3.1 — Binder Context Adaptive Edition
+- Адаптивный профиль контекста Binder для Android 16 / HyperOS.
 
 ## v4.3.0 — Full Verbose Execution Logging Edition
-
-- **Тотальное трассировочное логирование всех команд:** Добавлена функция `log_cmd_exec`, логирующая саму исполняемую системную команду (`cmd`, `pm`, `dumpsys`), её выводимый результат (stdout + stderr) и код завершения (`$rc`).
-- **Глубокая детализация в файле журнала:** Все низкоуровневые вызовы, зонды, перебор каскадов и изменения состояний протоколируются с точными временными метками `[YYYY-MM-DD HH:MM:SS]`.
-
-- **Расширенный каскадный перебор:** В `cap_disable_component` добавлена поддержка обратной совместимости с `disable-user` для устройств, где OEM разрешал этот глагол для любых объектов.
-- **Полная поддержка всех версий Android (7-16):** Команды отключения автоматически подстраиваются под прошивку без сбоев на любых смартфонах.
-
-- **Автоматическая инициализация возможностей (`common.sh`):** Добавлен гарантированный вызов `ensure_capability_profile` и `load_capabilities` при инклюде библиотеки `common.sh` из любых подпроцессов и скриптов.
-- **Безопасная обработка временных файлов:** Добавлены проверки существования файлов `$tmp` в `remove_state_record` и `remove_membership` перед перемещением (`mv`), предотвращающие сообщения об ошибках на чистых устройствах.
-- **Живое тестирование на POCO X3 Pro (Android 16, KernelSU):** Подтверждена 100% стабильность работы зондирования и отключения компонентов на втором устройстве.
-
-- **Исправление оценки кода возврата (POSIX Shell):** Выделено прямое сохранение `rc=$?` перед вызовами `grep` в `cap_disable_component` и `cap_set_component_state`, устранены сбои из-за особенностей конвейера `printf | grep` в Android shell.
-- **Оптимизация зондирования `dumpsys`:** Убраны хрупкие регулярные выражения в `cap_probe_dump_backend`. Если системная утилита `dumpsys` доступна на прошивке, бэкенд выставляется напрямую в `dumpsys` без обрыва пайпа `Broken pipe` на Android 16.
-- **Прямое тестирование по ADB:** Полная живая проверка логики отключения и сохранения состояний компонентов на устройствах Android 16 (ColorOS / HyperOS / OxygenOS) с KernelSU.
+- Полное трассировочное логирование выполнения системных команд.
 
 ## v4.2.4 — Fail-Safe Cascade Edition
-
-- **Каскадный механизм фолбэков (Fail-Safe Cascade):** Реализована многоуровневая цепочка выполнения команд при отключении и восстановлении компонентов (`cmd package disable --user` -> `cmd package disable` -> `pm disable --user` -> `pm disable`).
-- **Специфика AOSP Component State:** Соблюдено официальное ограничение `PackageManager.java`, запрещающее использовать глагол `disable-user` (код `3`) для отдельных классов/компонентов (`ComponentName`). Для Services и Receivers используется строго `disable` (код `2`).
-- **Автоматический сброс кэша:** Версия профиля повышена для гарантированного обновления параметров на устройстве.
+- Многоуровневая цепочка фолбэков PM.
 
 ## v4.2.2 — HyperOS & Multi-User Support
-
-- **Поддержка вывода пользователей Android 15/16:** Обновлены регулярные выражения для парсинга вывода `cmd user list` (`id=[0-9]+`, `User [0-9]+` помимо классического `UserInfo{`).
-- **Оптимизация вызовов `cmd`:** Удалена привязка к текстам `help` парсера, команды отправляются напрямую через Binder/Shell системному PackageManager.
+- Поддержка вывода пользователей Android 15/16.
 
 ## v4.2.1 — Substring Precedence Fix
-
-- **Исправление приоритета подстрок зонда:** Устранена ошибка, при которой подстрока `help` перехватывала вывод проверок бэкенда.
+- Исправление приоритета совпадений в зондах.
 
 ## v4.2.0 — Runtime Adaptive Edition
-
-- Fixed Android 16/API 36 compatibility case where `cmd package help` advertises both `disable` and `disable-user`, but `disable --user ...` can fail at Binder runtime on real components.
-- Operational disable priority is now `disable-user` -> `disable`; enable priority is `enable-user` -> `enable` (OEM verb is used only if actually supported).
-- Capability detection now performs a non-destructive runtime/Binder probe against a guaranteed-missing component (using an installed third-party package when available) instead of trusting help/parser output alone.
-- Candidates producing `Failed transaction`, Binder/RemoteException, SecurityException, unsupported/unknown command/option, or invalid component-state errors are rejected.
-- Added one-time runtime self-healing: a cached backend that later fails with a hard transport/backend error invalidates the profile, re-probes once, and retries once. Ordinary target-specific failures do not trigger fallback storms.
-- Split the module's operational block command from the command used to restore an original explicit `disabled` state, preserving rollback semantics as closely as the ROM allows.
-- Capability profile schema bumped to v3, forcing existing v4.1 installations to re-probe automatically.
+- Адаптивное определение методов вызова PM во время выполнения.
 
 ## v4.1.0 — Adaptive Universal Edition
-
-- Added one-time ROM/device capability probing during installation.
-- Added persistent `capabilities.conf` with safe enum-like backend/verb selections; the file is never sourced or eval'ed.
-- Runtime component operations now use one preselected PackageManager command instead of trying a fallback chain for every component.
-- Added automatic capability re-probe when the profile schema or Android build fingerprint changes after an OTA/ROM update.
-- Capability profile now covers disable, enable, default-state, disabled-user, disabled-until-used, user listing, package listing, `--user`, `--show-versioncode`, package dump and app watcher backend.
-- Added non-destructive PackageManager command probing; no real component is toggled during detection.
-- Added safe user-0 fallback when a ROM lacks complete per-user PackageManager support.
-- Added package polling fallback when `inotifyd` is unavailable and a low-frequency safety poll when realtime monitoring is active.
-- Action button now prints the selected compatibility profile before rescanning.
+- Однократное зондирование возможностей устройства при установке.
 
 ## v4.0.0 — Universal Edition
-
-- Added interactive Volume Up/Down installer choices.
-- Added independent ADS and ANALYTICS feature flags.
-- Added multi-user/profile scanning and per-user state records.
-- Added exact/default-state aware rollback instead of blind enable operations.
-- Removed global `killall inotifyd`; watcher PIDs are owned and identity-checked.
-- Replaced permissive dumpsys fallback with strict Services/Receivers-only scanning.
-- Changed ordinary signatures to literal case-insensitive matching; regex requires `re:`.
-- Added correct overlapping-category ownership so one whitelist cannot undo another active block.
-- Added persistent settings/config across module updates.
-- Added safe migration from legacy v3 state.
-- Added stale-lock recovery and PID-reuse protection.
-- Added realtime create/delete/move monitoring for `/data/app`.
-- Added automatic full reconciliation when settings/rules/whitelists change.
-- Added Action button for manual full rescan in Magisk/KernelSU/APatch.
+- Первоначальный релиз универсального адаптивного движка.

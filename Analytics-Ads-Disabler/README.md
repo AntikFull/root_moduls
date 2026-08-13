@@ -1,56 +1,71 @@
 # Analytics & Ads Disabler
+## v4.8.0 — расширение покрытия
 
-> Runtime version metadata is read from `module.prop` (`name`, `version`, `versionCode`) and reused in logs/diagnostics, preventing stale hardcoded version labels.
+- **Network Killer: 17 SDK вместо 3.** `[ADS_NETWORK_HOST]` вырос с 6 правил до 69. Теперь хосты есть у каждого SDK, чью рекламную поверхность умеет находить индексатор. Где возможно, бьём по init/config-эндпоинтам, а не по CDN с креативами — так SDK вообще не инициализируется.
+- **Отключение init-провайдеров.** Рекламные SDK стартуют через ContentProvider ещё до `Application.onCreate()`. Секция `[ADS_PROVIDER_AGGRESSIVE]` расширена с 8 до 16 точных правил плюс regex, ограниченный рекламными namespace'ами. Firebase/Sentry/androidx.startup он задеть не может по построению.
+- **Мост для Xposed.** Если найден LSPosed/LSPatch/Xposed, модуль выкладывает `xposed_targets.json` — точный список «пакет → SDK → поверхности → уверенность» из завершённого Surface Index. Сам модуль по-прежнему ничего не хукает: это данные для модуля-компаньона, который сможет убрать и сам рекламный контейнер, а не только его загрузку. Управляется `XPOSED_BRIDGE=auto|1|0`.
 
-[ Русский](#русский) | [ English](#english)
+## v4.7.0 — что изменилось
+
+**Критично:**
+- Пустой ответ PackageManager больше не стирает базу состояний. Раньше один сбой Binder приводил к потере и списка управляемых компонентов, и сохранённых оригинальных состояний — откатить было уже нечем.
+- Удаление модуля наконец действительно откатывает компоненты. `uninstall.sh` выполняется в post-fs-data, где PackageManager ещё нет, поэтому все восстановления падали, а следом `rm -rf` уничтожал данные. Теперь откат двухфазный: на загруженной системе — сразу, иначе через отложенный воркер после `sys.boot_completed`.
+- `full_rescan()` возвращал код `release_lock`, то есть всегда 0 — ошибки сканирования и fail-fast были не видны.
+- Индексатор рекламных поверхностей на стоковых прошивках молча не находил ничего: `unzip -Z1` не поддерживается ни toybox, ни BusyBox.
+
+**Универсальность:**
+- BusyBox определяется по абсолютному пути (Magisk / KernelSU / KernelSU Next / APatch / busybox-ndk / system) и его апплеты добавляются в PATH. Дочерние воркеры запускаются по шебангу `#!/system/bin/sh` и не наследовали standalone-режим, а на Android ниже API 34 в системе нет ни `awk`, ни `strings`. Системные бинарники сохраняют приоритет.
+- Ожидание `sys.boot_completed` ограничено 15 минутами.
+- Добавлена защита критичных пакетов оболочек Xiaomi/HyperOS, Samsung, OPPO/realme/OnePlus, vivo, Huawei/Honor, Motorola, Transsion.
+
+**Network Killer:**
+- Убраны дублирующиеся правила (один хост принадлежал двум SDK-лейблам).
+- Новый режим `ip`: TLS-SNI требует `xt_string`, которого нет во многих GKI-ядрах. Режим `ip` использует только `xt_owner` и работает почти везде. Включается через `AD_KILLER_IP_FALLBACK=1`.
+- В логе теперь видно, какой именно матч отсутствует в ядре, и цепочка переустанавливается, если её снёс netd.
+
+**Правила:**
+- `onesignal`, `braze`/`appboy` больше не отключаются автоматически — они доставляют реальные уведомления. Секция `[ANALYTICS_PUSH_RISK]`, включается через `BLOCK_PUSH_SDK=1`.
+- Литеральные правила матчатся по классу компонента, а не по всей строке `пакет/класс`.
+
+Полный список — в `CHANGELOG.md`.
 
 ---
 
-## <a name="русский"></a>  Описание (Russian)
+- **v4.6.17:** устранена невалидация кэша манифеста и поверхностей при изменении сетевых хостов или комментариев.
+- **v4.6.16:** добавлен Banner / Native / App-Open Network Killer v1 для режима AGGRESSIVE. Устранена гонка переиспользуемого PID для блокировки индексатора поверхностей.
+- **v4.6.15:** сканирование системных приложений переведено в явный opt-in (VOL+ = НЕТ). Добавлен статус фазы индексирования поверхностей.
+- **v4.6.14:** детерминированная проверка отпечатков DEX после прохода `strings`, обновление схемы кэша поверхностей до `surface4`.
+- **v4.6.13:** вынесение индексирования поверхностей из критического пути выполнения политики PM/IFW в фоновый воркер.
+- **v4.6.12:** целевой поиск отпечатков поверхностей в DEX вместо извлечения всех классов.
+- **v4.6.11:** диагностический сканер рекламных поверхностей.
+- **v4.6.10:** постоянный кэш сканера манифестов (`manifest_cache/v1`).
+- **v4.6.9:** оптимизация лимитов безопасности для AGGRESSIVE и расширение allowlist рекламных Activity.
+- **v4.6.8:** парсер `ResStringPool` AXML для чтения строк манифеста напрямую. Меню настроек Action по кнопке громкости.
 
-**Analytics & Ads Disabler** — адаптивный systemless-модуль для Magisk / KernelSU / KernelSU Next / APatch. Режим `SAFE` отключает совпавшие Services/Receivers, `BALANCED` дополнительно обрабатывает только точные безопасные Provider-правила, а `AGGRESSIVE` добавляет отдельный allowlist точных рекламных Provider/Activity для более сильного подавления рекламы. Backend `PM` остаётся стандартным, а опциональный `HYBRID` добавляет IFW-защиту для управляемых Services/Receivers и точных рекламных Activities. Неоднозначные Activity/Provider остаются только в аудите.
+> Метаданные версии читаются динамически из `module.prop` (`name`, `version`, `versionCode`) и переиспользуются в логах и диагностике.
+
+---
+
+## Описание (Russian)
+
+**Analytics & Ads Disabler** — адаптивный systemless-модуль для Magisk / KernelSU / KernelSU Next / APatch. Режим `SAFE` отключает совпавшие Services/Receivers, `BALANCED` дополнительно обрабатывает только точные безопасные Provider-правила, а `AGGRESSIVE` добавляет отдельный allowlist точных рекламных Provider/Activity для более сильного подавления рекламы. Backend `PM` остаётся стандартным, а опциональный `HYBRID` добавляет IFW-защиту для управляемых Services/Receivers и точных рекламных Activities. Неоднозначные Activity/Provider остаются только в аудит-логе.
 
 ### Режимы компонентов
 - `SAFE` — только совпавшие рекламные/аналитические Service и Receiver.
-- `BALANCED` — SAFE + точные Provider из `*_PROVIDER_SAFE`; поведение прежнего BALANCED не изменено.
-- `AGGRESSIVE` — BALANCED + отдельный allowlist точных рекламных Provider; с backend `PM` также отключаются только точные рекламные Activity из `ADS_ACTIVITY_IFW`.
-- `HYBRID` — это отдельный backend: точные рекламные Activity блокируются IFW вместо PM.
-
-`AGGRESSIVE` повышает шанс убрать встроенную рекламу, но и риск несовместимости выше. Неоднозначные analytics-init Provider (`FirebaseInitProvider`, `FacebookInitProvider`, `Sentry` и т.п.) даже здесь остаются `REPORT_ONLY`. Exact-state rollback сохраняется.
+- `BALANCED` — SAFE + точные Provider из `*_PROVIDER_SAFE`.
+- `AGGRESSIVE` — BALANCED + отдельный allowlist точных рекламных Provider и полноэкранных рекламных Activity из `ADS_ACTIVITY_IFW`.
+- `HYBRID` — отдельный backend: в AGGRESSIVE точные fullscreen Activity получают двойной слой PM disable + IFW; в SAFE/BALANCED Activity остаются IFW-only.
 
 ### Основные возможности
--  **Runtime Adaptive Engine:** Автоматическая адаптация под версию Android и оболочку (MIUI, HyperOS, OneUI, ColorOS, Pixel и др.).
--  **Экономия заряда и ресурсов:** Отключение фоновых трекеров снижает расход батареи и оперативной памяти.
--  **Блокировка рекламы и трекинга:** Отключение рекламных ресиверов и служб сбора данных (Yandex Metrica, Google Analytics, Firebase, AppMetrica и др.).
--  **Поддержка динамического отслеживания:** Автоматически обрабатывает новые и обновляемые приложения.
--  **Белые списки:** Возможность внесения исключений в `whitelist.list`, `white_ads.list`, `white_analytics.list`.
--  **Аудит компонентов:** Отчёт `component_audit.log` разделяет найденные компоненты по типу, категории, риску и принятому действию.
--  **Изолированный IFW:** HYBRID использует только `/data/system/ifw/analytics_ads_disabler.xml`, не перезаписывая правила App Manager, Blocker и других программ. Поскольку IFW глобален для Android users, правило создаётся только при единогласной policy для компонента во всех профилях, где установлен пакет.
--  **Точный откат:** При отключении HYBRID или удалении модуля собственный IFW-файл удаляется, а PM-компоненты возвращаются к сохранённому исходному override.
--  **Без сетевого слоя:** Модуль не изменяет DNS/hosts и не конфликтует с отдельными сетевыми блокировщиками.
-
----
-
-## <a name="english"></a>  Description (English)
-
-**Analytics & Ads Disabler** is an adaptive systemless module for Magisk, KernelSU/Next and APatch. `SAFE` disables matched Services/Receivers, `BALANCED` additionally handles exact safe Provider rules, and `AGGRESSIVE` adds a separate allowlist of exact advertising Providers/Activities for stronger ad suppression. The default backend is `PM`; optional `HYBRID` adds isolated IFW rules for managed Services/Receivers and exact ad Activities. Ambiguous Activity/Provider matches remain report-only.
-
-### Component modes
-- `SAFE` — matched advertising/analytics Services and Receivers only.
-- `BALANCED` — SAFE plus exact Providers from `*_PROVIDER_SAFE`; existing BALANCED behavior is unchanged.
-- `AGGRESSIVE` — BALANCED plus a separate allowlist of exact advertising Providers; with the `PM` backend it can also disable only exact advertising Activities from `ADS_ACTIVITY_IFW`.
-- `HYBRID` remains a separate backend and blocks exact advertising Activities through IFW instead of PM.
-
-`AGGRESSIVE` can suppress more embedded ads at a higher compatibility risk. Ambiguous analytics init Providers such as Firebase/Facebook/Sentry remain report-only. Exact-state rollback is preserved.
-
-### Features
--  **Runtime Adaptive Engine:** Automatically adjusts behavior based on Android version and OEM ROM (MIUI, HyperOS, OneUI, ColorOS, Pixel, etc.).
--  **Battery & RAM Saver:** Disabling background telemetry services reduces idle battery drain and frees up memory.
--  **Ad & Telemetry Disabler:** Neutralizes analytics/tracking components (Google Analytics, Firebase, AppMetrica, Yandex Metrica, etc.).
--  **App Monitor:** Automatically applies disabler rules when new apps are installed or updated.
--  **Custom Whitelists:** Highly configurable via `whitelist.list`, `white_ads.list`, and `white_analytics.list`.
--  **Typed Audit:** `component_audit.log` records component type, category, risk, and selected action.
--  **Isolated IFW:** HYBRID owns a single dedicated IFW file and never rewrites third-party rule files. Because IFW is global across Android users, a component rule is emitted only when every installed user profile agrees that it should be blocked.
+- **Runtime Adaptive Engine:** Автоматическая адаптация под версию Android и оболочку (MIUI, HyperOS, OneUI, ColorOS, Pixel и др.).
+- **Экономия заряда и ресурсов:** Отключение фоновых трекеров снижает расход батареи и оперативной памяти.
+- **Блокировка рекламы и трекинга:** Отключение рекламных ресиверов и служб сбора данных (Yandex Metrica, Google Analytics, Firebase, AppMetrica и др.).
+- **Поддержка динамического отслеживания:** Автоматически обрабатывает новые и обновляемые приложения.
+- **Белые списки:** Возможность внесения исключений в `whitelist.list`, `white_ads.list`, `white_analytics.list`.
+- **Full Activity Scanner:** В AGGRESSIVE/HYBRID resolver-таблицы дополняются чтением compiled `AndroidManifest.xml` из base/split APK.
+- **Manifest Cache:** Неизменённые APK не распаковываются и не парсятся повторно на каждом reboot/Action.
+- **Background Ad Surface Indexer:** Чтение рекламных поверхностей в фоновом режиме без задержки старта основной защиты.
+- **Fullscreen Ads Killer & Banner Network Killer:** Блокировка рекламных хостов на сетевом уровне фаерволом для UID приложений.
 
 ---
 
@@ -60,12 +75,8 @@
 
 ---
 
----
-
----
-
 ## Донаты и поддержка / Donations
-Ваша поддержка помогает развивать и поддерживать проекты! / Your support helps keep these projects active!
+Ваша поддержка помогает развивать и поддерживать проекты!
 
 - СБП: `+7 923 618-89-93`
 - Т-Банк: [Перевод Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
@@ -78,37 +89,3 @@
 ## Лицензия / License
 
 Модуль распространяется бесплатно под лицензией MIT. При распространении сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.
-
-
-## Policy and whitelist behavior (v4.4.1)
-
-The compatibility backend only decides **how** a PackageManager state change is executed. It never decides **what** may be changed. System protection, global whitelist, category whitelist, ADS/ANALYTICS rules, and safety limits are evaluated first.
-
-If a package is later added to `whitelist.list`, `white_ads.list`, or `white_analytics.list`, reconciliation removes only this module's matching memberships. A component is restored only when no remaining category still requires it, and restoration uses the exact override state saved before the module first touched that component. Components not tracked by this module are never bulk-enabled.
-
-A verified learned write transport is reused for restore operations as well as disable operations. If it fails, the module falls back through the compatibility restore cascade and verifies the resulting state.
-
-
-## Realtime config watch (v4.4.1)
-
-When `REALTIME_MONITOR=1` and BusyBox `inotifyd` is available, changes to `settings.conf`, `rules.conf`, `whitelist.list`, `white_ads.list`, and `white_analytics.list` trigger an immediate policy reconciliation. The watcher listens on the module data directory so both direct writes and atomic replace/rename saves are detected. A hash-based polling loop remains enabled as a safety net and deduplicates events under the global operation lock.
-
-
-### Config file paths (v4.4.8+)
-The authoritative configuration lives in `/data/adb/analytics_ads_disabler/`. For convenience, the same filenames under `/data/adb/modules/analytics_ads_disabler/` are symlinks to those persistent files, so either path is safe to edit.
-
-### Log file paths (v4.4.10+)
-All module log files (`debug.log`, `diagnostics.log`, `boot_trace.log`, `install_diagnostics.log`, `uninstall.log`, `component_audit.log`) are consolidated under `/data/adb/analytics_ads_disabler/logs/`. External user-accessible copies are mirrored under `/sdcard/eCubz/logs/Analytics_Ads_Disabler/`.
-
-
-### v4.4.10 log reliability
-
-- `/data/adb/analytics_ads_disabler/logs/` is authoritative.
-- `/sdcard/eCubz/logs/Analytics_Ads_Disabler/` is refreshed best-effort by a dedicated mirror worker about every 10 seconds; mirror failures never block scanning.
-- `debug.previous.log` preserves the immediately previous boot/runtime debug log before `debug.log` is cleared.
-- Legacy pre-unified log files are copied once to `*.legacy.log` names during upgrade when available.
-- `uninstall.log` is copied to the external log directory before persistent module state is removed.
-
-### Android 16 PackageManager transport
-
-On API 36+, component-state writes do not use real shell UID 2000 as a fallback. The compatibility transport keeps uid 0 and can enter `u:r:shell:s0` only for a bounded PackageManager command. PackageManager stdin is always `/dev/null`, so no module state-file descriptor is transferred through Binder. Older Android releases keep the legacy fallback path.

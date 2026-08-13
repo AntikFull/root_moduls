@@ -1,7 +1,7 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v4.6.5
-versionCode=605
+version=v4.8.5
+versionCode=805
 author=eCubz (https://t.me/eCubz)
-description=Адаптивное отключение аналитики, рекламы и трекеров: точный откат PM, SAFE/BALANCED/AGGRESSIVE и опциональный HYBRID IFW+PM для проверенных Activity/Receiver/Service. Логи: /data/adb/analytics_ads_disabler/logs. Поддержка: https://t.me/module_ecubz
+description=[v4.8.0: хосты для 17 рекламных SDK, отключение init-провайдеров, мост для Xposed] Адаптивное отключение аналитики, рекламы и трекеров: SAFE/BALANCED/AGGRESSIVE, AXML Full Activity Scanner + background Ad Surface Indexer (DEX/resources) + persistent cache, Banner/Native/App-Open Network Killer, Action-настройки, точный PM rollback и опциональный HYBRID IFW+PM. Логи: /data/adb/analytics_ads_disabler/logs. Поддержка: https://t.me/module_ecubz
 minMagisk=20400

@@ -5,6 +5,69 @@
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
 LOG_DIR="${LOG_DIR:-$DATA_DIR/logs}"
 mkdir -p "$LOG_DIR" 2>/dev/null
+
+# ---- Portable toolchain bootstrap ------------------------------------------
+# Every worker is spawned through its own `#!/system/bin/sh` shebang, so the
+# root manager's BusyBox standalone mode is NOT inherited by child scripts.
+# Stock Android below API 34 ships no awk/strings at all, and inotifyd/timeout
+# are BusyBox-only everywhere. Resolve BusyBox once by absolute path and expose
+# its applets through PATH so every fallback branch in this module is real.
+AAD_APPLET_DIR="$DATA_DIR/bin"
+
+aad_resolve_busybox() {
+    for _abb in "${AAD_BUSYBOX:-}" \
+                "$(command -v busybox 2>/dev/null)" \
+                /data/adb/magisk/busybox \
+                /data/adb/ksu/bin/busybox \
+                /data/adb/ap/bin/busybox \
+                /data/adb/modules/busybox-ndk/system/bin/busybox \
+                /system/bin/busybox \
+                /system/xbin/busybox; do
+        [ -n "$_abb" ] && [ -x "$_abb" ] && { printf '%s\n' "$_abb"; return 0; }
+    done
+    return 1
+}
+
+# System binaries keep priority; BusyBox only fills the gaps. The applet dir is
+# appended, never prepended, so a working toybox implementation is still used.
+aad_setup_applet_path() {
+    case ":$PATH:" in *":$AAD_APPLET_DIR:"*) return 0 ;; esac
+    [ -n "$AAD_BUSYBOX" ] || return 1
+    if [ ! -x "$AAD_APPLET_DIR/awk" ]; then
+        mkdir -p "$AAD_APPLET_DIR" 2>/dev/null || return 1
+        if ! "$AAD_BUSYBOX" --install -s "$AAD_APPLET_DIR" >/dev/null 2>&1; then
+            for _aap in awk sed grep egrep fgrep sort uniq tr od strings unzip stat \
+                        find cksum head tail cat cut wc timeout inotifyd sleep \
+                        readlink dirname basename mktemp xargs date id; do
+                [ -e "$AAD_APPLET_DIR/$_aap" ] || ln -s "$AAD_BUSYBOX" "$AAD_APPLET_DIR/$_aap" 2>/dev/null || true
+            done
+        fi
+        chmod 700 "$AAD_APPLET_DIR" 2>/dev/null || true
+    fi
+    [ -x "$AAD_APPLET_DIR/awk" ] || return 1
+    PATH="$PATH:$AAD_APPLET_DIR"
+    export PATH
+    return 0
+}
+
+AAD_BUSYBOX="$(aad_resolve_busybox 2>/dev/null)"
+export AAD_BUSYBOX
+aad_setup_applet_path >/dev/null 2>&1 || true
+
+# Single entry point for every BusyBox call site. Falls back to a bare `busybox`
+# lookup so behaviour is unchanged on setups where PATH already provides it.
+aad_bb() {
+    if [ -n "$AAD_BUSYBOX" ]; then
+        "$AAD_BUSYBOX" "$@"
+        return $?
+    fi
+    command -v busybox >/dev/null 2>&1 || return 127
+    busybox "$@"
+}
+
+aad_have_bb() {
+    [ -n "$AAD_BUSYBOX" ] || command -v busybox >/dev/null 2>&1
+}
 # service.sh may preselect an internal runtime log so boot/runtime never depends
 # on emulated storage readiness. Other entry points use the unified logs dir.
 if [ -z "${LOGFILE:-}" ]; then
@@ -27,11 +90,23 @@ WATCH_PID_FILE="$DATA_DIR/config_watch.pid"
 INOTIFY_PID_FILE="$DATA_DIR/inotify.pid"
 CONFIG_INOTIFY_PID_FILE="$DATA_DIR/config_inotify.pid"
 LOG_MIRROR_PID_FILE="$DATA_DIR/log_mirror.pid"
+AD_SURFACE_PID_FILE="$DATA_DIR/ad_surface_index.pid"
+AD_SURFACE_STATUS_FILE="$DATA_DIR/ad_surface_index.status"
+AD_SURFACE_LOCK_DIR="$DATA_DIR/.surface_index.lock"
 LOCK_DIR="$DATA_DIR/.operation.lock"
 STATE_DB_LOCK="$DATA_DIR/.state_db.lock"
 MEMBERSHIP_DB_LOCK="$DATA_DIR/.membership_db.lock"
 CAPABILITIES_FILE="$DATA_DIR/capabilities.conf"
 COMPONENT_AUDIT_FILE="$LOG_DIR/component_audit.log"
+SDK_FINGERPRINT_FILE="$LOG_DIR/sdk_fingerprint.log"
+MANIFEST_SCAN_FILE="$LOG_DIR/manifest_scan.log"
+AD_SURFACE_SCAN_FILE="$LOG_DIR/ad_surface_scan.log"
+AD_KILLER_TARGET_FILE="$DATA_DIR/ad_killer_targets.list"
+AD_KILLER_LOG_FILE="$LOG_DIR/ad_killer.log"
+AD_KILLER_STATUS_FILE="$DATA_DIR/ad_killer.status"
+AD_KILLER_CHAIN="AAD_ADKILL"
+AD_KILLER_LOCK_DIR="$DATA_DIR/.ad_killer.lock"
+MANIFEST_CACHE_DIR="$DATA_DIR/manifest_cache/v1"
 IFW_DIR="${IFW_DIR:-/data/system/ifw}"
 IFW_RULE_FILE="$IFW_DIR/analytics_ads_disabler.xml"
 
@@ -63,10 +138,66 @@ fi
 CATEGORIES="ADS ANALYTICS"
 SYSTEM_PROTECTED="android com.android.systemui com.android.settings com.android.packageinstaller com.android.permissioncontroller com.google.android.permissioncontroller com.android.phone com.android.providers.settings com.android.providers.downloads com.android.documentsui com.android.shell com.android.bluetooth com.android.nfc com.android.location.fused com.android.networkstack com.google.android.networkstack com.android.networkstack.tethering com.google.android.networkstack.tethering com.google.android.gms com.android.vending com.google.android.gsf com.google.android.inputmethod.latin com.huawei.hwid com.huawei.hms.config.service com.sec.android.app.samsungapps com.topjohnwu.magisk me.weishu.kernelsu me.bmax.apatch"
 
+# OEM shells keep push transports, launchers and IMEs under vendor namespaces
+# that the AOSP list above does not cover. These only come into play when the
+# user opts into SCAN_SYSTEM_APPS=1, but a mistake there costs notifications or
+# a home screen, so the protection is unconditional and cheap.
+aad_oem_protected_packages() {
+    _aop_id=$(getprop ro.product.manufacturer 2>/dev/null)
+    _aop_id="$_aop_id $(getprop ro.product.brand 2>/dev/null)"
+    _aop_id="$_aop_id $(getprop ro.product.name 2>/dev/null)"
+    _aop_id=$(printf '%s' "$_aop_id" | tr '[:upper:]' '[:lower:]')
+    _aop_out=""
+    case "$_aop_id" in
+        *xiaomi*|*redmi*|*poco*)
+            _aop_out="$_aop_out com.xiaomi.xmsf com.xiaomi.finddevice com.miui.home com.miui.securitycenter com.miui.core com.miui.contentcatcher" ;;
+    esac
+    case "$_aop_id" in
+        *samsung*)
+            _aop_out="$_aop_out com.samsung.android.honeyboard com.sec.android.app.launcher com.samsung.android.mdx com.samsung.android.messaging com.samsung.push com.samsung.android.spay" ;;
+    esac
+    case "$_aop_id" in
+        *oppo*|*realme*|*oneplus*|*heytap*)
+            _aop_out="$_aop_out com.heytap.mcs com.coloros.mcs com.oplus.push com.oppo.launcher com.android.launcher com.oplus.uifirst" ;;
+    esac
+    case "$_aop_id" in
+        *vivo*|*iqoo*)
+            _aop_out="$_aop_out com.vivo.pushservice com.vivo.push com.bbk.launcher2 com.vivo.abe" ;;
+    esac
+    case "$_aop_id" in
+        *huawei*|*honor*)
+            _aop_out="$_aop_out com.huawei.android.pushagent com.huawei.android.launcher com.hihonor.push com.huawei.hwid.core" ;;
+    esac
+    case "$_aop_id" in
+        *motorola*|*lenovo*) _aop_out="$_aop_out com.motorola.launcher3 com.motorola.ccc.notification" ;;
+    esac
+    case "$_aop_id" in
+        *transsion*|*infinix*|*tecno*|*itel*) _aop_out="$_aop_out com.transsion.push com.transsion.hilauncher" ;;
+    esac
+    printf '%s\n' "$_aop_out"
+}
+SYSTEM_PROTECTED="$SYSTEM_PROTECTED $(aad_oem_protected_packages 2>/dev/null)"
+
 mkdir -p "$DATA_DIR" 2>/dev/null
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)] $*" >> "$LOGFILE"
+}
+
+# Monotonic millisecond clock for phase telemetry. /proc/uptime is available on
+# Android even when date(1) lacks GNU %N support.
+aad_now_ms() {
+    if [ -r /proc/uptime ]; then
+        awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime 2>/dev/null && return 0
+    fi
+    _aad_sec=$(date +%s 2>/dev/null)
+    case "$_aad_sec" in ''|*[!0-9]*) _aad_sec=0 ;; esac
+    echo $((_aad_sec * 1000))
+}
+
+aad_elapsed_ms() {
+    _aad_start="$1"; _aad_end="$2"
+    case "$_aad_start:$_aad_end" in *[!0-9:]*|'') echo 0 ;; *) echo $((_aad_end - _aad_start)) ;; esac
 }
 
 log_cmd_exec() {
@@ -88,12 +219,23 @@ SDCARD_LOG_DIR="${SDCARD_LOG_DIR:-/sdcard/eCubz/logs/Analytics_Ads_Disabler}"
 
 sync_logs_to_sdcard() {
     # Best-effort only: never let emulated-storage health block the core runtime.
+    [ "$(read_bool_setting LOG_MIRROR 1)" = "1" ] || return 0
     mkdir -p "$SDCARD_LOG_DIR" 2>/dev/null || return 0
-    if command -v timeout >/dev/null 2>&1; then
-        timeout 3 cp "$LOG_DIR"/*.log "$SDCARD_LOG_DIR/" 2>/dev/null || true
-    else
-        cp "$LOG_DIR"/*.log "$SDCARD_LOG_DIR/" 2>/dev/null || true
+    # Emulated storage cannot hold 0600 permissions, so the package-level
+    # inventories (which list every installed app and its ad SDKs) are mirrored
+    # only on explicit opt-in. Runtime/diagnostic logs are always mirrored.
+    _slts_files="debug.log debug.previous.log boot_trace.log diagnostics.log install_diagnostics.log uninstall.log"
+    if [ "$(read_bool_setting LOG_MIRROR_FULL 0)" = "1" ]; then
+        _slts_files="$_slts_files component_audit.log sdk_fingerprint.log manifest_scan.log ad_surface_scan.log ad_killer.log ad_killer.previous.log"
     fi
+    for _slts_f in $_slts_files; do
+        [ -f "$LOG_DIR/$_slts_f" ] || continue
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 3 cp "$LOG_DIR/$_slts_f" "$SDCARD_LOG_DIR/" 2>/dev/null || true
+        else
+            cp "$LOG_DIR/$_slts_f" "$SDCARD_LOG_DIR/" 2>/dev/null || true
+        fi
+    done
     return 0
 }
 
@@ -208,6 +350,24 @@ collect_deep_diagnostics() {
     diag_capture_sh "dmesg-binder-denials-tail" 'dmesg 2>/dev/null | grep -Ei "avc:|binder|transaction|selinux" | tail -n 120'
     diag_capture_sh "logcat-binder-denials-tail" 'logcat -d -v threadtime -t 800 2>/dev/null | grep -Ei "avc:|binder|FAILED_TRANSACTION|PackageManager|SecurityException" | tail -n 160'
 
+    diag_line "===== ad killer ====="
+    if [ -f "$AD_KILLER_STATUS_FILE" ]; then
+        while IFS= read -r line; do diag_line "ADK-STATUS: $line"; done < "$AD_KILLER_STATUS_FILE"
+    else
+        diag_line "ADK-STATUS: <missing>"
+    fi
+    if [ -f "$AD_KILLER_TARGET_FILE" ]; then
+        _adk_diag_targets=$(grep -c . "$AD_KILLER_TARGET_FILE" 2>/dev/null); [ -n "$_adk_diag_targets" ] || _adk_diag_targets=0
+        diag_line "ADK-TARGETS: count=$_adk_diag_targets file=$AD_KILLER_TARGET_FILE"
+        head -n 80 "$AD_KILLER_TARGET_FILE" 2>/dev/null | while IFS= read -r line; do diag_line "ADK-TARGET: $line"; done
+    else
+        diag_line "ADK-TARGETS: <missing>"
+    fi
+    _adk_diag4=$(ad_killer_iptables_bin 4)
+    _adk_diag6=$(ad_killer_iptables_bin 6)
+    [ -n "$_adk_diag4" ] && diag_capture "ad-killer-iptables-v4" "$_adk_diag4" -t filter -S "$AD_KILLER_CHAIN"
+    [ -n "$_adk_diag6" ] && diag_capture "ad-killer-iptables-v6" "$_adk_diag6" -t filter -S "$AD_KILLER_CHAIN"
+
     diag_line "===== capability profile ====="
     if [ -f "$CAPABILITIES_FILE" ]; then
         while IFS= read -r line; do diag_line "CAP: $line"; done < "$CAPABILITIES_FILE"
@@ -288,6 +448,18 @@ read_max_matches() {
     esac
 }
 
+read_aggressive_ads_max_matches() {
+    val=$(read_setting MAX_AGGRESSIVE_ADS_MATCHES 64)
+    case "$val" in
+        ''|*[!0-9]*) echo 64 ;;
+        *)
+            [ "$val" -lt 15 ] 2>/dev/null && val=15
+            [ "$val" -gt 128 ] 2>/dev/null && val=128
+            echo "$val"
+            ;;
+    esac
+}
+
 read_component_mode() {
     val=$(read_setting COMPONENT_MODE SAFE | tr '[:lower:]' '[:upper:]')
     case "$val" in
@@ -305,12 +477,21 @@ read_component_backend() {
 }
 
 read_ifw_activity_limit() {
-    val=$(read_setting MAX_IFW_ACTIVITIES_PER_CATEGORY 5)
+    mode_now=$(read_component_mode)
+    if [ "$mode_now" = "AGGRESSIVE" ]; then
+        val=$(read_setting MAX_AGGRESSIVE_IFW_ACTIVITIES_PER_CATEGORY 64)
+        fallback=64
+        ceiling=128
+    else
+        val=$(read_setting MAX_IFW_ACTIVITIES_PER_CATEGORY 5)
+        fallback=5
+        ceiling=25
+    fi
     case "$val" in
-        ''|*[!0-9]*) echo 5 ;;
+        ''|*[!0-9]*) echo "$fallback" ;;
         *)
             [ "$val" -lt 1 ] 2>/dev/null && val=1
-            [ "$val" -gt 25 ] 2>/dev/null && val=25
+            [ "$val" -gt "$ceiling" ] 2>/dev/null && val="$ceiling"
             echo "$val"
             ;;
     esac
@@ -431,24 +612,814 @@ aad_mktemp_near() {
     echo "${target}.tmp.$$.${salt}"
 }
 
+aad_pid_matches_marker() {
+    _apm_pid="$1"; _apm_marker="$2"
+    case "$_apm_pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$_apm_pid" 2>/dev/null || return 1
+    _apm_cmd=$(tr '\000' ' ' < "/proc/$_apm_pid/cmdline" 2>/dev/null)
+    case "$_apm_cmd" in *"$_apm_marker"*) return 0 ;; *) return 1 ;; esac
+}
+
 stop_owned_pidfile() {
     pidfile="$1"
     marker="$2"
     [ -f "$pidfile" ] || return 0
     pid=$(cat "$pidfile" 2>/dev/null)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-        case "$cmdline" in
-            *"$marker"*)
-                kill "$pid" 2>/dev/null
-                log "Stopped owned process pid=$pid marker=$marker"
-                ;;
-            *)
-                log "PID-SAFETY: pid=$pid no longer matches $marker; not killed."
-                ;;
-        esac
+        if aad_pid_matches_marker "$pid" "$marker"; then
+            kill "$pid" 2>/dev/null
+            log "Stopped owned process pid=$pid marker=$marker"
+        else
+            log "PID-SAFETY: pid=$pid no longer matches $marker; not killed."
+        fi
     fi
     rm -f "$pidfile" 2>/dev/null
+}
+
+launch_ad_surface_indexer_bg() {
+    reason="${1:-request}"
+    worker="${MODDIR:-$AAD_LIB_DIR}/ad_surface_indexer.sh"
+    [ -f "$worker" ] || { log "AD-SURFACE-INDEX unavailable worker=$worker"; return 1; }
+
+    oldpid=$(cat "$AD_SURFACE_PID_FILE" 2>/dev/null)
+    case "$oldpid" in
+        ''|*[!0-9]*) ;;
+        *)
+            if kill -0 "$oldpid" 2>/dev/null; then
+                oldcmd=$(tr '\000' ' ' < "/proc/$oldpid/cmdline" 2>/dev/null)
+                case "$oldcmd" in
+                    *ad_surface_indexer.sh*)
+                        : > "$DATA_DIR/.surface_index.rerun" 2>/dev/null
+                        log "AD-SURFACE-INDEX already running pid=$oldpid; queued rerun reason=$reason"
+                        return 0
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+    rm -f "$AD_SURFACE_PID_FILE" 2>/dev/null
+
+    "$worker" >> "$LOGFILE" 2>&1 &
+    surface_pid=$!
+    echo "$surface_pid" > "$AD_SURFACE_PID_FILE" 2>/dev/null
+    log "AD-SURFACE-INDEX launched pid=$surface_pid reason=$reason"
+    return 0
+}
+
+ad_killer_enabled() {
+    [ "$(read_bool_setting BLOCK_ADS 1)" = "1" ] || return 1
+    [ "$(read_component_mode)" = "AGGRESSIVE" ] || return 1
+    [ "$(read_bool_setting AD_SURFACE_KILLER 1)" = "1" ] || return 1
+    return 0
+}
+
+ad_killer_log_init() {
+    if [ ! -f "$AD_KILLER_LOG_FILE" ]; then
+        printf 'timestamp|family|action|user|package|uid|sdk|host|result\n' > "$AD_KILLER_LOG_FILE" 2>/dev/null || true
+        chmod 600 "$AD_KILLER_LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+# Keep one previous generation instead of discarding all history on every
+# reconciliation, so a "the ads came back after an update" report stays debuggable.
+ad_killer_log_rotate() {
+    [ -s "$AD_KILLER_LOG_FILE" ] || return 0
+    mv -f "$AD_KILLER_LOG_FILE" "$LOG_DIR/ad_killer.previous.log" 2>/dev/null || true
+    chmod 600 "$LOG_DIR/ad_killer.previous.log" 2>/dev/null || true
+}
+
+ad_killer_log_record() {
+    _akl_family="$1"; _akl_action="$2"; _akl_user="$3"; _akl_pkg="$4"; _akl_uid="$5"; _akl_sdk="$6"; _akl_host="$7"; _akl_result="$8"
+    ad_killer_log_init
+    _akl_stamp=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$_akl_stamp" "$_akl_family" "$_akl_action" "$_akl_user" "$_akl_pkg" "$_akl_uid" "$_akl_sdk" "$_akl_host" "$_akl_result" >> "$AD_KILLER_LOG_FILE" 2>/dev/null || true
+}
+
+ad_killer_extract_host_map() {
+    [ -f "$RULES_FILE" ] || return 0
+    awk -F'|' -v target='[ADS_NETWORK_HOST]' '
+        function trim(v){sub(/^[ \t]+/,"",v); sub(/[ \t]+$/,"",v); return v}
+        $0==target {inside=1; next}
+        inside && $0 ~ /^\[/ {exit}
+        inside {
+            line=$0; sub(/\r$/, "", line)
+            if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/) next
+            n=split(line,a,"|"); if(n<2) next
+            sdk=trim(a[1]); host=tolower(trim(a[2]))
+            if (sdk!="" && host ~ /^[a-z0-9.-]+$/ && host ~ /\./) print sdk "|" host
+        }
+    ' "$RULES_FILE" | sort -u
+}
+
+# ---- Xposed / LSPosed bridge ------------------------------------------------
+# Component and network blocking both act around the ad, never on it: the
+# in-app view hierarchy still reserves the banner slot, so an empty gap stays
+# where the ad was. Only an in-process hook can remove that. This module does
+# not hook anything itself; when an Xposed-family framework is present it
+# publishes the completed Ad Surface evidence in a machine-readable form so a
+# companion Xposed module can consume an exact per-package target list instead
+# of re-implementing DEX discovery.
+XPOSED_TARGET_JSON="$DATA_DIR/xposed_targets.json"
+XPOSED_TARGET_LIST="$DATA_DIR/xposed_targets.list"
+
+aad_detect_xposed() {
+    for _adx in /data/adb/lspd \
+                /data/adb/modules/zygisk_lsposed \
+                /data/adb/modules/riru_lsposed \
+                /data/adb/modules/lsposed \
+                /data/adb/lspatch \
+                /data/adb/modules/riru_edxposed \
+                /data/adb/modules/xposed; do
+        [ -d "$_adx" ] && { printf 'LSPosed:%s\n' "$_adx"; return 0; }
+    done
+    [ -f /system/framework/XposedBridge.jar ] && { printf 'Xposed:/system/framework/XposedBridge.jar\n'; return 0; }
+    return 1
+}
+
+aad_xposed_bridge_enabled() {
+    _axb=$(read_setting XPOSED_BRIDGE auto | tr '[:upper:]' '[:lower:]')
+    case "$_axb" in
+        0|off|no) return 1 ;;
+        1|on|yes) return 0 ;;
+        *) aad_detect_xposed >/dev/null 2>&1 ;;
+    esac
+}
+
+# Publish one record per user/package with the SDKs, surfaces and strongest
+# evidence found. Read-only with respect to policy: nothing here disables
+# anything, it only describes what a hook layer would need to target.
+aad_export_xposed_targets() {
+    [ -s "$AD_SURFACE_SCAN_FILE" ] || return 1
+    aad_xposed_bridge_enabled || {
+        rm -f "$XPOSED_TARGET_JSON" "$XPOSED_TARGET_LIST" 2>/dev/null
+        return 0
+    }
+    _axt_json=$(aad_mktemp_near "$XPOSED_TARGET_JSON")
+    _axt_list=$(aad_mktemp_near "$XPOSED_TARGET_LIST")
+    [ -n "$_axt_json" ] && [ -n "$_axt_list" ] || {
+        rm -f "$_axt_json" "$_axt_list" 2>/dev/null
+        return 1
+    }
+    _axt_env=$(aad_detect_xposed 2>/dev/null); [ -n "$_axt_env" ] || _axt_env="none"
+
+    awk -F'|' -v stamp="$(aad_now_ms)" -v version="$MODULE_VERSION" -v env="$_axt_env" \
+        -v listout="$_axt_list" '
+        function esc(v) {gsub(/\\/,"\\\\",v); gsub(/"/,"\\\"",v); return v}
+        function addval(arrname, key, val,   cur, sep) {
+            if (seen[arrname, key, val]) return
+            seen[arrname, key, val]=1
+            if (arrname=="sdk") {sdk[key]=sdk[key] (sdk[key]==""?"":"\034") val}
+            else {surf[key]=surf[key] (surf[key]==""?"":"\034") val}
+        }
+        function emitarr(v,   n,i,parts,out) {
+            n=split(v, parts, "\034"); out=""
+            for (i=1;i<=n;i++) out=out (i>1?",":"") "\"" esc(parts[i]) "\""
+            return out
+        }
+        BEGIN {rank["CAPABILITY"]=1; rank["LAYOUT_CONFIRMED"]=2; rank["MULTI_EVIDENCE"]=3
+               name[1]="CAPABILITY"; name[2]="LAYOUT_CONFIRMED"; name[3]="MULTI_EVIDENCE"}
+        NR>1 && $2=="HIT" && $3!="" && $4!="" && $7!="" && $8!="" {
+            key=$3 "\035" $4
+            if (!(key in known)) {known[key]=1; order[++n]=key}
+            addval("sdk", key, $8)
+            addval("surface", key, $7)
+            r=rank[$11]; if (r=="") r=1
+            if (r > best[key]) best[key]=r
+        }
+        END {
+            printf "{\n"
+            printf "  \"schema\": 1,\n"
+            printf "  \"generator\": \"analytics_ads_disabler %s\",\n", esc(version)
+            printf "  \"framework\": \"%s\",\n", esc(env)
+            printf "  \"generated_ms\": %s,\n", stamp
+            printf "  \"note\": \"Read-only evidence export. Consumed by a companion Xposed module; this module performs no hooking.\",\n"
+            printf "  \"targets\": [\n"
+            for (i=1;i<=n;i++) {
+                split(order[i], k, "\035")
+                b=best[order[i]]; if (b<1) b=1
+                printf "    {\"user\": %s, \"package\": \"%s\", \"sdks\": [%s], \"surfaces\": [%s], \"confidence\": \"%s\"}%s\n", \
+                    k[1], esc(k[2]), emitarr(sdk[order[i]]), emitarr(surf[order[i]]), name[b], (i<n ? "," : "")
+                gsub(/\034/, ",", sdk[order[i]])
+                gsub(/\034/, ",", surf[order[i]])
+                print k[1] "|" k[2] "|" sdk[order[i]] "|" surf[order[i]] "|" name[b] > listout
+            }
+            printf "  ]\n}\n"
+            close(listout)
+        }
+    ' "$AD_SURFACE_SCAN_FILE" > "$_axt_json" 2>/dev/null
+
+    [ -s "$_axt_json" ] || { rm -f "$_axt_json" "$_axt_list" 2>/dev/null; return 1; }
+    [ -f "$_axt_list" ] || : > "$_axt_list"
+    # Readable by the companion module, not by ordinary apps.
+    chmod 640 "$_axt_json" "$_axt_list" 2>/dev/null || true
+    mv -f "$_axt_json" "$XPOSED_TARGET_JSON" 2>/dev/null || { rm -f "$_axt_json" "$_axt_list" 2>/dev/null; return 1; }
+    mv -f "$_axt_list" "$XPOSED_TARGET_LIST" 2>/dev/null || rm -f "$_axt_list" 2>/dev/null
+    _axt_count=$(grep -c . "$XPOSED_TARGET_LIST" 2>/dev/null); [ -n "$_axt_count" ] || _axt_count=0
+    log "XPOSED-BRIDGE exported targets=$_axt_count framework=$_axt_env json=$XPOSED_TARGET_JSON list=$XPOSED_TARGET_LIST"
+    return 0
+}
+
+ad_killer_min_confidence() {
+    _akmc=$(read_setting AD_KILLER_MIN_CONFIDENCE CAPABILITY | tr '[:lower:]' '[:upper:]')
+    case "$_akmc" in
+        CAPABILITY|LAYOUT_CONFIRMED|MULTI_EVIDENCE) printf '%s\n' "$_akmc" ;;
+        *) printf 'CAPABILITY\n' ;;
+    esac
+}
+
+ad_killer_build_targets_from_surface() {
+    [ -f "$AD_SURFACE_SCAN_FILE" ] || return 1
+    _ak_hostmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_hostmap")
+    _ak_surfaces=$(aad_mktemp_near "$DATA_DIR/.adkiller_surfaces")
+    _ak_joined=$(aad_mktemp_near "$DATA_DIR/.adkiller_joined")
+    _ak_tmp=$(aad_mktemp_near "$AD_KILLER_TARGET_FILE")
+    [ -n "$_ak_hostmap" ] && [ -n "$_ak_surfaces" ] && [ -n "$_ak_joined" ] && [ -n "$_ak_tmp" ] || {
+        rm -f "$_ak_hostmap" "$_ak_surfaces" "$_ak_joined" "$_ak_tmp" 2>/dev/null
+        return 1
+    }
+    ad_killer_extract_host_map > "$_ak_hostmap"
+    # Confidence gate. DEX evidence alone means "the SDK format is bundled"
+    # (CAPABILITY); LAYOUT_CONFIRMED/MULTI_EVIDENCE additionally prove an ad
+    # container is referenced from compiled layouts. Note that APP_OPEN and most
+    # NATIVE loaders can never reach LAYOUT_CONFIRMED, so raising this setting
+    # deliberately narrows the Killer to banner-style surfaces.
+    _ak_minconf=$(ad_killer_min_confidence)
+    awk -F'|' -v minconf="$_ak_minconf" '
+        BEGIN {rank["CAPABILITY"]=1; rank["LAYOUT_CONFIRMED"]=2; rank["MULTI_EVIDENCE"]=3; want=rank[minconf]; if (want=="") want=1}
+        NR>1 && $2=="HIT" && $7 ~ /^(BANNER|BANNER_MREC|MREC|NATIVE|APP_OPEN)$/ && $3!="" && $4!="" && $8!="" {
+            got=rank[$11]; if (got=="") got=1
+            if (got >= want) print $3 "|" $4 "|" $8
+        }
+    ' "$AD_SURFACE_SCAN_FILE" 2>/dev/null | sort -u > "$_ak_surfaces"
+    awk -F'|' '
+        FNR==NR {h[$1]=h[$1] "\034" $2; next}
+        {
+            n=split(h[$3],a,"\034")
+            for(i=1;i<=n;i++) if(a[i]!="") print $1 "|" $2 "|" $3 "|" a[i]
+        }
+    ' "$_ak_hostmap" "$_ak_surfaces" | sort -u > "$_ak_joined"
+    : > "$_ak_tmp"
+    while IFS='|' read -r _ak_user _ak_pkg _ak_sdk _ak_host; do
+        [ -n "$_ak_pkg" ] && [ -n "$_ak_host" ] || continue
+        is_system_protected "$_ak_pkg" && continue
+        is_globally_whitelisted "$_ak_pkg" && continue
+        is_category_whitelisted "$_ak_pkg" ADS && continue
+        printf '%s|%s|%s|%s\n' "$_ak_user" "$_ak_pkg" "$_ak_sdk" "$_ak_host" >> "$_ak_tmp"
+    done < "$_ak_joined"
+    sort -u "$_ak_tmp" -o "$_ak_tmp" 2>/dev/null || true
+    chmod 600 "$_ak_tmp" 2>/dev/null || true
+    mv -f "$_ak_tmp" "$AD_KILLER_TARGET_FILE" 2>/dev/null || { rm -f "$_ak_tmp" 2>/dev/null; rm -f "$_ak_hostmap" "$_ak_surfaces" "$_ak_joined" 2>/dev/null; return 1; }
+    rm -f "$_ak_hostmap" "$_ak_surfaces" "$_ak_joined" 2>/dev/null
+    return 0
+}
+
+ad_killer_uid_inventory() {
+    for _aku_user in $(list_user_ids); do
+        if command -v cmd >/dev/null 2>&1; then
+            cmd package list packages -U --user "$_aku_user" 2>/dev/null | awk -v u="$_aku_user" '
+                /^package:/ {
+                    pkg=$1; sub(/^package:/,"",pkg); uid=""
+                    for(i=2;i<=NF;i++) if($i ~ /^uid:/){uid=$i; sub(/^uid:/,"",uid)}
+                    if(pkg!="" && uid ~ /^[0-9]+$/) print u "|" pkg "|" uid
+                }'
+        elif [ -x /system/bin/cmd ]; then
+            /system/bin/cmd package list packages -U --user "$_aku_user" 2>/dev/null | awk -v u="$_aku_user" '
+                /^package:/ {
+                    pkg=$1; sub(/^package:/,"",pkg); uid=""
+                    for(i=2;i<=NF;i++) if($i ~ /^uid:/){uid=$i; sub(/^uid:/,"",uid)}
+                    if(pkg!="" && uid ~ /^[0-9]+$/) print u "|" pkg "|" uid
+                }'
+        fi
+    done | sort -u
+}
+
+ad_killer_iptables_bin() {
+    case "$1" in
+        4) command -v iptables 2>/dev/null || [ ! -x /system/bin/iptables ] || echo /system/bin/iptables ;;
+        6) command -v ip6tables 2>/dev/null || [ ! -x /system/bin/ip6tables ] || echo /system/bin/ip6tables ;;
+    esac
+}
+
+ad_killer_chain_cleanup_family() {
+    _akc_bin="$1"
+    [ -n "$_akc_bin" ] || return 0
+    while "$_akc_bin" -t filter -D OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1; do :; done
+    "$_akc_bin" -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+    "$_akc_bin" -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+    # Per-UID sub-chains are owned by this module too. Flush them all before
+    # deleting, because a sub-chain still referenced by the parent cannot be
+    # removed and would otherwise leak across reconciliations.
+    _akc_subs=$("$_akc_bin" -t filter -S 2>/dev/null | sed -n "s/^-N \(${AD_KILLER_CHAIN}_[0-9][0-9]*\)$/\1/p")
+    [ -n "$_akc_subs" ] || return 0
+    for _akc_sub in $_akc_subs; do
+        "$_akc_bin" -t filter -F "$_akc_sub" >/dev/null 2>&1 || true
+    done
+    for _akc_sub in $_akc_subs; do
+        "$_akc_bin" -t filter -X "$_akc_sub" >/dev/null 2>&1 || true
+    done
+    return 0
+}
+
+# One-shot probe for REJECT support. A batch transaction is all-or-nothing, so
+# the verdict must be known before the ruleset is generated.
+ad_killer_reject_target() {
+    _akrt_bin="$1"; _akrt_chain="${AD_KILLER_CHAIN}R"
+    "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
+    "$_akrt_bin" -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
+    if "$_akrt_bin" -t filter -N "$_akrt_chain" >/dev/null 2>&1; then
+        if "$_akrt_bin" -t filter -A "$_akrt_chain" -p tcp -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
+            "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
+            "$_akrt_bin" -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
+            printf 'REJECT --reject-with tcp-reset\n'
+            return 0
+        fi
+        "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
+        "$_akrt_bin" -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
+    fi
+    printf 'DROP\n'
+}
+
+ad_killer_restore_bin() {
+    case "$1" in
+        4) command -v iptables-restore 2>/dev/null || { [ -x /system/bin/iptables-restore ] && echo /system/bin/iptables-restore; } ;;
+        6) command -v ip6tables-restore 2>/dev/null || { [ -x /system/bin/ip6tables-restore ] && echo /system/bin/ip6tables-restore; } ;;
+    esac
+}
+
+# Group rules into one sub-chain per UID and apply the whole family in a single
+# netfilter transaction.
+#
+# Why: with broad SDK coverage a flat chain reaches ~800 rules per family, and
+# every outgoing packet of every app had to walk all of them just to evaluate
+# the owner match. Jumping into a per-UID chain reduces that to one comparison
+# per targeted UID (~50) plus only that app's own host rules. Applying rule by
+# rule also meant ~1600 iptables invocations, which measured at over three
+# minutes on a real device; a single restore transaction is effectively instant
+# and cannot leave a half-built chain behind.
+ad_killer_apply_batch() {
+    _akab_bin="$1"; _akab_restore="$2"; _akab_rules="$3"; _akab_mode="$4"; _akab_ips="$5"
+    [ -n "$_akab_restore" ] && [ -s "$_akab_rules" ] || return 1
+    _akab_reject=$(ad_killer_reject_target "$_akab_bin")
+    _akab_file=$(aad_mktemp_near "$DATA_DIR/.adkiller_restore")
+    [ -n "$_akab_file" ] || return 1
+
+    {
+        printf '*filter\n'
+        printf ':%s - [0:0]\n' "$AD_KILLER_CHAIN"
+        awk -F'|' -v chain="$AD_KILLER_CHAIN" '{if (!seen[$3]++) printf ":%s_%s - [0:0]\n", chain, $3}' "$_akab_rules"
+        awk -F'|' -v chain="$AD_KILLER_CHAIN" '{if (!seen[$3]++) printf "-A %s -m owner --uid-owner %s -j %s_%s\n", chain, $3, chain, $3}' "$_akab_rules"
+        if [ "$_akab_mode" = "ip" ]; then
+            [ -s "$_akab_ips" ] || { rm -f "$_akab_file" 2>/dev/null; return 1; }
+            awk -F'|' -v chain="$AD_KILLER_CHAIN" -v rej="$_akab_reject" \
+                '{printf "-A %s_%s -d %s -j %s\n", chain, $1, $2, rej}' "$_akab_ips"
+        else
+            awk -F'|' -v chain="$AD_KILLER_CHAIN" -v rej="$_akab_reject" \
+                '{printf "-A %s_%s -p tcp --dport 443 -m string --algo bm --string \"%s\" -j %s\n", chain, $3, $5, rej}' "$_akab_rules"
+        fi
+        printf 'COMMIT\n'
+    } > "$_akab_file" 2>/dev/null || { rm -f "$_akab_file" 2>/dev/null; return 1; }
+
+    # -n keeps every other table/chain on the device untouched.
+    if ! "$_akab_restore" -n "$_akab_file" >/dev/null 2>&1; then
+        log "AD-KILLER batch restore failed bin=$_akab_restore file=$_akab_file; falling back to per-rule mode"
+        rm -f "$_akab_file" 2>/dev/null
+        return 1
+    fi
+    rm -f "$_akab_file" 2>/dev/null
+    return 0
+}
+
+ad_killer_status_write() {
+    _aks_state="$1"; _aks_reason="${2:-}"
+    _aks_tmp="$AD_KILLER_STATUS_FILE.tmp.$$"
+    {
+        printf 'state=%s\n' "$_aks_state"
+        [ -n "$_aks_reason" ] && printf 'reason=%s\n' "$_aks_reason"
+        printf 'updated_ms=%s\n' "$(aad_now_ms)"
+    } > "$_aks_tmp" 2>/dev/null || return 0
+    chmod 600 "$_aks_tmp" 2>/dev/null || true
+    mv -f "$_aks_tmp" "$AD_KILLER_STATUS_FILE" 2>/dev/null || rm -f "$_aks_tmp" 2>/dev/null
+}
+
+ad_killer_cleanup() {
+    _akc_state="${1:-DISABLED}"; _akc_reason="${2:-}"
+    _akc4=$(ad_killer_iptables_bin 4); _akc6=$(ad_killer_iptables_bin 6)
+    ad_killer_chain_cleanup_family "$_akc4"
+    ad_killer_chain_cleanup_family "$_akc6"
+    ad_killer_status_write "$_akc_state" "$_akc_reason"
+}
+
+# Probe the two netfilter matches this layer depends on, separately, so the log
+# says which one is missing instead of a single opaque "unavailable". xt_owner
+# is present on effectively every Android kernel; xt_string is an optional
+# kernel config that many GKI builds omit.
+ad_killer_probe_match() {
+    _akpm_bin="$1"; _akpm_kind="$2"; _akpm_chain="${AD_KILLER_CHAIN}P"
+    [ -n "$_akpm_bin" ] || return 1
+    while "$_akpm_bin" -t filter -D OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; do :; done
+    "$_akpm_bin" -t filter -F "$_akpm_chain" >/dev/null 2>&1 || true
+    "$_akpm_bin" -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
+    "$_akpm_bin" -t filter -N "$_akpm_chain" >/dev/null 2>&1 || return 1
+    if ! "$_akpm_bin" -t filter -I OUTPUT 1 -j "$_akpm_chain" >/dev/null 2>&1; then
+        "$_akpm_bin" -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
+        return 1
+    fi
+    _akpm_rc=1
+    case "$_akpm_kind" in
+        owner)
+            "$_akpm_bin" -t filter -A "$_akpm_chain" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN >/dev/null 2>&1 && _akpm_rc=0
+            ;;
+        string)
+            "$_akpm_bin" -t filter -A "$_akpm_chain" -m owner --uid-owner 0 -p tcp --dport 443 -m string --algo bm --string aad.invalid.test -j RETURN >/dev/null 2>&1 && _akpm_rc=0
+            ;;
+    esac
+    while "$_akpm_bin" -t filter -D OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; do :; done
+    "$_akpm_bin" -t filter -F "$_akpm_chain" >/dev/null 2>&1 || true
+    "$_akpm_bin" -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
+    return "$_akpm_rc"
+}
+
+# Resolution cascade for IP mode. No single resolver exists on every ROM.
+ad_killer_resolve_host() {
+    _akrh_host="$1"
+    [ -n "$_akrh_host" ] || return 1
+    {
+        getent ahostsv4 "$_akrh_host" 2>/dev/null | awk '{print $1}'
+        nslookup "$_akrh_host" 2>/dev/null | awk '/^Address/ {a=$NF; sub(/#.*/,"",a); print a}'
+        ping -c 1 -W 1 "$_akrh_host" 2>/dev/null | sed -n 's/^PING [^(]*(\([0-9.]*\)).*/\1/p'
+    } 2>/dev/null \
+        | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' \
+        | grep -vE '^(0\.|127\.|255\.)' \
+        | sort -u
+}
+
+ad_killer_add_ip_rule() {
+    _akir_bin="$1"; _akir_uid="$2"; _akir_ip="$3"
+    if "$_akir_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
+        return 0
+    fi
+    "$_akir_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j DROP >/dev/null 2>&1
+}
+
+# Cheap liveness check used by the polling watcher: netd rebuilds filter chains
+# on connectivity/VPN/tethering changes and can silently drop our OUTPUT jump.
+ad_killer_chain_alive() {
+    _akca_bin=$(ad_killer_iptables_bin 4)
+    [ -n "$_akca_bin" ] || return 0
+    "$_akca_bin" -t filter -C OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1
+}
+
+
+ad_killer_add_tcp_rule() {
+    _akar_bin="$1"; _akar_uid="$2"; _akar_host="$3"
+    # v1 deliberately limits hostname matching to HTTPS/TLS. Besides reducing
+    # rules, this avoids changing unrelated plaintext HTTP traffic for a UID.
+    if "$_akar_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
+        return 0
+    fi
+    "$_akar_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j DROP >/dev/null 2>&1
+}
+
+ad_killer_add_quic_rule() {
+    _akq_bin="$1"; _akq_uid="$2"
+    if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1; then
+        return 0
+    fi
+    "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j DROP >/dev/null 2>&1
+}
+
+ad_killer_prepare_chain() {
+    _akpc_bin="$1"
+    ad_killer_chain_cleanup_family "$_akpc_bin"
+    "$_akpc_bin" -t filter -N "$AD_KILLER_CHAIN" >/dev/null 2>&1 || return 1
+    "$_akpc_bin" -t filter -I OUTPUT 1 -j "$AD_KILLER_CHAIN" >/dev/null 2>&1 || {
+        "$_akpc_bin" -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+        "$_akpc_bin" -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+        return 1
+    }
+    return 0
+}
+
+_reconcile_ad_surface_killer_unlocked() {
+    _akr_reason="${1:-manual}"
+    if ! ad_killer_enabled; then
+        ad_killer_cleanup DISABLED "$_akr_reason"
+        log "AD-KILLER disabled reason=$_akr_reason mode=$(read_component_mode) block_ads=$(read_bool_setting BLOCK_ADS 1) setting=$(read_bool_setting AD_SURFACE_KILLER 1)"
+        return 0
+    fi
+    if [ ! -s "$AD_KILLER_TARGET_FILE" ]; then
+        # Bootstrap a newly installed Killer from the last completed surface log.
+        # A running/partial index is never trusted for persistent targets.
+        if [ -s "$AD_SURFACE_SCAN_FILE" ] && grep -q '|SUMMARY|.*|COMPLETE|' "$AD_SURFACE_SCAN_FILE" 2>/dev/null; then
+            if ad_killer_build_targets_from_surface; then
+                _akr_bootstrap_targets=$(grep -c . "$AD_KILLER_TARGET_FILE" 2>/dev/null)
+                [ -n "$_akr_bootstrap_targets" ] || _akr_bootstrap_targets=0
+                log "AD-KILLER targets bootstrapped=$_akr_bootstrap_targets from=last-complete-surface"
+            fi
+        fi
+    fi
+    [ -s "$AD_KILLER_TARGET_FILE" ] || {
+        ad_killer_cleanup WAITING "no_targets:$_akr_reason"
+        log "AD-KILLER waiting-targets reason=$_akr_reason file=$AD_KILLER_TARGET_FILE"
+        return 0
+    }
+
+    _akr_uidmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_uidmap")
+    _akr_active=$(aad_mktemp_near "$DATA_DIR/.adkiller_active")
+    [ -n "$_akr_uidmap" ] && [ -n "$_akr_active" ] || { rm -f "$_akr_uidmap" "$_akr_active" 2>/dev/null; return 1; }
+    ad_killer_uid_inventory > "$_akr_uidmap"
+    awk -F'|' '
+        FNR==NR {uid[$1 SUBSEP $2]=$3; next}
+        {
+            u=uid[$1 SUBSEP $2]
+            if(u ~ /^[0-9]+$/) print $1 "|" $2 "|" u "|" $3 "|" $4
+        }
+    ' "$_akr_uidmap" "$AD_KILLER_TARGET_FILE" | sort -u > "$_akr_active"
+
+    # Re-apply whitelists at reconcile time too, so a live whitelist edit removes
+    # network rules immediately without needing a fresh DEX index.
+    _akr_filtered=$(aad_mktemp_near "$DATA_DIR/.adkiller_filtered")
+    _akr_hostmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_allowed_hosts")
+    [ -n "$_akr_filtered" ] && [ -n "$_akr_hostmap" ] || { rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null; return 1; }
+    ad_killer_extract_host_map > "$_akr_hostmap"
+    : > "$_akr_filtered"
+    while IFS='|' read -r _akr_user _akr_pkg _akr_uid _akr_sdk _akr_host; do
+        [ -n "$_akr_uid" ] || continue
+        # Never trust a stale persistent target after rules.conf was edited.
+        grep -Fxq -- "$_akr_sdk|$_akr_host" "$_akr_hostmap" 2>/dev/null || continue
+        is_system_protected "$_akr_pkg" && continue
+        is_globally_whitelisted "$_akr_pkg" && continue
+        is_category_whitelisted "$_akr_pkg" ADS && continue
+        printf '%s|%s|%s|%s|%s\n' "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" >> "$_akr_filtered"
+    done < "$_akr_active"
+    sort -u "$_akr_filtered" -o "$_akr_filtered" 2>/dev/null || true
+    _akr_targets=$(grep -c . "$_akr_filtered" 2>/dev/null); [ -n "$_akr_targets" ] || _akr_targets=0
+    if [ "$_akr_targets" -eq 0 ]; then
+        ad_killer_cleanup WAITING "no_active_targets:$_akr_reason"
+        log "AD-KILLER waiting-active-targets reason=$_akr_reason"
+        rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
+        return 0
+    fi
+
+    _akr4=$(ad_killer_iptables_bin 4); _akr6=$(ad_killer_iptables_bin 6)
+    if [ -z "$_akr4" ] && [ -z "$_akr6" ]; then
+        ad_killer_cleanup UNAVAILABLE "no_iptables:$_akr_reason"
+        log "AD-KILLER unavailable reason=$_akr_reason cause=iptables_binary_missing"
+        rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
+        return 0
+    fi
+
+    # Mode selection. `string` matches the TLS SNI and is exact but depends on
+    # CONFIG_NETFILTER_XT_MATCH_STRING, which many GKI kernels omit. `ip` needs
+    # only xt_owner (universally present) but blocks resolved addresses, which
+    # can be shared by a CDN - hence explicit opt-in.
+    _akr_mode=$(read_setting AD_KILLER_MODE auto | tr '[:upper:]' '[:lower:]')
+    case "$_akr_mode" in auto|string|ip) ;; *) _akr_mode=auto ;; esac
+    _akr_ip_optin=$(read_bool_setting AD_KILLER_IP_FALLBACK 0)
+
+    _akr_owner_ok=0; _akr_string_ok=0
+    [ -n "$_akr4" ] && ad_killer_probe_match "$_akr4" owner && _akr_owner_ok=1
+    [ -n "$_akr4" ] && [ "$_akr_owner_ok" = "1" ] && ad_killer_probe_match "$_akr4" string && _akr_string_ok=1
+    if [ "$_akr_owner_ok" != "1" ] && [ -n "$_akr6" ]; then
+        ad_killer_probe_match "$_akr6" owner && _akr_owner_ok=1
+        [ "$_akr_owner_ok" = "1" ] && ad_killer_probe_match "$_akr6" string && _akr_string_ok=1
+    fi
+
+    if [ "$_akr_owner_ok" != "1" ]; then
+        ad_killer_cleanup UNAVAILABLE "xt_owner_missing:$_akr_reason"
+        log "AD-KILLER unavailable reason=$_akr_reason cause=xt_owner_unsupported (kernel lacks CONFIG_NETFILTER_XT_MATCH_OWNER)"
+        rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
+        return 0
+    fi
+
+    _akr_active_mode=""
+    case "$_akr_mode" in
+        string) [ "$_akr_string_ok" = "1" ] && _akr_active_mode=string ;;
+        ip)     _akr_active_mode=ip ;;
+        auto)
+            if [ "$_akr_string_ok" = "1" ]; then
+                _akr_active_mode=string
+            elif [ "$_akr_ip_optin" = "1" ]; then
+                _akr_active_mode=ip
+            fi
+            ;;
+    esac
+
+    if [ -z "$_akr_active_mode" ]; then
+        ad_killer_cleanup UNAVAILABLE "xt_string_missing:$_akr_reason"
+        log "AD-KILLER unavailable reason=$_akr_reason cause=xt_string_unsupported mode=$_akr_mode ip_fallback=$_akr_ip_optin (kernel lacks CONFIG_NETFILTER_XT_MATCH_STRING; set AD_KILLER_IP_FALLBACK=1 to use resolved-IP mode instead)"
+        rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
+        return 0
+    fi
+
+    _akr4ok=0; _akr6ok=0
+    [ -n "$_akr4" ] && ad_killer_prepare_chain "$_akr4" && _akr4ok=1
+    # IPv6 literals cannot come from the IPv4 resolver, so IP mode is v4 only.
+    if [ "$_akr_active_mode" = "string" ]; then
+        [ -n "$_akr6" ] && ad_killer_prepare_chain "$_akr6" && _akr6ok=1
+    fi
+    if [ "$_akr4ok" != "1" ] && [ "$_akr6ok" != "1" ]; then
+        ad_killer_cleanup UNAVAILABLE "chain_setup_failed:$_akr_reason"
+        log "AD-KILLER unavailable reason=$_akr_reason cause=chain_setup_failed mode=$_akr_active_mode"
+        rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
+        return 0
+    fi
+    log "AD-KILLER mode=$_akr_active_mode requested=$_akr_mode xt_owner=$_akr_owner_ok xt_string=$_akr_string_ok ipv4=$_akr4ok ipv6=$_akr6ok min_confidence=$(ad_killer_min_confidence)"
+
+    _akr_force_tcp=$(read_bool_setting AD_KILLER_FORCE_TCP 0)
+    _akr_rules4=0; _akr_rules6=0; _akr_failed=0; _akr_quic_uids=""
+    ad_killer_log_rotate
+    printf 'timestamp|family|action|user|package|uid|sdk|host|result\n' > "$AD_KILLER_LOG_FILE" 2>/dev/null || true
+    chmod 600 "$AD_KILLER_LOG_FILE" 2>/dev/null || true
+
+    # One netfilter rule per (uid, host) pair. Several SDK labels legitimately
+    # map to the same hostname (for example the classic and the Next-generation
+    # Google Mobile Ads entries), and the same package can match more than one
+    # of them, which previously emitted byte-identical duplicate rules into a
+    # chain traversed for every outgoing packet.
+    _akr_rules=$(aad_mktemp_near "$DATA_DIR/.adkiller_rules")
+    [ -n "$_akr_rules" ] || { rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null; return 1; }
+    awk -F'|' '{k=$3 "|" $5; if (!seen[k]++) print}' "$_akr_filtered" > "$_akr_rules"
+    _akr_unique=$(grep -c . "$_akr_rules" 2>/dev/null); [ -n "$_akr_unique" ] || _akr_unique=0
+
+    # Preferred path: resolve everything first, then commit each family in one
+    # transaction with per-UID sub-chains. Falls back to the per-rule cascade
+    # below if iptables-restore is missing or rejects the ruleset.
+    _akr_ipmap=""
+    if [ "$_akr_active_mode" = "ip" ]; then
+        _akr_ipmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_ipmap")
+        if [ -n "$_akr_ipmap" ]; then
+            : > "$_akr_ipmap"
+            while IFS='|' read -r _akr_u _akr_p _akr_uid _akr_sdk _akr_host; do
+                [ -n "$_akr_uid" ] && [ -n "$_akr_host" ] || continue
+                for _akr_ip in $(ad_killer_resolve_host "$_akr_host"); do
+                    printf '%s|%s\n' "$_akr_uid" "$_akr_ip" >> "$_akr_ipmap"
+                done
+            done < "$_akr_rules"
+            sort -u "$_akr_ipmap" -o "$_akr_ipmap" 2>/dev/null || true
+        fi
+    fi
+
+    _akr_batch4=0; _akr_batch6=0
+    _akr_restore4=$(ad_killer_restore_bin 4); _akr_restore6=$(ad_killer_restore_bin 6)
+    if [ "$_akr4ok" = "1" ] && ad_killer_apply_batch "$_akr4" "$_akr_restore4" "$_akr_rules" "$_akr_active_mode" "$_akr_ipmap"; then
+        _akr_batch4=1
+    fi
+    if [ "$_akr6ok" = "1" ] && [ "$_akr_active_mode" != "ip" ] && \
+       ad_killer_apply_batch "$_akr6" "$_akr_restore6" "$_akr_rules" "$_akr_active_mode" "$_akr_ipmap"; then
+        _akr_batch6=1
+    fi
+
+    if [ "$_akr_batch4" = "1" ] || [ "$_akr_batch6" = "1" ]; then
+        if [ "$_akr_active_mode" = "ip" ]; then
+            _akr_applied=$(grep -c . "$_akr_ipmap" 2>/dev/null); [ -n "$_akr_applied" ] || _akr_applied=0
+        else
+            _akr_applied="$_akr_unique"
+        fi
+        [ "$_akr_batch4" = "1" ] && _akr_rules4="$_akr_applied"
+        [ "$_akr_batch6" = "1" ] && _akr_rules6="$_akr_applied"
+        _akr_uidchains=$(awk -F'|' '{if(!s[$3]++) n++} END{print n+0}' "$_akr_rules" 2>/dev/null)
+        awk -F'|' -v ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" \
+            '{printf "%s|batch|BLOCK|%s|%s|%s|%s|%s|OK\n", ts, $1, $2, $3, $4, $5}' "$_akr_rules" >> "$AD_KILLER_LOG_FILE" 2>/dev/null || true
+        log "AD-KILLER batch applied mode=$_akr_active_mode ipv4=$_akr_batch4 ipv6=$_akr_batch6 uid_chains=$_akr_uidchains rules_per_family=$_akr_applied"
+        # The chains are live; only the per-rule cascade below must be skipped.
+        [ "$_akr_batch4" = "1" ] && _akr4ok=0
+        [ "$_akr_batch6" = "1" ] && _akr6ok=0
+        _akr_quic_uids=$(awk -F'|' '{if(!s[$3]++) printf "%s ", $3}' "$_akr_rules" 2>/dev/null)
+    fi
+    rm -f "$_akr_ipmap" 2>/dev/null
+
+    while IFS='|' read -r _akr_user _akr_pkg _akr_uid _akr_sdk _akr_host; do
+        [ -n "$_akr_uid" ] && [ -n "$_akr_host" ] || continue
+        if [ "$_akr_active_mode" = "ip" ]; then
+            _akr_ips=$(ad_killer_resolve_host "$_akr_host")
+            if [ -z "$_akr_ips" ]; then
+                _akr_failed=$((_akr_failed + 1))
+                ad_killer_log_record ipv4 RESOLVE "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" NO_ADDRESS
+                continue
+            fi
+            for _akr_ip in $_akr_ips; do
+                if [ "$_akr4ok" = "1" ] && ad_killer_add_ip_rule "$_akr4" "$_akr_uid" "$_akr_ip"; then
+                    _akr_rules4=$((_akr_rules4 + 1))
+                    ad_killer_log_record ipv4 BLOCK "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host->$_akr_ip" OK
+                else
+                    _akr_failed=$((_akr_failed + 1))
+                    ad_killer_log_record ipv4 BLOCK "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host->$_akr_ip" FAILED
+                fi
+            done
+        else
+            if [ "$_akr4ok" = "1" ]; then
+                if ad_killer_add_tcp_rule "$_akr4" "$_akr_uid" "$_akr_host"; then
+                    _akr_rules4=$((_akr_rules4 + 1)); ad_killer_log_record ipv4 BLOCK "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" OK
+                else
+                    _akr_failed=$((_akr_failed + 1)); ad_killer_log_record ipv4 BLOCK "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" FAILED
+                fi
+            fi
+            if [ "$_akr6ok" = "1" ]; then
+                if ad_killer_add_tcp_rule "$_akr6" "$_akr_uid" "$_akr_host"; then
+                    _akr_rules6=$((_akr_rules6 + 1)); ad_killer_log_record ipv6 BLOCK "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" OK
+                else
+                    _akr_failed=$((_akr_failed + 1)); ad_killer_log_record ipv6 BLOCK "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" FAILED
+                fi
+            fi
+        fi
+        case " $_akr_quic_uids " in *" $_akr_uid "*) ;; *) _akr_quic_uids="$_akr_quic_uids $_akr_uid" ;; esac
+    done < "$_akr_rules"
+
+    _akr_quic=0
+    if [ "$_akr_force_tcp" = "1" ]; then
+        for _akr_uid in $_akr_quic_uids; do
+            if { [ "$_akr4ok" = "1" ] || [ "$_akr_batch4" = "1" ]; } && ad_killer_add_quic_rule "$_akr4" "$_akr_uid"; then _akr_rules4=$((_akr_rules4 + 1)); fi
+            if { [ "$_akr6ok" = "1" ] || [ "$_akr_batch6" = "1" ]; } && ad_killer_add_quic_rule "$_akr6" "$_akr_uid"; then _akr_rules6=$((_akr_rules6 + 1)); fi
+            _akr_quic=$((_akr_quic + 1))
+        done
+    fi
+    _akr_pkgs=$(awk -F'|' '{k=$1 "|" $2; if(!seen[k]++) n++} END{print n+0}' "$_akr_filtered" 2>/dev/null); [ -n "$_akr_pkgs" ] || _akr_pkgs=0
+    _akr_status_tmp="$AD_KILLER_STATUS_FILE.tmp.$$"
+    {
+        printf 'state=ACTIVE\n'
+        printf 'reason=%s\n' "$_akr_reason"
+        printf 'mode=%s\n' "$_akr_active_mode"
+        printf 'min_confidence=%s\n' "$(ad_killer_min_confidence)"
+        printf 'targets=%s\n' "$_akr_targets"
+        printf 'unique_uid_hosts=%s\n' "$_akr_unique"
+        printf 'packages_users=%s\n' "$_akr_pkgs"
+        printf 'ipv4_rules=%s\n' "$_akr_rules4"
+        printf 'ipv6_rules=%s\n' "$_akr_rules6"
+        printf 'force_tcp=%s\n' "$_akr_force_tcp"
+        printf 'quic_uids=%s\n' "$_akr_quic"
+        printf 'failed=%s\n' "$_akr_failed"
+        printf 'updated_ms=%s\n' "$(aad_now_ms)"
+    } > "$_akr_status_tmp" 2>/dev/null || true
+    chmod 600 "$_akr_status_tmp" 2>/dev/null || true
+    mv -f "$_akr_status_tmp" "$AD_KILLER_STATUS_FILE" 2>/dev/null || rm -f "$_akr_status_tmp" 2>/dev/null
+    log "AD-KILLER-SUMMARY reason=$_akr_reason mode=$_akr_active_mode targets=$_akr_targets unique_uid_hosts=$_akr_unique packages/users=$_akr_pkgs ipv4_rules=$_akr_rules4 ipv6_rules=$_akr_rules6 force_tcp=$_akr_force_tcp quic_uids=$_akr_quic failed=$_akr_failed target_file=$AD_KILLER_TARGET_FILE"
+    rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" "$_akr_rules" 2>/dev/null
+    return 0
+}
+
+aad_proc_starttime() {
+    _apst_pid="$1"
+    case "$_apst_pid" in ''|*[!0-9]*) return 1 ;; esac
+    # Field 22 is only field 22 when comm has no spaces. comm is wrapped in
+    # parentheses, so cut everything up to the LAST ')' first.
+    _apst_raw=$(cat "/proc/$_apst_pid/stat" 2>/dev/null) || return 1
+    [ -n "$_apst_raw" ] || return 1
+    _apst_tail=${_apst_raw##*') '}
+    [ "$_apst_tail" = "$_apst_raw" ] && return 1
+    printf '%s
+' "$_apst_tail" | awk '{print $20}'
+}
+
+ad_killer_lock() {
+    _aklock_tries=0
+    _aklock_self_start=$(aad_proc_starttime "$$")
+    [ -n "$_aklock_self_start" ] || _aklock_self_start=unknown
+    while ! mkdir "$AD_KILLER_LOCK_DIR" 2>/dev/null; do
+        _aklock_owner=$(cat "$AD_KILLER_LOCK_DIR/pid" 2>/dev/null)
+        _aklock_start=$(cat "$AD_KILLER_LOCK_DIR/starttime" 2>/dev/null)
+        _aklock_live_start=""
+        case "$_aklock_owner" in
+            ''|*[!0-9]*) ;;
+            *)
+                if kill -0 "$_aklock_owner" 2>/dev/null; then
+                    _aklock_live_start=$(aad_proc_starttime "$_aklock_owner")
+                    if [ -n "$_aklock_start" ] && [ "$_aklock_start" = "$_aklock_live_start" ]; then
+                        return 1
+                    fi
+                fi
+                ;;
+        esac
+        log "AD-KILLER-LOCK stale owner=${_aklock_owner:-unknown} saved_start=${_aklock_start:-unknown} live_start=${_aklock_live_start:-dead}; removing"
+        rm -rf "$AD_KILLER_LOCK_DIR" 2>/dev/null || return 1
+        _aklock_tries=$((_aklock_tries + 1))
+        [ "$_aklock_tries" -lt 3 ] || return 1
+    done
+    printf '%s\n' "$$" > "$AD_KILLER_LOCK_DIR/pid" 2>/dev/null
+    printf '%s\n' "$_aklock_self_start" > "$AD_KILLER_LOCK_DIR/starttime" 2>/dev/null
+    return 0
+}
+
+ad_killer_unlock() {
+    [ -d "$AD_KILLER_LOCK_DIR" ] || return 0
+    _akul_owner=$(cat "$AD_KILLER_LOCK_DIR/pid" 2>/dev/null)
+    _akul_start=$(cat "$AD_KILLER_LOCK_DIR/starttime" 2>/dev/null)
+    _akul_self_start=$(aad_proc_starttime "$$")
+    if [ "$_akul_owner" = "$$" ] && [ -n "$_akul_start" ] && [ "$_akul_start" = "$_akul_self_start" ]; then
+        rm -rf "$AD_KILLER_LOCK_DIR" 2>/dev/null || true
+    fi
+}
+
+reconcile_ad_surface_killer() {
+    _akw_reason="${1:-manual}"
+    if ! ad_killer_lock; then
+        log "AD-KILLER reconcile skipped busy reason=$_akw_reason"
+        return 0
+    fi
+    _reconcile_ad_surface_killer_unlocked "$_akw_reason"
+    _akw_rc=$?
+    ad_killer_unlock
+    return "$_akw_rc"
 }
 
 cap_multiuser_ready() {
@@ -523,18 +1494,6 @@ list_all_package_state() {
     done
 }
 
-package_installed_for_user() {
-    user="$1"
-    pkg="$2"
-    # Do not rely on PackageManager's optional trailing package filter here.
-    # Android 16 vendor implementations can return a false empty result for an
-    # installed package. Enumerating once and exact-matching the package name is
-    # slower for an isolated check, but reliable; full-scan stale cleanup uses a
-    # cached all-package snapshot below and avoids repeating this Binder call.
-    cap_list_packages_raw "$user" 0 0 "" 2>/dev/null \
-        | sed 's/^package://; s/[[:space:]].*$//' \
-        | grep -Fxq -- "$pkg"
-}
 
 list_all_installed_package_keys() {
     for user in $(list_user_ids); do
@@ -563,6 +1522,52 @@ set_component_state_smart() {
     cap_set_component_state "$user" "$comp" "$state" >/dev/null 2>&1
 }
 
+# ---- PackageManager dump cache ---------------------------------------------
+# `dumpsys package <pkg>` returns tens to hundreds of KiB and was previously
+# executed once per component (state read, post-write verification, candidate
+# discovery). On a package with dozens of managed components that is dozens of
+# identical Binder dumps. Cache the raw dump for the package currently being
+# reconciled and drop it whenever a component state is actually written, so the
+# post-write verification never reads a stale snapshot.
+AAD_PKG_DUMP_CACHE_DIR="${AAD_PKG_DUMP_CACHE_DIR:-$DATA_DIR/.pkgdump}"
+
+aad_pkg_dump_key() {
+    printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+aad_package_dump_cache_reset() {
+    rm -rf "$AAD_PKG_DUMP_CACHE_DIR" 2>/dev/null
+}
+
+aad_package_dump_invalidate() {
+    [ -n "${1:-}" ] || return 0
+    rm -f "$AAD_PKG_DUMP_CACHE_DIR/$(aad_pkg_dump_key "$1")" 2>/dev/null
+    return 0
+}
+
+aad_package_dump_cached() {
+    _apd_pkg="$1"
+    [ -n "$_apd_pkg" ] || return 1
+    if [ "${AAD_PKG_DUMP_CACHE:-1}" = "1" ] && mkdir -p "$AAD_PKG_DUMP_CACHE_DIR" 2>/dev/null; then
+        chmod 700 "$AAD_PKG_DUMP_CACHE_DIR" 2>/dev/null || true
+        _apd_file="$AAD_PKG_DUMP_CACHE_DIR/$(aad_pkg_dump_key "$_apd_pkg")"
+        if [ ! -s "$_apd_file" ]; then
+            _apd_tmp="$_apd_file.tmp.$$"
+            if cap_package_dump "$_apd_pkg" > "$_apd_tmp" 2>/dev/null && [ -s "$_apd_tmp" ]; then
+                chmod 600 "$_apd_tmp" 2>/dev/null || true
+                mv -f "$_apd_tmp" "$_apd_file" 2>/dev/null || rm -f "$_apd_tmp" 2>/dev/null
+            else
+                rm -f "$_apd_tmp" 2>/dev/null
+            fi
+        fi
+        if [ -s "$_apd_file" ]; then
+            cat "$_apd_file"
+            return 0
+        fi
+    fi
+    cap_package_dump "$_apd_pkg"
+}
+
 # Determine whether the component had an explicit enabled/disabled override before v4 touched it.
 # dumpsys exposes explicit enabledComponents/disabledComponents per Android user. Anything absent is default.
 get_component_override_state() {
@@ -575,7 +1580,7 @@ get_component_override_state() {
         *) full_cls="$cls" ;;
     esac
 
-    state=$(cap_package_dump "$pkg" | awk -v uid="$user" -v full="$full_cls" -v short="$cls" '
+    state=$(aad_package_dump_cached "$pkg" | awk -v uid="$user" -v full="$full_cls" -v short="$cls" '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/,"",s); return s}
         /^[ \t]*User [0-9]+:/ {
             line=$0; gsub(/^[ \t]*/,"",line)
@@ -653,59 +1658,1286 @@ restore_original_state() {
     return 1
 }
 
-# Универсальный парсер использует только структурные секции dumpsys и не зависит от OEM.
-get_typed_component_candidates() {
-    pkg="$1"
-    cap_package_dump "$pkg" | awk -v p="$pkg" '
-        function emit(line, kind,    rest, token, parts) {
-            rest=line
-            while (match(rest, /[A-Za-z0-9._$-]+\/[A-Za-z0-9._$-]+/)) {
-                token=substr(rest,RSTART,RLENGTH)
-                split(token,parts,"/")
-                if (parts[1]==p) print kind "|" token
+# Resolver tables in dumpsys are useful but incomplete: explicit Activities with no
+# intent-filter may be absent there. v4.6.6 augments them with an APK manifest string-pool
+# probe, then validates broad activity-pattern hits through PackageManager.
+# Read-only APK path discovery. Some Android 16/OEM PackageManager shells return
+# an empty result for a per-package `path` query even though package enumeration
+# works. Prefer the direct query, but union it with an authoritative per-user
+# `list packages -f` inventory built once for a full scan. A base APK found by
+# either source expands to every sibling *.apk so split manifests are included.
+cap_list_packages_with_paths_raw() {
+    user="$1"
+    [ "$CAP_PACKAGE_LIST_BACKEND" != "none" ] || return 1
+    [ "$CAP_PACKAGE_LIST_HAS_USER" = "1" ] || [ "$user" = "0" ] || return 1
+    case "$CAP_PACKAGE_LIST_BACKEND:$CAP_PACKAGE_LIST_HAS_USER" in
+        cmd:1) cmd package list packages -f --user "$user" 2>/dev/null ;;
+        cmd:0) cmd package list packages -f 2>/dev/null ;;
+        pm:1) pm list packages -f --user "$user" 2>/dev/null ;;
+        pm:0) pm list packages -f 2>/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
+build_apk_path_inventory() {
+    out_file="$1"
+    : > "$out_file" || return 1
+    for inv_user in $(list_user_ids); do
+        cap_list_packages_with_paths_raw "$inv_user" | while IFS= read -r line; do
+            case "$line" in
+                package:*=*)
+                    body=${line#package:}
+                    inv_pkg=${body##*=}
+                    inv_apk=${body%="$inv_pkg"}
+                    inv_apk=${inv_apk%=}
+                    [ -n "$inv_pkg" ] && [ -n "$inv_apk" ] && printf '%s|%s|%s\n' "$inv_user" "$inv_pkg" "$inv_apk"
+                    ;;
+            esac
+        done >> "$out_file"
+    done
+    sort -u "$out_file" -o "$out_file" 2>/dev/null || true
+    return 0
+}
+
+cap_package_paths_readonly() {
+    user="$1"; pkg="$2"
+    raw_paths=""
+    out=$(cmd package path --user "$user" "$pkg" 2>/dev/null)
+    [ -n "$out" ] || out=$(pm path --user "$user" "$pkg" 2>/dev/null)
+    [ -n "$out" ] || out=$(cmd package path "$pkg" 2>/dev/null)
+    [ -n "$out" ] || out=$(pm path "$pkg" 2>/dev/null)
+    direct_paths=$(printf '%s\n' "$out" | sed -n 's/^package://p' | awk 'NF')
+
+    cached_paths=""
+    if [ -n "${AAD_APK_PATH_CACHE:-}" ] && [ -f "$AAD_APK_PATH_CACHE" ]; then
+        cached_paths=$(awk -F'|' -v u="$user" -v p="$pkg" '$1==u && $2==p {print $3}' "$AAD_APK_PATH_CACHE" 2>/dev/null)
+    fi
+    raw_paths=$(printf '%s\n%s\n' "$direct_paths" "$cached_paths" | awk 'NF' | sort -u)
+    [ -n "$raw_paths" ] || return 0
+
+    # Expand the package install directory so dynamic-feature/config split APK
+    # manifests are inspected even when the PackageManager path command returns
+    # only base.apk on an OEM build.
+    {
+        printf '%s\n' "$raw_paths"
+        printf '%s\n' "$raw_paths" | while IFS= read -r base_apk; do
+            [ -n "$base_apk" ] || continue
+            apk_dir=${base_apk%/*}
+            [ -d "$apk_dir" ] || continue
+            for sibling in "$apk_dir"/*.apk; do
+                [ -f "$sibling" ] && printf '%s\n' "$sibling"
+            done
+        done
+    } | awk 'NF' | sort -u
+}
+
+cap_activity_component_exists() {
+    user="$1"; comp="$2"
+    cls=${comp#*/}
+    # MATCH_DISABLED_COMPONENTS=0x200 so components already disabled by us are
+    # still discoverable. Explicit -n does not depend on an intent-filter.
+    out=$(cmd package query-activities --components --query-flags 0x200 --user "$user" -n "$comp" 2>/dev/null)
+    printf '%s\n' "$out" | grep -Fq "/$cls" 2>/dev/null && return 0
+    out=$(cmd package resolve-activity --components --query-flags 0x200 --user "$user" -n "$comp" 2>/dev/null)
+    printf '%s\n' "$out" | grep -Fq "/$cls" 2>/dev/null
+}
+
+extract_compiled_manifest_readonly() {
+    apk="$1"; out="$2"
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -p "$apk" AndroidManifest.xml > "$out" 2>/dev/null && [ -s "$out" ] && return 0
+    fi
+    if aad_have_bb; then
+        aad_bb unzip -p "$apk" AndroidManifest.xml > "$out" 2>/dev/null && [ -s "$out" ] && return 0
+    fi
+    : > "$out"
+    return 1
+}
+
+manifest_class_strings() {
+    manifest="$1"
+    meta_file="$2"
+    [ -n "$meta_file" ] || meta_file=/dev/null
+
+    # Android binary XML does not use an arbitrary text charset. ResStringPool
+    # has exactly two on-disk encodings: UTF-8 when UTF8_FLAG (1<<8) is set,
+    # otherwise UTF-16. Parse the chunk format directly so discovery does not
+    # depend on optional strings(1) applets or NUL-stripping heuristics.
+    #
+    # The backend must be decided BEFORE the pipeline: an `if ... fi | awk`
+    # construct runs its left side in a subshell, so a `return` there never
+    # left this function and awk still overwrote the failure meta record.
+    _mcs_od=""
+    if command -v od >/dev/null 2>&1; then
+        _mcs_od="od"
+    elif aad_have_bb; then
+        _mcs_od="bb"
+    fi
+    if [ -z "$_mcs_od" ]; then
+        printf 'parser=none|encoding=UNKNOWN|strings=0|tokens=0|valid=0\n' > "$meta_file"
+        return 1
+    fi
+
+    if [ "$_mcs_od" = "bb" ]; then
+        aad_bb od -An -tu1 -v "$manifest" 2>/dev/null
+    else
+        od -An -tu1 -v "$manifest" 2>/dev/null
+    fi | awk -v meta="$meta_file" '
+        function u16(p) { return b[p] + 256*b[p+1] }
+        function u32(p) { return b[p] + 256*b[p+1] + 65536*b[p+2] + 16777216*b[p+3] }
+        function len8(p,    v,n) {
+            v=b[p]
+            if (v>=128) { n=((v-128)*256)+b[p+1]; LSKIP=2 }
+            else { n=v; LSKIP=1 }
+            return n
+        }
+        function len16(p,    v,n) {
+            v=u16(p)
+            if (v>=32768) { n=((v-32768)*65536)+u16(p+2); LSKIP=4 }
+            else { n=v; LSKIP=2 }
+            return n
+        }
+        function emit_tokens(str,    rest,tok) {
+            rest=str
+            while (match(rest, /[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)+/)) {
+                tok=substr(rest,RSTART,RLENGTH)
+                if (!seen[tok]++) { print tok; token_count++ }
                 rest=substr(rest,RSTART+RLENGTH)
             }
         }
-        /^[[:space:]]*Activity Resolver Table:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
-        /^[[:space:]]*Receiver Resolver Table:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
-        /^[[:space:]]*Service Resolver Table:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
-        /^[[:space:]]*Provider Resolver Table:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
-        /^[[:space:]]*Activities:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
-        /^[[:space:]]*Receivers:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
-        /^[[:space:]]*Services:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
-        /^[[:space:]]*Providers:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
-        /^[[:space:]]*Registered ContentProviders:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
-        /^[[:space:]]*ContentProvider Authorities:[[:space:]]*$/ {capture=0; next}
-        /^[[:space:]]*(Packages|Shared users|Queries|Dexopt state|Compiler stats):[[:space:]]*$/ {capture=0; next}
-        capture {emit($0,kind)}
+        function ascii_utf8(p,n,    i,c,out) {
+            out=""
+            for (i=0; i<n; i++) {
+                c=b[p+i]
+                if (c>=32 && c<=126) out=out sprintf("%c",c)
+                else out=out " "
+            }
+            return out
+        }
+        function ascii_utf16(p,n,    i,c,out) {
+            out=""
+            for (i=0; i<n; i++) {
+                c=u16(p+2*i)
+                if (c>=32 && c<=126) out=out sprintf("%c",c)
+                else out=out " "
+            }
+            return out
+        }
+        function parse_pool(pos,    hsz,sz,count,flags,start,idxbase,i,rel,p,u16n,u8n,str) {
+            hsz=u16(pos+2); sz=u32(pos+4)
+            if (hsz<28 || sz<hsz || pos+sz-1>n) return 0
+            count=u32(pos+8); flags=u32(pos+16); start=u32(pos+20)
+            if (count<0 || count>200000 || start<hsz || start>=sz) return 0
+            idxbase=pos+hsz
+            if (idxbase+4*count-1>pos+sz-1) return 0
+            isutf8=(int(flags/256)%2)==1
+            encoding=(isutf8 ? "UTF8" : "UTF16")
+            string_count=count
+            for (i=0; i<count; i++) {
+                rel=u32(idxbase+4*i)
+                p=pos+start+rel
+                if (p<pos || p>pos+sz-1) continue
+                if (isutf8) {
+                    u16n=len8(p); p+=LSKIP
+                    u8n=len8(p); p+=LSKIP
+                    if (u8n<0 || p+u8n>pos+sz) continue
+                    str=ascii_utf8(p,u8n)
+                } else {
+                    u16n=len16(p); p+=LSKIP
+                    if (u16n<0 || p+2*u16n>pos+sz) continue
+                    str=ascii_utf16(p,u16n)
+                }
+                emit_tokens(str)
+            }
+            return 1
+        }
+        function fallback_ascii(    i,c,buf) {
+            buf=""
+            for (i=1;i<=n;i++) {
+                c=b[i]
+                if (c>=32 && c<=126) buf=buf sprintf("%c",c)
+                else { if (length(buf)>=4) emit_tokens(buf); buf="" }
+            }
+            if (length(buf)>=4) emit_tokens(buf)
+        }
+        function fallback_utf16le(    i,c,buf) {
+            buf=""
+            for (i=1;i<n;i+=2) {
+                c=u16(i)
+                if (c>=32 && c<=126) buf=buf sprintf("%c",c)
+                else { if (length(buf)>=4) emit_tokens(buf); buf="" }
+            }
+            if (length(buf)>=4) emit_tokens(buf)
+        }
+        { for (i=1;i<=NF;i++) b[++n]=$i+0 }
+        END {
+            valid=0; parser="axml"
+            # RES_XML_TYPE header (0x0003) is 8 bytes; walk its child chunks.
+            if (n>=8 && u16(1)==3) {
+                root_h=u16(3); root_sz=u32(5)
+                if (root_h>=8 && root_sz<=n && root_sz>=root_h) {
+                    pos=1+root_h
+                    while (pos+7<=root_sz) {
+                        type=u16(pos); sz=u32(pos+4)
+                        if (sz<8 || pos+sz-1>root_sz) break
+                        if (type==1 && parse_pool(pos)) { valid=1; break }
+                        pos+=sz
+                    }
+                }
+            }
+            # Rare/debug APKs may contain plain XML. Keep a bounded textual
+            # fallback for UTF-8/ASCII and UTF-16LE instead of declaring failure.
+            if (!valid) {
+                parser="text-fallback"; encoding="TEXT"
+                fallback_ascii(); fallback_utf16le()
+            }
+            printf "parser=%s|encoding=%s|strings=%d|tokens=%d|valid=%d\n", parser, (encoding==""?"UNKNOWN":encoding), string_count+0, token_count+0, valid > meta
+            close(meta)
+        }
     ' | sort -u
 }
 
-# Один dumpsys кэшируется для всех категорий и типов компонентов пакета.
+# Emit diagnostic-only SDK evidence from the compiled manifest string pool.
+# Output format is intentionally a non-component candidate record:
+#   SDK|human label|evidence class
+# Downstream policy ignores kind=SDK; sdk_fingerprint.log consumes it separately.
+manifest_sdk_fingerprints() {
+    classes="$1"
+    [ -f "$classes" ] && [ -f "$RULES_FILE" ] || return 0
+    awk -v target='[ADS_SDK_FINGERPRINT]' '
+        FNR==NR {
+            line=$0
+            sub(/\r$/, "", line)
+            if (line==target) {inside=1; next}
+            if (inside && line ~ /^\[/) {inside=0}
+            if (!inside) next
+            sub(/^[ \t]+/,"",line); sub(/[ \t]+$/,"",line)
+            if (line=="" || line ~ /^#/) next
+            sep=index(line,"|")
+            if (!sep) next
+            label=substr(line,1,sep-1)
+            pattern=substr(line,sep+1)
+            sub(/^[ \t]+/,"",label); sub(/[ \t]+$/,"",label)
+            sub(/^[ \t]+/,"",pattern); sub(/[ \t]+$/,"",pattern)
+            if (label!="" && pattern!="") {
+                labels[++n]=label
+                patterns[n]=tolower(pattern)
+            }
+            next
+        }
+        {
+            cls=$0
+            lc=tolower(cls)
+            for (i=1; i<=n; i++) {
+                if (!seen[labels[i]] && index(lc,patterns[i])>0) {
+                    print "SDK|" labels[i] "|" cls
+                    seen[labels[i]]=1
+                }
+            }
+        }
+    ' "$RULES_FILE" "$classes"
+}
+
+
+# ---- Ad Surface Scanner ---------------------------------------------------
+# Static, diagnostic-only inventory of ad formats exposed by bundled SDKs.
+# DEX evidence means the SDK class/type exists in the APK (capability, not proof
+# that the host app calls it). RESOURCE evidence is stronger: a matching ad View
+# class is referenced from compiled res/layout XML. Nothing here mutates policy.
+
+aad_surface_rules_hash() {
+    [ -f "$RULES_FILE" ] || { printf 'none\n'; return; }
+    # Semantic hash only: network-host rules, comments and whitespace must never
+    # invalidate expensive DEX/layout evidence.
+    awk '
+        function trim(s){sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
+        /^\[ADS_SURFACE_FINGERPRINT\]$/ {inside=1; print; next}
+        /^\[ADS_SURFACE_RESOURCE_VIEW\]$/ {inside=1; print; next}
+        /^\[/ {inside=0}
+        inside {
+            line=$0; sub(/\r$/, "", line); line=trim(line)
+            if (line!="" && line !~ /^#/) print line
+        }
+    ' "$RULES_FILE" 2>/dev/null | cksum 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+# TODO(remove after v4.9): version-pinned migration checksums. They only apply
+# while the shipped rules still hash to the pinned value; any user edit makes
+# the branch inert and the cache is simply rebuilt, which is the safe outcome.
+aad_surface_cache_rulesig_compatible() {
+    _ascrc_sig="$1"; _ascrc_current="$2"
+    [ "$_ascrc_sig" = "$_ascrc_current" ] && return 0
+    # Migration from 4.6.15/4.6.16. Both signatures represent the same 77
+    # fingerprints + strict View allowlist; 4.6.16 changed only a comment.
+    if [ "$_ascrc_current" = "3191335439:7119" ]; then
+        case "$_ascrc_sig" in
+            1259099589:7907|2768747396:7908) return 0 ;;
+        esac
+    fi
+    return 1
+}
+
+# Parse the shared Info-ZIP/BusyBox/toybox `unzip -l` table. Android APK entry
+# names never contain spaces in the paths this module inspects.
+apk_parse_unzip_listing() {
+    awk '
+        /^[[:space:]]*[0-9]+[[:space:]]+[0-9-]+[[:space:]]+[0-9:]+[[:space:]]+/ {
+            print $NF
+        }
+    '
+}
+
+# `unzip -Z1` is an Info-ZIP/zipinfo extension: neither toybox (the system
+# implementation on modern Android) nor BusyBox supports it, so the previous
+# first branch could never succeed and entry discovery silently returned
+# nothing whenever BusyBox was not reachable. `-l` is supported by all three.
+apk_list_entries_readonly() {
+    apk="$1"
+    _ale_out=""
+    if command -v unzip >/dev/null 2>&1; then
+        _ale_out=$(unzip -Z1 "$apk" 2>/dev/null)
+        if [ -n "$_ale_out" ]; then
+            printf '%s\n' "$_ale_out"
+            return 0
+        fi
+        _ale_out=$(unzip -l "$apk" 2>/dev/null | apk_parse_unzip_listing)
+        if [ -n "$_ale_out" ]; then
+            printf '%s\n' "$_ale_out"
+            return 0
+        fi
+    fi
+    if aad_have_bb; then
+        _ale_out=$(aad_bb unzip -l "$apk" 2>/dev/null | apk_parse_unzip_listing)
+        if [ -n "$_ale_out" ]; then
+            printf '%s\n' "$_ale_out"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+extract_apk_entry_readonly() {
+    apk="$1"; entry="$2"; out="$3"
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -p "$apk" "$entry" > "$out" 2>/dev/null && [ -s "$out" ] && return 0
+    fi
+    if aad_have_bb; then
+        aad_bb unzip -p "$apk" "$entry" > "$out" 2>/dev/null && [ -s "$out" ] && return 0
+    fi
+    : > "$out"
+    return 1
+}
+
+# Concatenate every APK entry matching a glob into one stream. Some toybox
+# builds do not expand wildcards in `unzip -p` entry arguments, so a per-entry
+# extraction fallback keeps DEX/layout discovery working on stock ROMs.
+apk_extract_entries_concat() {
+    _aec_apk="$1"; _aec_pattern="$2"; _aec_out="$3"
+    : > "$_aec_out"
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -p "$_aec_apk" "$_aec_pattern" >> "$_aec_out" 2>/dev/null || true
+    fi
+    if [ ! -s "$_aec_out" ] && aad_have_bb; then
+        aad_bb unzip -p "$_aec_apk" "$_aec_pattern" >> "$_aec_out" 2>/dev/null || true
+    fi
+    [ -s "$_aec_out" ] && return 0
+
+    _aec_tmp=$(aad_mktemp_near "$DATA_DIR/.apk_entry")
+    [ -n "$_aec_tmp" ] || return 1
+    apk_list_entries_readonly "$_aec_apk" 2>/dev/null | while IFS= read -r _aec_entry; do
+        [ -n "$_aec_entry" ] || continue
+        case "$_aec_entry" in
+            $_aec_pattern) ;;
+            *) continue ;;
+        esac
+        if extract_apk_entry_readonly "$_aec_apk" "$_aec_entry" "$_aec_tmp"; then
+            cat "$_aec_tmp" >> "$_aec_out" 2>/dev/null || true
+        fi
+    done
+    rm -f "$_aec_tmp" 2>/dev/null
+    [ -s "$_aec_out" ]
+}
+
+aad_surface_legacy_cache_gc() {
+    [ -d "$MANIFEST_CACHE_DIR" ] || return 0
+    # Reclaim superseded surface sidecars through v4.6.13 without touching
+    # Full Manifest cache. v4.6.14 writes only surface4 sidecars.
+    find "$MANIFEST_CACHE_DIR" -type f 2>/dev/null | while IFS= read -r f; do
+        case "$f" in
+            *.surface.dex.tokens|*.surface.res.tokens|*.surface.dexstat|*.surface.resstat|*.surface.hits|*.surface.rulesig|*.surface2.dexstat|*.surface2.resstat|*.surface2.hits|*.surface2.rulesig|*.surface3.dexstat|*.surface3.resstat|*.surface3.hits|*.surface3.rulesig)
+                rm -f "$f" 2>/dev/null || true
+                ;;
+        esac
+    done
+}
+
+surface_benchmark_grep_backend() {
+    _sbg_backend="$1"; _sbg_raw="$2"; _sbg_pattern="$3"
+    [ -s "$_sbg_raw" ] && [ -n "$_sbg_pattern" ] || { echo -1; return; }
+    _sbg_start=$(aad_now_ms)
+    _sbg_n=0
+    while [ "$_sbg_n" -lt 2 ]; do
+        case "$_sbg_backend" in
+            grep) grep -aFq -- "$_sbg_pattern" "$_sbg_raw" 2>/dev/null || true ;;
+            busybox) aad_bb grep -aFq -- "$_sbg_pattern" "$_sbg_raw" 2>/dev/null || true ;;
+            *) echo -1; return ;;
+        esac
+        _sbg_n=$((_sbg_n + 1))
+    done
+    _sbg_end=$(aad_now_ms)
+    aad_elapsed_ms "$_sbg_start" "$_sbg_end"
+}
+
+surface_exact_file_has() {
+    _sefh_raw="$1"; _sefh_pattern="$2"
+    [ -f "$_sefh_raw" ] && [ -n "$_sefh_pattern" ] || return 1
+    case "${AAD_SURFACE_GREP_BACKEND:-grep}" in
+        busybox) aad_bb grep -aFq -- "$_sefh_pattern" "$_sefh_raw" 2>/dev/null ;;
+        *) grep -aFq -- "$_sefh_pattern" "$_sefh_raw" 2>/dev/null ;;
+    esac
+}
+
+# Deterministic matcher. Android/Toybox multi-pattern `grep -o -f` is fast but
+# has proven incomplete on real binary DEX streams. Scan one materialized file
+# against each configured fingerprint instead; the file is read from page cache
+# after the first pass and the result is complete by construction.
+surface_exact_match_file() {
+    _sem_raw="$1"; _sem_patterns="$2"; _sem_out="$3"
+    : > "$_sem_out"
+    [ -s "$_sem_raw" ] && [ -s "$_sem_patterns" ] || return 0
+    while IFS= read -r _sem_pattern; do
+        [ -n "$_sem_pattern" ] || continue
+        if surface_exact_file_has "$_sem_raw" "$_sem_pattern"; then
+            printf '%s\n' "$_sem_pattern" >> "$_sem_out"
+        fi
+    done < "$_sem_patterns"
+    sort -u "$_sem_out" -o "$_sem_out" 2>/dev/null || true
+    return 0
+}
+
+surface_strings_dump() {
+    _ssd_raw="$1"; _ssd_out="$2"; _ssd_backend="$3"
+    : > "$_ssd_out"
+    [ -s "$_ssd_raw" ] || return 0
+    case "$_ssd_backend" in
+        strings)
+            strings -n 4 "$_ssd_raw" > "$_ssd_out" 2>/dev/null
+            ;;
+        busybox_strings)
+            aad_bb strings -n 4 "$_ssd_raw" > "$_ssd_out" 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+surface_benchmark_strings_backend() {
+    _sbs_backend="$1"; _sbs_probe="$2"; _sbs_out="$3"
+    _sbs_start=$(aad_now_ms)
+    surface_strings_dump "$_sbs_probe" "$_sbs_out" "$_sbs_backend" >/dev/null 2>&1 || { echo -1; return; }
+    _sbs_end=$(aad_now_ms)
+    aad_elapsed_ms "$_sbs_start" "$_sbs_end"
+}
+
+surface_strings_backend_complete() {
+    _sbc_backend="$1"; _sbc_probe="$2"; _sbc_patterns="$3"; _sbc_strings="$4"; _sbc_hits="$5"
+    surface_strings_dump "$_sbc_probe" "$_sbc_strings" "$_sbc_backend" >/dev/null 2>&1 || return 1
+    surface_exact_match_file "$_sbc_strings" "$_sbc_patterns" "$_sbc_hits"
+    _sbc_expected=$(grep -c . "$_sbc_patterns" 2>/dev/null); [ -n "$_sbc_expected" ] || _sbc_expected=0
+    _sbc_got=$(grep -c . "$_sbc_hits" 2>/dev/null); [ -n "$_sbc_got" ] || _sbc_got=0
+    [ "$_sbc_expected" -gt 0 ] && [ "$_sbc_got" -eq "$_sbc_expected" ]
+}
+
+aad_surface_prepare_matchers() {
+    [ -f "$RULES_FILE" ] || return 1
+    AAD_SURFACE_DEX_PATTERNS="$DATA_DIR/.surface_dex_patterns.$$"
+    AAD_SURFACE_DEX_MAP="$DATA_DIR/.surface_dex_map.$$"
+    AAD_SURFACE_RES_PATTERNS="$DATA_DIR/.surface_res_patterns.$$"
+    AAD_SURFACE_RES_MAP="$DATA_DIR/.surface_res_map.$$"
+    : > "$AAD_SURFACE_DEX_PATTERNS"; : > "$AAD_SURFACE_DEX_MAP"
+    : > "$AAD_SURFACE_RES_PATTERNS"; : > "$AAD_SURFACE_RES_MAP"
+
+    # DEX capability rules and strict RESOURCE View rules are intentionally
+    # separate. Non-View classes such as NativeAd/NativeAdLoader can never
+    # produce LAYOUT_CONFIRMED evidence.
+    awk -v dexsec='[ADS_SURFACE_FINGERPRINT]' -v ressec='[ADS_SURFACE_RESOURCE_VIEW]' \
+        -v dp="$AAD_SURFACE_DEX_PATTERNS" -v dm="$AAD_SURFACE_DEX_MAP" \
+        -v rp="$AAD_SURFACE_RES_PATTERNS" -v rm="$AAD_SURFACE_RES_MAP" '
+        function trim(v) {sub(/^[ \t]+/,"",v); sub(/[ \t]+$/,"",v); return v}
+        $0==dexsec {section="DEX"; next}
+        $0==ressec {section="RESOURCE"; next}
+        /^\[/ {section=""; next}
+        section=="" {next}
+        {
+            line=$0; sub(/\r$/, "", line); line=trim(line)
+            if (line=="" || line ~ /^#/) next
+            n=split(line,a,"|"); if (n<4) next
+            surface=trim(a[1]); sdk=trim(a[2]); strategy=trim(a[3]); pattern=trim(a[4])
+            if (surface=="" || sdk=="" || strategy=="" || pattern=="") next
+            if (section=="DEX") {
+                dexkey=pattern
+                if (index(pattern,".")>0) {
+                    gsub(/\./,"/",dexkey)
+                    dexkey="L" dexkey ";"
+                }
+                print dexkey >> dp
+                print dexkey "|" surface "|" sdk "|" strategy "|" pattern >> dm
+            } else {
+                print pattern >> rp
+                print pattern "|" surface "|" sdk "|" strategy "|" pattern >> rm
+            }
+        }
+        END {close(dp); close(dm); close(rp); close(rm)}
+    ' "$RULES_FILE" 2>/dev/null
+    sort -u "$AAD_SURFACE_DEX_PATTERNS" -o "$AAD_SURFACE_DEX_PATTERNS" 2>/dev/null || true
+    sort -u "$AAD_SURFACE_RES_PATTERNS" -o "$AAD_SURFACE_RES_PATTERNS" 2>/dev/null || true
+    chmod 600 "$AAD_SURFACE_DEX_PATTERNS" "$AAD_SURFACE_DEX_MAP" "$AAD_SURFACE_RES_PATTERNS" "$AAD_SURFACE_RES_MAP" 2>/dev/null || true
+
+    # Select a single-pattern fixed-string grep implementation. Unlike -o/-f on
+    # a binary stream, this operation is deterministic and is used for exact
+    # verification of every fingerprint.
+    _asp_grep_probe="$DATA_DIR/.surface_grep_probe.$$"
+    _asp_first=$(sed -n '1p' "$AAD_SURFACE_DEX_PATTERNS" 2>/dev/null)
+    {
+        echo "irrelevant"
+        echo "$_asp_first"
+        echo "irrelevant2"
+    } > "$_asp_grep_probe" 2>/dev/null
+    AAD_SURFACE_GREP_SYSTEM_MS=-1
+    AAD_SURFACE_GREP_BUSYBOX_MS=-1
+    _asp_sys_ok=0; _asp_bb_ok=0
+    if [ -n "$_asp_first" ] && grep -aFq -- "$_asp_first" "$_asp_grep_probe" 2>/dev/null; then
+        _asp_sys_ok=1
+        AAD_SURFACE_GREP_SYSTEM_MS=$(surface_benchmark_grep_backend grep "$_asp_grep_probe" "$_asp_first")
+    fi
+    if [ -n "$_asp_first" ] && aad_have_bb && \
+       aad_bb grep -aFq -- "$_asp_first" "$_asp_grep_probe" 2>/dev/null; then
+        _asp_bb_ok=1
+        AAD_SURFACE_GREP_BUSYBOX_MS=$(surface_benchmark_grep_backend busybox "$_asp_grep_probe" "$_asp_first")
+    fi
+    if [ "$_asp_sys_ok" = "1" ] && [ "$_asp_bb_ok" = "1" ]; then
+        if [ "$AAD_SURFACE_GREP_BUSYBOX_MS" -lt "$AAD_SURFACE_GREP_SYSTEM_MS" ] 2>/dev/null; then
+            AAD_SURFACE_GREP_BACKEND=busybox
+        else
+            AAD_SURFACE_GREP_BACKEND=grep
+        fi
+    elif [ "$_asp_sys_ok" = "1" ]; then
+        AAD_SURFACE_GREP_BACKEND=grep
+    elif [ "$_asp_bb_ok" = "1" ]; then
+        AAD_SURFACE_GREP_BACKEND=busybox
+    else
+        # `grep` is required elsewhere by the module, but retain a named
+        # fallback for diagnostics if an OEM command behaves unexpectedly.
+        AAD_SURFACE_GREP_BACKEND=grep
+    fi
+    rm -f "$_asp_grep_probe" 2>/dev/null
+
+    # DEX backend certification uses ALL active fingerprints, not one sample.
+    # The probe is NUL-separated like a DEX string pool. A strings backend is
+    # accepted only if exact verification recovers every configured pattern.
+    _asp_probe="$DATA_DIR/.surface_strings_probe.$$"
+    _asp_strings="$DATA_DIR/.surface_strings_probe_out.$$"
+    _asp_hits="$DATA_DIR/.surface_strings_probe_hits.$$"
+    : > "$_asp_probe"; : > "$_asp_strings"; : > "$_asp_hits"
+    while IFS= read -r _asp_pattern; do
+        [ -n "$_asp_pattern" ] || continue
+        printf '\001%s\000' "$_asp_pattern" >> "$_asp_probe"
+    done < "$AAD_SURFACE_DEX_PATTERNS"
+    AAD_SURFACE_SELFTEST_EXPECTED=$(grep -c . "$AAD_SURFACE_DEX_PATTERNS" 2>/dev/null)
+    [ -n "$AAD_SURFACE_SELFTEST_EXPECTED" ] || AAD_SURFACE_SELFTEST_EXPECTED=0
+    AAD_SURFACE_SELFTEST_MATCHED=0
+    AAD_SURFACE_STRINGS_SYSTEM_MS=-1
+    AAD_SURFACE_STRINGS_BUSYBOX_MS=-1
+    _asp_strings_ok=0; _asp_bbstrings_ok=0
+
+    if command -v strings >/dev/null 2>&1 && \
+       surface_strings_backend_complete strings "$_asp_probe" "$AAD_SURFACE_DEX_PATTERNS" "$_asp_strings" "$_asp_hits"; then
+        _asp_strings_ok=1
+        AAD_SURFACE_STRINGS_SYSTEM_MS=$(surface_benchmark_strings_backend strings "$_asp_probe" "$_asp_strings")
+    fi
+    if aad_have_bb && aad_bb strings --help >/dev/null 2>&1 && \
+       surface_strings_backend_complete busybox_strings "$_asp_probe" "$AAD_SURFACE_DEX_PATTERNS" "$_asp_strings" "$_asp_hits"; then
+        _asp_bbstrings_ok=1
+        AAD_SURFACE_STRINGS_BUSYBOX_MS=$(surface_benchmark_strings_backend busybox_strings "$_asp_probe" "$_asp_strings")
+    fi
+
+    if [ "$_asp_strings_ok" = "1" ] && [ "$_asp_bbstrings_ok" = "1" ]; then
+        if [ "$AAD_SURFACE_STRINGS_BUSYBOX_MS" -lt "$AAD_SURFACE_STRINGS_SYSTEM_MS" ] 2>/dev/null; then
+            AAD_SURFACE_DEX_BACKEND=busybox_strings
+        else
+            AAD_SURFACE_DEX_BACKEND=strings
+        fi
+        AAD_SURFACE_SELFTEST_MATCHED="$AAD_SURFACE_SELFTEST_EXPECTED"
+    elif [ "$_asp_strings_ok" = "1" ]; then
+        AAD_SURFACE_DEX_BACKEND=strings
+        AAD_SURFACE_SELFTEST_MATCHED="$AAD_SURFACE_SELFTEST_EXPECTED"
+    elif [ "$_asp_bbstrings_ok" = "1" ]; then
+        AAD_SURFACE_DEX_BACKEND=busybox_strings
+        AAD_SURFACE_SELFTEST_MATCHED="$AAD_SURFACE_SELFTEST_EXPECTED"
+    else
+        AAD_SURFACE_DEX_BACKEND=raw_exact
+        # raw_exact checks each pattern directly and needs no strings applet.
+        AAD_SURFACE_SELFTEST_MATCHED="$AAD_SURFACE_SELFTEST_EXPECTED"
+    fi
+    rm -f "$_asp_probe" "$_asp_strings" "$_asp_hits" 2>/dev/null
+
+    export AAD_SURFACE_DEX_PATTERNS AAD_SURFACE_DEX_MAP AAD_SURFACE_RES_PATTERNS AAD_SURFACE_RES_MAP \
+           AAD_SURFACE_GREP_BACKEND AAD_SURFACE_GREP_SYSTEM_MS AAD_SURFACE_GREP_BUSYBOX_MS \
+           AAD_SURFACE_DEX_BACKEND AAD_SURFACE_STRINGS_SYSTEM_MS AAD_SURFACE_STRINGS_BUSYBOX_MS \
+           AAD_SURFACE_SELFTEST_EXPECTED AAD_SURFACE_SELFTEST_MATCHED
+    return 0
+}
+
+aad_surface_cleanup_matchers() {
+    rm -f "${AAD_SURFACE_DEX_PATTERNS:-}" "${AAD_SURFACE_DEX_MAP:-}" \
+          "${AAD_SURFACE_RES_PATTERNS:-}" "${AAD_SURFACE_RES_MAP:-}" 2>/dev/null
+    unset AAD_SURFACE_DEX_PATTERNS AAD_SURFACE_DEX_MAP AAD_SURFACE_RES_PATTERNS AAD_SURFACE_RES_MAP \
+          AAD_SURFACE_GREP_BACKEND AAD_SURFACE_GREP_SYSTEM_MS AAD_SURFACE_GREP_BUSYBOX_MS \
+          AAD_SURFACE_DEX_BACKEND AAD_SURFACE_STRINGS_SYSTEM_MS AAD_SURFACE_STRINGS_BUSYBOX_MS \
+          AAD_SURFACE_SELFTEST_EXPECTED AAD_SURFACE_SELFTEST_MATCHED
+}
+
+surface_map_matches() {
+    _smm_matched="$1"; _smm_map="$2"; _smm_source="$3"
+    [ -s "$_smm_matched" ] && [ -s "$_smm_map" ] || return 0
+    awk -F'|' -v src="$_smm_source" '
+        FNR==NR {wanted[$0]=1; next}
+        ($1 in wanted) {
+            key=src "|" $2 "|" $3 "|" $4 "|" $5
+            if (!seen[key]++) print key
+        }
+    ' "$_smm_matched" "$_smm_map"
+}
+
+# RESOURCE matching is exact-per-pattern too. There are only a small number of
+# strict View rules, so correctness costs little and avoids the same multi-
+# pattern binary grep ambiguity seen in DEX.
+surface_grep_file_matches() {
+    _sgf_raw="$1"; _sgf_patterns="$2"; _sgf_out="$3"
+    surface_exact_match_file "$_sgf_raw" "$_sgf_patterns" "$_sgf_out"
+}
+
+surface_dex_stream_matches() {
+    _sdm_apk="$1"; _sdm_patterns="$2"; _sdm_out="$3"
+    : > "$_sdm_out"
+    [ -s "$_sdm_patterns" ] || return 0
+    _sdm_raw=$(aad_mktemp_near "$DATA_DIR/.surface_dex_raw")
+    _sdm_text=$(aad_mktemp_near "$DATA_DIR/.surface_dex_strings")
+    [ -n "$_sdm_raw" ] && [ -n "$_sdm_text" ] || {
+        rm -f "$_sdm_raw" "$_sdm_text" 2>/dev/null
+        return 1
+    }
+    : > "$_sdm_raw"; : > "$_sdm_text"
+    apk_extract_entries_concat "$_sdm_apk" 'classes*.dex' "$_sdm_raw" || true
+    if [ -s "$_sdm_raw" ]; then
+        case "${AAD_SURFACE_DEX_BACKEND:-raw_exact}" in
+            strings|busybox_strings)
+                if surface_strings_dump "$_sdm_raw" "$_sdm_text" "$AAD_SURFACE_DEX_BACKEND" && [ -s "$_sdm_text" ]; then
+                    surface_exact_match_file "$_sdm_text" "$_sdm_patterns" "$_sdm_out"
+                else
+                    surface_exact_match_file "$_sdm_raw" "$_sdm_patterns" "$_sdm_out"
+                fi
+                ;;
+            *)
+                surface_exact_match_file "$_sdm_raw" "$_sdm_patterns" "$_sdm_out"
+                ;;
+        esac
+    fi
+    rm -f "$_sdm_raw" "$_sdm_text" 2>/dev/null
+    return 0
+}
+
+surface_extract_dex_hits() {
+    _sed_apk="$1"; _sed_hits="$2"; _sed_stat="$3"
+    _sed_dex_files=$(apk_list_entries_readonly "$_sed_apk" | awk '/^classes([0-9]+)?\.dex$/ {n++} END{print n+0}' 2>/dev/null)
+    case "$_sed_dex_files" in ''|*[!0-9]*) _sed_dex_files=0 ;; esac
+    _sed_matched=$(aad_mktemp_near "$DATA_DIR/.surface_dex_match")
+    [ -n "$_sed_matched" ] || { printf '%s|0\n' "$_sed_dex_files" > "$_sed_stat"; return 0; }
+    : > "$_sed_matched"
+
+    if [ "$_sed_dex_files" -gt 0 ]; then
+        surface_dex_stream_matches "$_sed_apk" "$AAD_SURFACE_DEX_PATTERNS" "$_sed_matched" || true
+        surface_map_matches "$_sed_matched" "$AAD_SURFACE_DEX_MAP" DEX >> "$_sed_hits"
+    fi
+    _sed_matched_count=$(grep -c . "$_sed_matched" 2>/dev/null)
+    case "$_sed_matched_count" in ''|*[!0-9]*) _sed_matched_count=0 ;; esac
+    printf '%s|%s\n' "$_sed_dex_files" "$_sed_matched_count" > "$_sed_stat"
+    rm -f "$_sed_matched" 2>/dev/null
+}
+
+surface_extract_layout_hits() {
+    _sel_apk="$1"; _sel_hits="$2"; _sel_stat="$3"
+    # Count in the pipeline instead of materializing thousands of layout names in
+    # one shell argument. Android execve rejects a single argument around 128 KiB
+    # even when total ARG_MAX is larger (seen as /system/bin/printf E2BIG).
+    _sel_layout_files=$(apk_list_entries_readonly "$_sel_apk" | awk '/^res\/layout[^\/]*\/.*\.xml$/ {n++} END{print n+0}' 2>/dev/null)
+    case "$_sel_layout_files" in ''|*[!0-9]*) _sel_layout_files=0 ;; esac
+    _sel_raw=$(aad_mktemp_near "$DATA_DIR/.surface_layout_raw")
+    _sel_stripped=$(aad_mktemp_near "$DATA_DIR/.surface_layout_stripped")
+    _sel_matched=$(aad_mktemp_near "$DATA_DIR/.surface_layout_match")
+    if [ -z "$_sel_raw" ] || [ -z "$_sel_stripped" ] || [ -z "$_sel_matched" ]; then
+        rm -f "$_sel_raw" "$_sel_stripped" "$_sel_matched" 2>/dev/null
+        printf '%s|0\n' "$_sel_layout_files" > "$_sel_stat"
+        return 0
+    fi
+    : > "$_sel_raw"; : > "$_sel_stripped"; : > "$_sel_matched"
+    if [ "$_sel_layout_files" -gt 0 ]; then
+        apk_extract_entries_concat "$_sel_apk" 'res/layout*/*.xml' "$_sel_raw" || true
+        if [ -s "$_sel_raw" ]; then
+            surface_grep_file_matches "$_sel_raw" "$AAD_SURFACE_RES_PATTERNS" "$_sel_matched" || true
+            tr -d '\000' < "$_sel_raw" > "$_sel_stripped" 2>/dev/null || : > "$_sel_stripped"
+            _sel_more=$(aad_mktemp_near "$DATA_DIR/.surface_layout_more")
+            if [ -n "$_sel_more" ]; then
+                surface_grep_file_matches "$_sel_stripped" "$AAD_SURFACE_RES_PATTERNS" "$_sel_more" || true
+                cat "$_sel_more" >> "$_sel_matched" 2>/dev/null
+                rm -f "$_sel_more" 2>/dev/null
+            fi
+            sort -u "$_sel_matched" -o "$_sel_matched" 2>/dev/null || true
+            surface_map_matches "$_sel_matched" "$AAD_SURFACE_RES_MAP" RESOURCE >> "$_sel_hits"
+        fi
+    fi
+    _sel_matched_count=$(grep -c . "$_sel_matched" 2>/dev/null)
+    case "$_sel_matched_count" in ''|*[!0-9]*) _sel_matched_count=0 ;; esac
+    printf '%s|%s\n' "$_sel_layout_files" "$_sel_matched_count" > "$_sel_stat"
+    rm -f "$_sel_raw" "$_sel_stripped" "$_sel_matched" 2>/dev/null
+}
+
+ad_surface_emit_hits() {
+    user="$1"; pkg="$2"; apk="$3"; cache_state="$4"; hits="$5"; stamp="$6"
+    [ -s "$hits" ] || return 0
+    awk -F'|' -v stamp="$stamp" -v user="$user" -v pkg="$pkg" -v apk="$apk" -v cache="$cache_state" '
+        {
+            line[NR]=$0
+            have[$2 SUBSEP $3 SUBSEP $1]=1
+        }
+        END {
+            for (i=1; i<=NR; i++) {
+                split(line[i],a,"|")
+                src=a[1]; surface=a[2]; sdk=a[3]; strategy=a[4]; evidence=a[5]
+                k=surface SUBSEP sdk
+                if (have[k SUBSEP "DEX"] && have[k SUBSEP "RESOURCE"]) confidence="MULTI_EVIDENCE"
+                else if (src=="RESOURCE") confidence="LAYOUT_CONFIRMED"
+                else confidence="CAPABILITY"
+                printf "%s|HIT|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|0\n", stamp,user,pkg,apk,src,surface,sdk,strategy,evidence,confidence,cache
+            }
+        }
+    ' "$hits" >> "$AD_SURFACE_SCAN_FILE"
+}
+
+scan_ad_surfaces_for_apk() {
+    user="$1"; pkg="$2"; vc="$3"; apk="$4"
+    [ -f "$apk" ] || return 0
+    _aas_apk_start_ms=$(aad_now_ms)
+    stamp=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
+    cache_state=MISS
+    cache_prefix=""; apk_sig=""
+    surface_hash="${AAD_SURFACE_RULES_HASH:-}"
+    [ -n "$surface_hash" ] || surface_hash=$(aad_surface_rules_hash)
+
+    dex_stat=$(aad_mktemp_near "$DATA_DIR/.surface_dex_stat")
+    res_stat=$(aad_mktemp_near "$DATA_DIR/.surface_res_stat")
+    hits=$(aad_mktemp_near "$DATA_DIR/.surface_hits")
+    [ -n "$dex_stat" ] && [ -n "$res_stat" ] && [ -n "$hits" ] || {
+        rm -f "$dex_stat" "$res_stat" "$hits" 2>/dev/null
+        return 0
+    }
+    : > "$dex_stat"; : > "$res_stat"; : > "$hits"
+
+    if [ "${AAD_MANIFEST_CACHE_ENABLED:-0}" = "1" ]; then
+        apk_sig=$(aad_apk_stat_signature "$apk" 2>/dev/null)
+        cache_prefix=$(aad_manifest_cache_prefix "$user" "$pkg" "$vc" "$apk")
+        if [ -n "$apk_sig" ] && [ -n "$cache_prefix" ] && [ -f "$cache_prefix.sig" ] && \
+           [ "$(cat "$cache_prefix.sig" 2>/dev/null)" = "$apk_sig" ] && \
+           [ -f "$cache_prefix.surface4.rulesig" ] && [ -f "$cache_prefix.surface4.hits" ] && \
+           [ -f "$cache_prefix.surface4.dexstat" ] && [ -f "$cache_prefix.surface4.resstat" ]; then
+            _aas_cached_surface_sig=$(cat "$cache_prefix.surface4.rulesig" 2>/dev/null)
+            if aad_surface_cache_rulesig_compatible "$_aas_cached_surface_sig" "$surface_hash"; then
+                cp "$cache_prefix.surface4.hits" "$hits" 2>/dev/null || : > "$hits"
+                cp "$cache_prefix.surface4.dexstat" "$dex_stat" 2>/dev/null || : > "$dex_stat"
+                cp "$cache_prefix.surface4.resstat" "$res_stat" 2>/dev/null || : > "$res_stat"
+                cache_state=FULL_HIT
+                if [ "$_aas_cached_surface_sig" != "$surface_hash" ]; then
+                    printf '%s\n' "$surface_hash" > "$cache_prefix.surface4.rulesig.tmp.$$" 2>/dev/null
+                    chmod 600 "$cache_prefix.surface4.rulesig.tmp.$$" 2>/dev/null || true
+                    mv -f "$cache_prefix.surface4.rulesig.tmp.$$" "$cache_prefix.surface4.rulesig" 2>/dev/null || rm -f "$cache_prefix.surface4.rulesig.tmp.$$" 2>/dev/null
+                fi
+            else
+                cache_state=RULE_RESCAN
+            fi
+        fi
+    fi
+
+    if [ "$cache_state" != "FULL_HIT" ]; then
+        : > "$hits"; : > "$dex_stat"; : > "$res_stat"
+        surface_extract_dex_hits "$apk" "$hits" "$dex_stat"
+        # Resource layouts are only useful for UI-hosted ad formats. Gate the
+        # extra unzip on a targeted DEX capability match.
+        need_layout=$(awk -F'|' '$1=="DEX" && $2 ~ /^(BANNER|BANNER_MREC|MREC|NATIVE|INLINE)$/ {found=1} END{print found+0}' "$hits" 2>/dev/null)
+        if [ "$need_layout" = "1" ]; then
+            surface_extract_layout_hits "$apk" "$hits" "$res_stat"
+        else
+            printf '0|0\n' > "$res_stat"
+        fi
+        sort -u "$hits" -o "$hits" 2>/dev/null || true
+
+        if [ "${AAD_MANIFEST_CACHE_ENABLED:-0}" = "1" ] && [ -n "$cache_prefix" ] && [ -n "$apk_sig" ]; then
+            cache_dir=${cache_prefix%/*}; mkdir -p "$cache_dir" 2>/dev/null
+            printf '%s\n' "$apk_sig" > "$cache_prefix.sig.tmp.$$" 2>/dev/null
+            chmod 600 "$cache_prefix.sig.tmp.$$" 2>/dev/null || true
+            mv -f "$cache_prefix.sig.tmp.$$" "$cache_prefix.sig" 2>/dev/null || rm -f "$cache_prefix.sig.tmp.$$" 2>/dev/null
+            aad_manifest_cache_commit_file "$dex_stat" "$cache_prefix.surface4.dexstat" >/dev/null 2>&1 || true
+            aad_manifest_cache_commit_file "$res_stat" "$cache_prefix.surface4.resstat" >/dev/null 2>&1 || true
+            aad_manifest_cache_commit_file "$hits" "$cache_prefix.surface4.hits" >/dev/null 2>&1 || true
+            printf '%s\n' "$surface_hash" > "$cache_prefix.surface4.rulesig.tmp.$$" 2>/dev/null
+            chmod 600 "$cache_prefix.surface4.rulesig.tmp.$$" 2>/dev/null || true
+            mv -f "$cache_prefix.surface4.rulesig.tmp.$$" "$cache_prefix.surface4.rulesig" 2>/dev/null || rm -f "$cache_prefix.surface4.rulesig.tmp.$$" 2>/dev/null
+        fi
+    fi
+
+    # Do not split `N|M` with ksh pattern expansion (${v%%|*}). Android mksh
+    # treats `|` as a pattern operator and produced empty/concatenated fields.
+    dex_files=0; dex_matches=0; layout_files=0; layout_matches=0
+    if [ -s "$dex_stat" ]; then
+        IFS='|' read -r dex_files dex_matches < "$dex_stat" 2>/dev/null || true
+    fi
+    if [ -s "$res_stat" ]; then
+        IFS='|' read -r layout_files layout_matches < "$res_stat" 2>/dev/null || true
+    fi
+    case "$dex_files" in ''|*[!0-9]*) dex_files=0 ;; esac
+    case "$dex_matches" in ''|*[!0-9]*) dex_matches=0 ;; esac
+    case "$layout_files" in ''|*[!0-9]*) layout_files=0 ;; esac
+    case "$layout_matches" in ''|*[!0-9]*) layout_matches=0 ;; esac
+    hit_count=$(grep -c . "$hits" 2>/dev/null); [ -n "$hit_count" ] || hit_count=0
+    _aas_apk_end_ms=$(aad_now_ms); _aas_apk_elapsed=$(aad_elapsed_ms "$_aas_apk_start_ms" "$_aas_apk_end_ms")
+    printf '%s|APK|%s|%s|%s|APK|-|-|-|dex_files=%s;dex_matches=%s;layout_files=%s;layout_matches=%s;hits=%s|-|%s|%s\n' \
+        "$stamp" "$user" "$pkg" "$apk" "$dex_files" "$dex_matches" "$layout_files" "$layout_matches" "$hit_count" "$cache_state" "$_aas_apk_elapsed" \
+        >> "$AD_SURFACE_SCAN_FILE"
+    ad_surface_emit_hits "$user" "$pkg" "$apk" "$cache_state" "$hits" "$stamp"
+    rm -f "$dex_stat" "$res_stat" "$hits" 2>/dev/null
+}
+
+record_ad_surface_scan_package() {
+    user="$1"; pkg="$2"
+    [ "${AAD_AD_SURFACE_SCAN_ACTIVE:-0}" = "1" ] || return 0
+    [ "$(read_bool_setting BLOCK_ADS 1)" = "1" ] || return 0
+    paths=$(cap_package_paths_readonly "$user" "$pkg")
+    [ -n "$paths" ] || return 0
+    vc="${AAD_CURRENT_VERSION_CODE:-unknown}"
+    while IFS= read -r apk; do
+        [ -n "$apk" ] || continue
+        scan_ad_surfaces_for_apk "$user" "$pkg" "$vc" "$apk"
+    done <<EOF
+$paths
+EOF
+}
+
+# Filter the manifest string pool in one awk pass. Exact allowlist hits are
+# distinguished from broad audit hits so only a small set needs PM validation.
+manifest_activity_rule_hits() {
+    classes="$1"
+    [ -f "$classes" ] && [ -f "$RULES_FILE" ] || return 0
+    awk '
+        function trim(s) {sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
+        function is_exact_section(s) {return s=="ADS_ACTIVITY_IFW" || s=="ANALYTICS_ACTIVITY_IFW"}
+        function is_audit_section(s) {return s=="ADS_ACTIVITY_AUDIT" || s=="ANALYTICS_ACTIVITY_AUDIT"}
+        FNR==NR {
+            line=$0
+            sub(/\r$/, "", line)
+            if (line ~ /^\[[^]]+\]$/) {section=substr(line,2,length(line)-2); next}
+            line=trim(line)
+            if (line=="" || line ~ /^#/) next
+            if (is_exact_section(section)) exact[++ne]=line
+            else if (is_audit_section(section)) audit[++na]=line
+            next
+        }
+        {
+            cls=$0
+            lc=tolower(cls)
+            for (i=1; i<=ne; i++) {
+                rule=exact[i]
+                if (substr(rule,1,3)=="re:") {
+                    pat=substr(rule,4)
+                    if (cls ~ pat || lc ~ tolower(pat)) {print "EXACT|" cls; next}
+                } else if (lc==tolower(rule)) {
+                    print "EXACT|" cls
+                    next
+                }
+            }
+            for (i=1; i<=na; i++) {
+                rule=audit[i]
+                if (substr(rule,1,3)=="re:") {
+                    pat=substr(rule,4)
+                    if (cls ~ pat || lc ~ tolower(pat)) {print "AUDIT|" cls; next}
+                } else if (index(lc,tolower(rule))>0) {
+                    print "AUDIT|" cls
+                    next
+                }
+            }
+        }
+    ' "$RULES_FILE" "$classes" | sort -u
+}
+
+aad_manifest_rules_hash() {
+    [ -f "$RULES_FILE" ] || { printf 'none\n'; return; }
+    # The verified manifest layer depends only on Activity exact/audit rules.
+    # Provider, SDK, surface-network and comment edits must not invalidate it.
+    awk '
+        function trim(s){sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
+        /^\[(ADS_ACTIVITY_IFW|ADS_ACTIVITY_AUDIT|ANALYTICS_ACTIVITY_IFW|ANALYTICS_ACTIVITY_AUDIT)\]$/ {
+            inside=1; print; next
+        }
+        /^\[/ {inside=0}
+        inside {
+            line=$0; sub(/\r$/, "", line); line=trim(line)
+            if (line!="" && line !~ /^#/) print line
+        }
+    ' "$RULES_FILE" 2>/dev/null | cksum 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+# TODO(remove after v4.9): see aad_surface_cache_rulesig_compatible.
+aad_manifest_cache_rulesig_compatible() {
+    _amcrc_sig="$1"; _amcrc_current="$2"
+    [ "$_amcrc_sig" = "$_amcrc_current" ] && return 0
+    # Migration from the legacy full-file cache hashes. The four Activity
+    # rule sections are unchanged across these releases.
+    if [ "$_amcrc_current" = "2393526744:3813" ]; then
+        case "$_amcrc_sig" in
+            62107431:15382|1443295594:15890) return 0 ;;
+        esac
+    fi
+    return 1
+}
+
+aad_apk_stat_signature() {
+    apk="$1"
+    stat_line=""
+    if command -v stat >/dev/null 2>&1; then
+        stat_line=$(stat -c '%s|%Y' "$apk" 2>/dev/null)
+    fi
+    if [ -z "$stat_line" ] && aad_have_bb; then
+        stat_line=$(aad_bb stat -c '%s|%Y' "$apk" 2>/dev/null)
+    fi
+    [ -n "$stat_line" ] || return 1
+    printf '%s|%s\n' "$apk" "$stat_line"
+}
+
+aad_manifest_cache_prefix() {
+    user="$1"; pkg="$2"; vc="$3"; apk="$4"
+    pkg_safe=$(printf '%s' "$pkg" | tr -c 'A-Za-z0-9._-' '_')
+    vc_safe=$(printf '%s' "$vc" | tr -c 'A-Za-z0-9._-' '_')
+    [ -n "$vc_safe" ] || vc_safe=unknown
+    apk_base=${apk##*/}
+    apk_safe=$(printf '%s' "$apk_base" | tr -c 'A-Za-z0-9._-' '_')
+    path_key=$(printf '%s' "$apk" | cksum 2>/dev/null | awk '{print $1 "_" $2}')
+    [ -n "$path_key" ] || path_key=path
+    cache_dir="$MANIFEST_CACHE_DIR/u$user/$pkg_safe/v$vc_safe"
+    printf '%s/%s.%s\n' "$cache_dir" "$apk_safe" "$path_key"
+}
+
+
+aad_manifest_cache_commit_file() {
+    src="$1"; dst="$2"
+    [ -f "$src" ] || return 1
+    tmp="$dst.tmp.$$"
+    cp "$src" "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    return 0
+}
+
+aad_manifest_cache_gc() {
+    state_file="$1"
+    [ -f "$state_file" ] || return 0
+    [ -d "$MANIFEST_CACHE_DIR" ] || return 0
+    removed=0
+    for udir in "$MANIFEST_CACHE_DIR"/u*; do
+        [ -d "$udir" ] || continue
+        uname=${udir##*/}
+        cache_user=${uname#u}
+        for pdir in "$udir"/*; do
+            [ -d "$pdir" ] || continue
+            cache_pkg=${pdir##*/}
+            for vdir in "$pdir"/v*; do
+                [ -d "$vdir" ] || continue
+                vname=${vdir##*/}
+                cache_vc=${vname#v}
+                if ! grep -Fxq -- "$cache_user|$cache_pkg|$cache_vc" "$state_file" 2>/dev/null; then
+                    rm -rf "$vdir" 2>/dev/null || true
+                    removed=$((removed + 1))
+                fi
+            done
+            rmdir "$pdir" 2>/dev/null || true
+        done
+        rmdir "$udir" 2>/dev/null || true
+    done
+    log "MANIFEST-CACHE-GC removed_versions=$removed dir=$MANIFEST_CACHE_DIR"
+    return 0
+}
+
+get_manifest_activity_candidates() {
+    user="$1"; pkg="$2"
+    mode=$(read_component_mode)
+    backend=$(read_component_backend)
+    # Activity blocking is actionable only in AGGRESSIVE PM or HYBRID.
+    [ "$mode" = "AGGRESSIVE" ] || [ "$backend" = "HYBRID" ] || return 0
+
+    paths=$(cap_package_paths_readonly "$user" "$pkg")
+    if [ -z "$paths" ]; then
+        log "MANIFEST-PATH-MISS u$user: $pkg direct_and_inventory_empty=yes"
+        [ -n "${AAD_MANIFEST_STATS_FILE:-}" ] && printf '%s|%s|%s|-|path-miss|UNKNOWN|0|0|0|0|0|0|BYPASS\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" >> "$AAD_MANIFEST_STATS_FILE"
+        return 0
+    fi
+
+    axml=$(aad_mktemp_near "$DATA_DIR/.manifest_axml")
+    classes=$(aad_mktemp_near "$DATA_DIR/.manifest_classes")
+    meta=$(aad_mktemp_near "$DATA_DIR/.manifest_meta")
+    verified_tmp=$(aad_mktemp_near "$DATA_DIR/.manifest_verified")
+    [ -n "$axml" ] && [ -n "$classes" ] && [ -n "$meta" ] && [ -n "$verified_tmp" ] || {
+        [ -n "$axml" ] && rm -f "$axml" 2>/dev/null
+        [ -n "$classes" ] && rm -f "$classes" 2>/dev/null
+        [ -n "$meta" ] && rm -f "$meta" 2>/dev/null
+        [ -n "$verified_tmp" ] && rm -f "$verified_tmp" 2>/dev/null
+        return 0
+    }
+
+    while IFS= read -r apk; do
+        [ -n "$apk" ] || continue
+        if [ ! -f "$apk" ]; then
+            log "MANIFEST-PATH-INACCESSIBLE u$user: $pkg apk=$apk"
+            [ -n "${AAD_MANIFEST_STATS_FILE:-}" ] && printf '%s|%s|%s|%s|path-inaccessible|UNKNOWN|0|0|0|0|0|0|BYPASS\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" "$apk" >> "$AAD_MANIFEST_STATS_FILE"
+            continue
+        fi
+
+        : > "$axml"; : > "$classes"; : > "$meta"; : > "$verified_tmp"
+        cache_state=MISS
+        cache_prefix=""
+        apk_sig=""
+        vc_now="${AAD_CURRENT_VERSION_CODE:-unknown}"
+        rules_hash="${AAD_MANIFEST_RULES_HASH:-}"
+        [ -n "$rules_hash" ] || rules_hash=$(aad_manifest_rules_hash)
+
+        if [ "${AAD_MANIFEST_CACHE_ENABLED:-0}" = "1" ]; then
+            apk_sig=$(aad_apk_stat_signature "$apk" 2>/dev/null)
+            cache_prefix=$(aad_manifest_cache_prefix "$user" "$pkg" "$vc_now" "$apk")
+            if [ -n "$apk_sig" ] && [ -n "$cache_prefix" ] && \
+               [ -f "$cache_prefix.sig" ] && [ -f "$cache_prefix.meta" ] && [ -f "$cache_prefix.classes" ] && \
+               [ "$(cat "$cache_prefix.sig" 2>/dev/null)" = "$apk_sig" ]; then
+                cp "$cache_prefix.classes" "$classes" 2>/dev/null || : > "$classes"
+                cp "$cache_prefix.meta" "$meta" 2>/dev/null || : > "$meta"
+                if [ -s "$classes" ] && [ -s "$meta" ]; then
+                    cache_state=PARSE_HIT
+                fi
+            fi
+        fi
+
+        if [ "$cache_state" = "MISS" ]; then
+            if ! extract_compiled_manifest_readonly "$apk" "$axml"; then
+                [ -n "$AAD_MANIFEST_STATS_FILE" ] && printf '%s|%s|%s|%s|extract-failed|UNKNOWN|0|0|0|0|0|0|MISS\n' \
+                    "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" "$apk" >> "$AAD_MANIFEST_STATS_FILE"
+                continue
+            fi
+
+            manifest_class_strings "$axml" "$meta" > "$classes"
+
+            if [ "${AAD_MANIFEST_CACHE_ENABLED:-0}" = "1" ] && [ -n "$cache_prefix" ] && [ -n "$apk_sig" ] && [ -s "$meta" ]; then
+                cache_dir=${cache_prefix%/*}
+                mkdir -p "$cache_dir" 2>/dev/null
+                chmod 700 "$MANIFEST_CACHE_DIR" "$MANIFEST_CACHE_DIR/u$user" "$MANIFEST_CACHE_DIR/u$user/$(printf '%s' "$pkg" | tr -c 'A-Za-z0-9._-' '_')" "$cache_dir" 2>/dev/null || true
+                printf '%s\n' "$apk_sig" > "$cache_prefix.sig.tmp.$$" 2>/dev/null
+                chmod 600 "$cache_prefix.sig.tmp.$$" 2>/dev/null || true
+                mv -f "$cache_prefix.sig.tmp.$$" "$cache_prefix.sig" 2>/dev/null || rm -f "$cache_prefix.sig.tmp.$$" 2>/dev/null
+                aad_manifest_cache_commit_file "$meta" "$cache_prefix.meta" >/dev/null 2>&1 || true
+                aad_manifest_cache_commit_file "$classes" "$cache_prefix.classes" >/dev/null 2>&1 || true
+                rm -f "$cache_prefix.rulesig" "$cache_prefix.hitstats" "$cache_prefix.verified" 2>/dev/null
+            fi
+        fi
+
+        meta_line=$(cat "$meta" 2>/dev/null)
+        parser=$(printf '%s\n' "$meta_line" | sed -n 's/.*parser=\([^|]*\).*/\1/p')
+        encoding=$(printf '%s\n' "$meta_line" | sed -n 's/.*encoding=\([^|]*\).*/\1/p')
+        string_count=$(printf '%s\n' "$meta_line" | sed -n 's/.*strings=\([0-9][0-9]*\).*/\1/p')
+        token_count=$(printf '%s\n' "$meta_line" | sed -n 's/.*tokens=\([0-9][0-9]*\).*/\1/p')
+        valid=$(printf '%s\n' "$meta_line" | sed -n 's/.*valid=\([01]\).*/\1/p')
+        [ -n "$parser" ] || parser=unknown
+        [ -n "$encoding" ] || encoding=UNKNOWN
+        [ -n "$string_count" ] || string_count=0
+        [ -n "$token_count" ] || token_count=0
+        [ -n "$valid" ] || valid=0
+
+        # Fingerprints are cheap to regenerate from cached class tokens and stay
+        # current when the module's SDK classifier changes.
+        manifest_sdk_fingerprints "$classes"
+
+        exact_hits=0
+        audit_hits=0
+        verified=0
+        verify_miss=0
+        use_verified_cache=0
+        if [ "$cache_state" = "PARSE_HIT" ] && [ -n "$cache_prefix" ] && \
+           [ -f "$cache_prefix.rulesig" ] && [ -f "$cache_prefix.hitstats" ] && [ -f "$cache_prefix.verified" ]; then
+            _am_cached_rulesig=$(cat "$cache_prefix.rulesig" 2>/dev/null)
+            if aad_manifest_cache_rulesig_compatible "$_am_cached_rulesig" "$rules_hash"; then
+                if [ "$_am_cached_rulesig" != "$rules_hash" ]; then
+                    printf '%s\n' "$rules_hash" > "$cache_prefix.rulesig.tmp.$$" 2>/dev/null
+                    chmod 600 "$cache_prefix.rulesig.tmp.$$" 2>/dev/null || true
+                    mv -f "$cache_prefix.rulesig.tmp.$$" "$cache_prefix.rulesig" 2>/dev/null || rm -f "$cache_prefix.rulesig.tmp.$$" 2>/dev/null
+                fi
+                hitstats=$(cat "$cache_prefix.hitstats" 2>/dev/null)
+            old_ifs=$IFS
+            IFS='|'
+            set -- $hitstats
+            IFS=$old_ifs
+            exact_hits=${1:-0}; audit_hits=${2:-0}; verified=${3:-0}; verify_miss=${4:-0}
+                case "$exact_hits:$audit_hits:$verified:$verify_miss" in
+                    *[!0-9:]*|'') use_verified_cache=0 ;;
+                    *) use_verified_cache=1 ;;
+                esac
+            fi
+        fi
+
+        if [ "$use_verified_cache" -eq 1 ]; then
+            cache_state=FULL_HIT
+            cached_verified=$(cat "$cache_prefix.verified" 2>/dev/null)
+            old_ifs=$IFS
+            IFS='
+'
+            for cls in $cached_verified; do
+                [ -n "$cls" ] && echo "ACTIVITY|$pkg/$cls"
+            done
+            IFS=$old_ifs
+        else
+            hit_snapshot=$(manifest_activity_rule_hits "$classes")
+            exact_hits=$(printf '%s\n' "$hit_snapshot" | awk -F'|' '$1=="EXACT"{n++} END{print n+0}')
+            audit_hits=$(printf '%s\n' "$hit_snapshot" | awk -F'|' '$1=="AUDIT"{n++} END{print n+0}')
+            verified=0
+            verify_miss=0
+            : > "$verified_tmp"
+
+            # Do not invoke PackageManager while stdin is backed by /data/adb.
+            # The hit list is kept in shell memory.
+            old_ifs=$IFS
+            IFS='
+'
+            for rec in $hit_snapshot; do
+                [ -n "$rec" ] || continue
+                hit=${rec%%|*}
+                cls=${rec#*|}
+                [ -n "$cls" ] || continue
+                comp="$pkg/$cls"
+                if cap_activity_component_exists "$user" "$comp"; then
+                    echo "ACTIVITY|$comp"
+                    printf '%s\n' "$cls" >> "$verified_tmp"
+                    verified=$((verified + 1))
+                else
+                    verify_miss=$((verify_miss + 1))
+                    [ "$hit" = "EXACT" ] && log "ACTIVITY-VERIFY-MISS u$user: $comp source=manifest-exact encoding=$encoding"
+                fi
+            done
+            IFS=$old_ifs
+
+            if [ "${AAD_MANIFEST_CACHE_ENABLED:-0}" = "1" ] && [ -n "$cache_prefix" ] && [ -n "$apk_sig" ] && [ -f "$cache_prefix.classes" ]; then
+                printf '%s\n' "$rules_hash" > "$cache_prefix.rulesig.tmp.$$" 2>/dev/null
+                printf '%s|%s|%s|%s\n' "$exact_hits" "$audit_hits" "$verified" "$verify_miss" > "$cache_prefix.hitstats.tmp.$$" 2>/dev/null
+                chmod 600 "$cache_prefix.rulesig.tmp.$$" "$cache_prefix.hitstats.tmp.$$" 2>/dev/null || true
+                mv -f "$cache_prefix.rulesig.tmp.$$" "$cache_prefix.rulesig" 2>/dev/null || rm -f "$cache_prefix.rulesig.tmp.$$" 2>/dev/null
+                mv -f "$cache_prefix.hitstats.tmp.$$" "$cache_prefix.hitstats" 2>/dev/null || rm -f "$cache_prefix.hitstats.tmp.$$" 2>/dev/null
+                aad_manifest_cache_commit_file "$verified_tmp" "$cache_prefix.verified" >/dev/null 2>&1 || true
+            fi
+        fi
+
+        if [ -n "$AAD_MANIFEST_STATS_FILE" ]; then
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" "$apk" \
+                "$parser" "$encoding" "$string_count" "$token_count" "$exact_hits" "$audit_hits" "$verified" "$verify_miss" "$cache_state" \
+                >> "$AAD_MANIFEST_STATS_FILE"
+        fi
+    done <<EOF
+$paths
+EOF
+
+    rm -f "$axml" "$classes" "$meta" "$verified_tmp" 2>/dev/null
+}
+
+# Typed candidate source: resolver tables + manifest-level Activity discovery.
+get_typed_component_candidates() {
+    user="$1"; pkg="$2"
+    {
+        aad_package_dump_cached "$pkg" | awk -v p="$pkg" '
+            function emit(line, kind,    rest, token, parts) {
+                rest=line
+                while (match(rest, /[A-Za-z0-9._$-]+\/[A-Za-z0-9._$-]+/)) {
+                    token=substr(rest,RSTART,RLENGTH)
+                    split(token,parts,"/")
+                    if (parts[1]==p) print kind "|" token
+                    rest=substr(rest,RSTART+RLENGTH)
+                }
+            }
+            /^[[:space:]]*Activity Resolver Table:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
+            /^[[:space:]]*Receiver Resolver Table:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
+            /^[[:space:]]*Service Resolver Table:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
+            /^[[:space:]]*Provider Resolver Table:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
+            /^[[:space:]]*Activities:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
+            /^[[:space:]]*Receivers:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
+            /^[[:space:]]*Services:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
+            /^[[:space:]]*Providers:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
+            /^[[:space:]]*Registered ContentProviders:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
+            /^[[:space:]]*ContentProvider Authorities:[[:space:]]*$/ {capture=0; next}
+            /^[[:space:]]*(Packages|Shared users|Queries|Dexopt state|Compiler stats):[[:space:]]*$/ {capture=0; next}
+            capture {emit($0,kind)}
+        '
+        get_manifest_activity_candidates "$user" "$pkg"
+    } | sort -u
+}
+
+# One candidate snapshot is cached per Android user/package for the whole scan.
 get_typed_component_candidates_cached() {
-    pkg="$1"
+    user="$1"; pkg="$2"
     if [ -n "$SCAN_CANDIDATE_CACHE_DIR" ] && [ -d "$SCAN_CANDIDATE_CACHE_DIR" ]; then
-        key=$(printf '%s' "$pkg" | cksum 2>/dev/null | awk '{print $1 "_" $2}')
-        [ -n "$key" ] || key=$(printf '%s' "$pkg" | tr '/ :' '___')
+        key=$(printf '%s' "$user|$pkg" | cksum 2>/dev/null | awk '{print $1 "_" $2}')
+        [ -n "$key" ] || key=$(printf '%s' "$user|$pkg" | tr '/ :|' '____')
         cache="$SCAN_CANDIDATE_CACHE_DIR/$key"
         if [ ! -f "$cache" ]; then
-            get_typed_component_candidates "$pkg" > "$cache.tmp.$$"
+            get_typed_component_candidates "$user" "$pkg" > "$cache.tmp.$$"
             mv "$cache.tmp.$$" "$cache" 2>/dev/null || cp "$cache.tmp.$$" "$cache" 2>/dev/null
             rm -f "$cache.tmp.$$"
         fi
         cat "$cache" 2>/dev/null
         return
     fi
-    get_typed_component_candidates "$pkg"
+    get_typed_component_candidates "$user" "$pkg"
+}
+
+# Literal rules are matched against the COMPONENT CLASS only, not against the
+# whole "package/class" string. Matching the full string meant a rule such as
+# `applovin` or `sentry` also fired on every component of any package whose own
+# name happened to contain that substring, which produced large false-positive
+# batches that only the MAX_MATCHES safety guard kept in check. Regex (`re:`)
+# rules still see the full component so existing anchored patterns keep working.
+component_rule_match_class() {
+    _crmc_comp="$1"
+    case "$_crmc_comp" in
+        */*)
+            _crmc_cls=${_crmc_comp#*/}
+            case "$_crmc_cls" in
+                .*) printf '%s%s\n' "${_crmc_comp%%/*}" "$_crmc_cls" ;;
+                *) printf '%s\n' "$_crmc_cls" ;;
+            esac
+            ;;
+        *) printf '%s\n' "$_crmc_comp" ;;
+    esac
 }
 
 component_matches_rule_section() {
     comp="$1"
     section="$2"
     [ -f "$RULES_FILE" ] || return 1
+    comp_cls=$(component_rule_match_class "$comp")
 
-    awk -v target="[$section]" -v component="$comp" '
-        BEGIN {inside=0; lc=tolower(component); found=0}
+    awk -v target="[$section]" -v component="$comp" -v cls="$comp_cls" '
+        BEGIN {inside=0; lc=tolower(cls); lcfull=tolower(component); found=0}
         {
             sub(/\r$/,"")
             if ($0==target) {inside=1; next}
@@ -716,7 +2948,7 @@ component_matches_rule_section() {
             if (line=="" || line ~ /^#/) next
             if (line ~ /^re:/) {
                 pat=substr(line,4)
-                if (component ~ pat || lc ~ tolower(pat)) found=1
+                if (component ~ pat || lcfull ~ tolower(pat)) found=1
             } else if (index(lc,tolower(line))>0) found=1
         }
         END {exit found ? 0 : 1}
@@ -728,7 +2960,11 @@ component_matches_disable_rule() {
     case "$kind" in
         SERVICE|RECEIVER)
             component_matches_rule_section "$comp" "${cat}_${kind}" && return 0
-            component_matches_rule_section "$comp" "$cat"
+            component_matches_rule_section "$comp" "$cat" && return 0
+            # Push-capable SDKs (OneSignal, Braze) are report-only unless the
+            # user explicitly accepts losing their notifications.
+            [ "$(read_bool_setting BLOCK_PUSH_SDK 0)" = "1" ] || return 1
+            component_matches_rule_section "$comp" "${cat}_PUSH_RISK"
             ;;
         PROVIDER)
             case "$mode" in
@@ -752,7 +2988,8 @@ component_matches_audit_rule() {
     case "$kind" in
         SERVICE|RECEIVER)
             component_matches_rule_section "$comp" "${cat}_${kind}" && return 0
-            component_matches_rule_section "$comp" "$cat"
+            component_matches_rule_section "$comp" "$cat" && return 0
+            component_matches_rule_section "$comp" "${cat}_PUSH_RISK"
             ;;
         PROVIDER)
             component_matches_rule_section "$comp" "${cat}_PROVIDER_SAFE" && return 0
@@ -773,16 +3010,71 @@ get_components_for_category() {
         return
     fi
     mode=$(read_component_mode)
-    get_typed_component_candidates_cached "$pkg" | while IFS='|' read -r kind comp; do
+    get_typed_component_candidates_cached "$user" "$pkg" | while IFS='|' read -r kind comp; do
         [ -z "$comp" ] && continue
         component_matches_disable_rule "$comp" "$cat" "$kind" "$mode" && echo "$comp"
     done
 }
 
+record_package_sdk_fingerprints() {
+    user="$1"; pkg="$2"; candidates="$3"; stamp="$4"
+    [ -n "$SDK_FINGERPRINT_FILE" ] && [ -f "$RULES_FILE" ] && [ -f "$candidates" ] || return 0
+
+    if [ "${AAD_AUDIT_FULL_SCAN:-0}" != "1" ] && [ "${AAD_AUDIT_ROWS_PRECLEANED:-0}" != "1" ] && [ -f "$SDK_FINGERPRINT_FILE" ]; then
+        fp_clean=$(aad_mktemp_near "$SDK_FINGERPRINT_FILE")
+        if [ -n "$fp_clean" ]; then
+            awk -F'|' -v u="$user" -v p="$pkg" 'NR==1 || !($2==u && $3==p)' "$SDK_FINGERPRINT_FILE" > "$fp_clean" 2>/dev/null \
+                && mv -f "$fp_clean" "$SDK_FINGERPRINT_FILE"
+            [ -f "$fp_clean" ] && rm -f "$fp_clean" 2>/dev/null
+        fi
+    fi
+
+    awk -F'|' -v target='[ADS_SDK_FINGERPRINT]' -v stamp="$stamp" -v user="$user" -v pkg="$pkg" '
+        BEGIN {OFS="|"}
+        FNR==NR {
+            line=$0
+            sub(/\r$/, "", line)
+            if (line==target) {inside=1; next}
+            if (inside && line ~ /^\[/) {inside=0}
+            if (!inside) next
+            sub(/^[ \t]+/,"",line); sub(/[ \t]+$/,"",line)
+            if (line=="" || line ~ /^#/) next
+            sep=index(line,"|")
+            if (!sep) next
+            label=substr(line,1,sep-1)
+            pattern=substr(line,sep+1)
+            sub(/^[ \t]+/,"",label); sub(/[ \t]+$/,"",label)
+            sub(/^[ \t]+/,"",pattern); sub(/[ \t]+$/,"",pattern)
+            if (label!="" && pattern!="") {
+                labels[++n]=label
+                patterns[n]=tolower(pattern)
+            }
+            next
+        }
+        {
+            kind=$1
+            if (kind=="SDK") {
+                label=$2
+                evidence=$3
+                if (label!="" && !seen[label]++) print stamp,user,pkg,"ADS",label,evidence
+                next
+            }
+            evidence=$2
+            lc=tolower(evidence)
+            for (i=1; i<=n; i++) {
+                if (!seen[labels[i]] && index(lc,patterns[i])>0) {
+                    print stamp,user,pkg,"ADS",labels[i],evidence
+                    seen[labels[i]]=1
+                }
+            }
+        }
+    ' "$RULES_FILE" "$candidates" >> "$SDK_FINGERPRINT_FILE"
+}
+
 record_package_audit() {
     user="$1"; pkg="$2"; mode=$(read_component_mode)
     [ -n "$COMPONENT_AUDIT_FILE" ] || return 0
-    if [ "${AAD_AUDIT_FULL_SCAN:-0}" != "1" ] && [ -f "$COMPONENT_AUDIT_FILE" ]; then
+    if [ "${AAD_AUDIT_FULL_SCAN:-0}" != "1" ] && [ "${AAD_AUDIT_ROWS_PRECLEANED:-0}" != "1" ] && [ -f "$COMPONENT_AUDIT_FILE" ]; then
         audit_clean=$(aad_mktemp_near "$COMPONENT_AUDIT_FILE")
         if [ -n "$audit_clean" ]; then
             awk -F'|' -v u="$user" -v p="$pkg" 'NR==1 || !($2==u && $3==p)' "$COMPONENT_AUDIT_FILE" > "$audit_clean" 2>/dev/null && mv -f "$audit_clean" "$COMPONENT_AUDIT_FILE"
@@ -791,7 +3083,7 @@ record_package_audit() {
     fi
     candidates=$(aad_mktemp_near "$DATA_DIR/.audit_candidates")
     [ -n "$candidates" ] || return 1
-    get_typed_component_candidates_cached "$pkg" > "$candidates"
+    get_typed_component_candidates_cached "$user" "$pkg" > "$candidates"
     block_ads=$(read_bool_setting BLOCK_ADS 1)
     block_analytics=$(read_bool_setting BLOCK_ANALYTICS 1)
     global_white=0; ads_white=0; analytics_white=0
@@ -801,19 +3093,30 @@ record_package_audit() {
     audit_time=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
 
     backend=$(read_component_backend)
+    block_push=$(read_bool_setting BLOCK_PUSH_SDK 0)
     awk -F'|' -v user="$user" -v pkg="$pkg" -v mode="$mode" -v backend="$backend" -v stamp="$audit_time" \
-        -v block_ads="$block_ads" -v block_analytics="$block_analytics" \
+        -v block_ads="$block_ads" -v block_analytics="$block_analytics" -v block_push="$block_push" \
         -v global_white="$global_white" -v ads_white="$ads_white" -v analytics_white="$analytics_white" '
         BEGIN {OFS="|"}
         function trim(s) {sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s}
-        function section_match(section, component,    i,rule,pattern,lower_component) {
+        # Mirrors component_rule_match_class(): literal rules see the class only,
+        # regex rules still see the whole package/class component name.
+        function match_class(component,    slash,cls) {
+            slash=index(component,"/")
+            if (slash==0) return component
+            cls=substr(component,slash+1)
+            if (substr(cls,1,1)==".") return substr(component,1,slash-1) cls
+            return cls
+        }
+        function section_match(section, component,    i,rule,pattern,lower_class,lower_component) {
+            lower_class=tolower(match_class(component))
             lower_component=tolower(component)
             for (i=1; i<=rule_count[section]; i++) {
                 rule=rules[section,i]
                 if (substr(rule,1,3)=="re:") {
                     pattern=substr(rule,4)
                     if (component ~ pattern || lower_component ~ tolower(pattern)) return 1
-                } else if (index(lower_component,tolower(rule))>0) return 1
+                } else if (index(lower_class,tolower(rule))>0) return 1
             }
             return 0
         }
@@ -842,6 +3145,8 @@ record_package_audit() {
                     category=(ci==1 ? "ADS" : "ANALYTICS")
                     if (section_match(category "_" kind,component) || section_match(category,component))
                         emit(category,kind,component,"SAFE","DISABLE")
+                    else if (section_match(category "_PUSH_RISK",component))
+                        emit(category,kind,component,"PUSH_RISK",(block_push==1 ? "DISABLE" : "REPORT_ONLY"))
                 }
             } else if (kind=="PROVIDER") {
                 for (ci=1; ci<=2; ci++) {
@@ -857,7 +3162,9 @@ record_package_audit() {
                 for (ci=1; ci<=2; ci++) {
                     category=(ci==1 ? "ADS" : "ANALYTICS")
                     if (section_match(category "_ACTIVITY_IFW",component)) {
-                        if (backend=="HYBRID")
+                        if (backend=="HYBRID" && mode=="AGGRESSIVE")
+                            emit(category,kind,component,"HYBRID","DISABLE")
+                        else if (backend=="HYBRID")
                             emit(category,kind,component,"HYBRID","IFW_BLOCK")
                         else
                             emit(category,kind,component,"AGGRESSIVE",(mode=="AGGRESSIVE" ? "DISABLE" : "REPORT_ONLY"))
@@ -869,6 +3176,7 @@ record_package_audit() {
         }
     ' "$RULES_FILE" "$candidates" >> "$COMPONENT_AUDIT_FILE"
     rc=$?
+    record_package_sdk_fingerprints "$user" "$pkg" "$candidates" "$audit_time"
     rm -f "$candidates" 2>/dev/null
     return "$rc"
 }
@@ -963,13 +3271,14 @@ reconcile_owned_ifw_rules() {
     ifw_filter_global_candidates "$services_raw" "$managed_pairs" "$installed" "$services"
 
     # Activity разрешаются только отдельными точными правилами и с лимитом на пакет/категорию.
-    # Because activities are IFW-only, user agreement comes from the audit plan
-    # rather than PM membership records.
-    awk -F'|' 'FNR>1 && $2!="" && $7=="IFW_BLOCK" {print $2 "|" $8}' \
+    # HYBRID+AGGRESSIVE duplicates exact fullscreen Activity blocking with PM+IFW;
+    # other HYBRID modes remain IFW-only for Activities. Global IFW agreement comes
+    # from the audit plan because IFW itself is not per-user.
+    awk -F'|' 'FNR>1 && $2!="" && $5=="ACTIVITY" && ($7=="IFW_BLOCK" || ($7=="DISABLE" && $6=="HYBRID")) {print $2 "|" $8}' \
         "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activity_pairs"
     ifw_limit=$(read_ifw_activity_limit)
     awk -F'|' -v limit="$ifw_limit" '
-        FNR>1 && $5=="ACTIVITY" && $7=="IFW_BLOCK" {
+        FNR>1 && $5=="ACTIVITY" && ($7=="IFW_BLOCK" || ($7=="DISABLE" && $6=="HYBRID")) {
             group=$3 "|" $4
             pair=group "|" $8
             if (!seen[pair]++) {
@@ -1210,6 +3519,10 @@ process_package_user() {
         return 1
     fi
     : > "$desired"
+    # One PackageManager dump is reused for this package only; the cache is
+    # bounded to the package currently being reconciled.
+    aad_package_dump_cache_reset
+    # Ad Surface indexing runs in a separate read-only worker after policy is ready.
     AAD_PACKAGE_AUDIT_READY=0
     record_package_audit "$user" "$pkg" && AAD_PACKAGE_AUDIT_READY=1
 
@@ -1229,8 +3542,18 @@ process_package_user() {
             [ -z "$comps" ] && continue
             count=$(printf '%s\n' "$comps" | grep -c .)
             max=$(read_max_matches)
+            mode_now=$(read_component_mode)
+            if [ "$cat" = "ADS" ] && [ "$mode_now" = "AGGRESSIVE" ]; then
+                max=$(read_aggressive_ads_max_matches)
+            fi
             if [ "$count" -gt "$max" ]; then
-                log "SAFETY ($cat) u$user $pkg: $count matches > $max; category skipped."
+                # Safety must be fail-safe for state: preserve existing memberships for
+                # this category instead of interpreting the guard as policy removal.
+                frozen=$(awk -F'|' -v u="$user" -v p="$pkg/" -v k="$cat" '$1==u && $3==k && index($2,p)==1 {print $1 "|" $2 "|" $3}' "$DISABLED_LIST" 2>/dev/null)
+                [ -n "$frozen" ] && printf '%s\n' "$frozen" >> "$desired"
+                frozen_count=$(printf '%s\n' "$frozen" | grep -c . 2>/dev/null)
+                [ -n "$frozen" ] || frozen_count=0
+                log "SAFETY-FREEZE ($cat) u$user $pkg: $count matches > $max; preserved=$frozen_count new mutations skipped."
                 continue
             fi
             printf '%s\n' "$comps" | while IFS= read -r comp; do
@@ -1319,7 +3642,7 @@ process_package_all_users() {
 }
 
 cleanup_stale_records() {
-    [ -f "$DISABLED_LIST" ] || return
+    [ -f "$DISABLED_LIST" ] || return 0
     installed_keys="${1:-}"
     own_snapshot=0
     if [ -z "$installed_keys" ] || [ ! -f "$installed_keys" ]; then
@@ -1328,20 +3651,84 @@ cleanup_stale_records() {
         own_snapshot=1
     fi
 
-    tmp="$DISABLED_LIST.tmp.$$"
+    # SAFETY: an empty package snapshot is a PackageManager failure, never proof
+    # that every managed package was uninstalled. Without this guard a single
+    # unavailable Binder call wiped both the membership DB and the saved original
+    # override states, leaving every component disabled with nothing to roll back
+    # to. reconcile_owned_ifw_rules already refuses to act on an empty snapshot;
+    # the state DB must be at least as careful.
+    if [ ! -s "$installed_keys" ]; then
+        log "STALE-SKIP: installed-package snapshot is empty (PackageManager unavailable); membership/state DB left untouched."
+        [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
+        return 0
+    fi
+
+    aad_db_lock "$MEMBERSHIP_DB_LOCK" || {
+        log "MEMBERSHIP-LOCK-FAILED stale-cleanup"
+        [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
+        return 1
+    }
+    tmp=$(aad_mktemp_near "$DISABLED_LIST")
+    if [ -z "$tmp" ]; then
+        aad_db_unlock "$MEMBERSHIP_DB_LOCK"
+        [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
+        return 1
+    fi
     : > "$tmp"
-    while IFS='|' read -r user comp cat; do
-        [ -z "$comp" ] && continue
+    stale_dropped=0
+    # The record list is read from a copy in memory so no /data/adb descriptor
+    # stays attached while remove_state_record runs PackageManager-adjacent work.
+    stale_records=$(cat "$DISABLED_LIST" 2>/dev/null)
+    old_ifs=$IFS
+    IFS='
+'
+    for stale_line in $stale_records; do
+        [ -n "$stale_line" ] || continue
+        user=${stale_line%%|*}
+        rest=${stale_line#*|}
+        comp=${rest%%|*}
+        cat=${rest#*|}
+        [ -n "$comp" ] || continue
         pkg=${comp%%/*}
         if grep -Fxq -- "$user|$pkg" "$installed_keys" 2>/dev/null; then
-            echo "$user|$comp|$cat" >> "$tmp"
+            printf '%s|%s|%s\n' "$user" "$comp" "$cat" >> "$tmp"
         else
             log "STALE: dropping record u$user $comp ($cat); package truly absent from installed snapshot."
-            remove_state_record "$user" "$comp"
+            stale_dropped=$((stale_dropped + 1))
         fi
-    done < "$DISABLED_LIST"
-    mv "$tmp" "$DISABLED_LIST"
+    done
+    IFS=$old_ifs
+
+    if ! mv -f "$tmp" "$DISABLED_LIST" 2>/dev/null; then
+        log "MEMBERSHIP-COMMIT-FAILED stale-cleanup temp=$tmp"
+        rm -f "$tmp" 2>/dev/null
+        aad_db_unlock "$MEMBERSHIP_DB_LOCK"
+        [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
+        return 1
+    fi
+    aad_db_unlock "$MEMBERSHIP_DB_LOCK"
+
+    # State records are dropped only after the membership commit succeeded.
+    if [ "$stale_dropped" -gt 0 ] && [ -f "$COMPONENT_STATE" ]; then
+        state_records=$(cat "$COMPONENT_STATE" 2>/dev/null)
+        old_ifs=$IFS
+        IFS='
+'
+        for state_line in $state_records; do
+            [ -n "$state_line" ] || continue
+            suser=${state_line%%|*}
+            srest=${state_line#*|}
+            scomp=${srest%%|*}
+            [ -n "$scomp" ] || continue
+            spkg=${scomp%%/*}
+            grep -Fxq -- "$suser|$spkg" "$installed_keys" 2>/dev/null && continue
+            remove_state_record "$suser" "$scomp"
+        done
+        IFS=$old_ifs
+    fi
+    log "STALE-CLEANUP dropped=$stale_dropped snapshot_entries=$(grep -c . "$installed_keys" 2>/dev/null)"
     [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
+    return 0
 }
 
 retry_orphan_restores() {
@@ -1445,15 +3832,37 @@ reconcile_whitelist_delta_locked() {
     fi
 
     log "CONFIG-DELTA: whitelist package changes=$count; reconciling affected packages only."
+    # Strip audit/fingerprint rows for every affected package in ONE pass. The
+    # per-package cleanup inside record_package_audit rewrote the whole log for
+    # each package, which is quadratic once the audit has thousands of rows.
+    for _cdl_file in "$COMPONENT_AUDIT_FILE" "$SDK_FINGERPRINT_FILE"; do
+        [ -f "$_cdl_file" ] || continue
+        _cdl_tmp=$(aad_mktemp_near "$_cdl_file")
+        [ -n "$_cdl_tmp" ] || continue
+        if awk -F'|' -v pf="$changed" '
+                BEGIN {while ((getline line < pf) > 0) if (line != "") drop[line]=1; close(pf)}
+                NR==1 {print; next}
+                !($3 in drop) {print}
+            ' "$_cdl_file" > "$_cdl_tmp" 2>/dev/null; then
+            chmod 600 "$_cdl_tmp" 2>/dev/null || true
+            mv -f "$_cdl_tmp" "$_cdl_file" 2>/dev/null || rm -f "$_cdl_tmp" 2>/dev/null
+        else
+            rm -f "$_cdl_tmp" 2>/dev/null
+        fi
+    done
+    AAD_AUDIT_ROWS_PRECLEANED=1
+    export AAD_AUDIT_ROWS_PRECLEANED
+
     while IFS= read -r pkg; do
         [ -z "$pkg" ] && continue
         log "CONFIG-DELTA package=$pkg global=$(is_globally_whitelisted "$pkg" && echo yes || echo no) ads=$(is_category_whitelisted "$pkg" ADS && echo yes || echo no) analytics=$(is_category_whitelisted "$pkg" ANALYTICS && echo yes || echo no)"
         process_package_all_users "$pkg" "$installed_snapshot" >/dev/null
         rc=$?
         log "CONFIG-DELTA package=$pkg complete rc=$rc"
-        [ "$rc" -eq 2 ] && { rm -f "$changed" "$installed_snapshot" 2>/dev/null; return 2; }
+        [ "$rc" -eq 2 ] && { rm -f "$changed" "$installed_snapshot" 2>/dev/null; unset AAD_AUDIT_ROWS_PRECLEANED; return 2; }
     done < "$changed"
     rm -f "$changed" "$installed_snapshot" 2>/dev/null
+    unset AAD_AUDIT_ROWS_PRECLEANED
     reconcile_owned_ifw_rules || {
         log "CONFIG-DELTA: IFW reconciliation failed."
         return 1
@@ -1514,10 +3923,13 @@ reconcile_config_if_changed() {
         compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
     fi
     release_lock
+    [ "$rc" -eq 0 ] && reconcile_ad_surface_killer "config:$reason" >/dev/null 2>&1 || true
+    [ "$rc" -eq 0 ] && launch_ad_surface_indexer_bg "config:$reason" >/dev/null 2>&1 || true
     return "$rc"
 }
 
 full_rescan_locked() {
+    AAD_TIMING_TOTAL_START=$(aad_now_ms)
     # Build one authoritative all-package snapshot first. Stale cleanup must not
     # use PackageManager's flaky per-package filter on some Android 16 ROMs.
     installed_keys="$DATA_DIR/.installed_keys.$$"
@@ -1531,6 +3943,19 @@ full_rescan_locked() {
     aborted=0
     printf 'timestamp|user|package|category|type|risk|action|component\n' > "$COMPONENT_AUDIT_FILE" 2>/dev/null
     chmod 600 "$COMPONENT_AUDIT_FILE" 2>/dev/null
+    printf 'timestamp|user|package|category|sdk|evidence\n' > "$SDK_FINGERPRINT_FILE" 2>/dev/null
+    chmod 600 "$SDK_FINGERPRINT_FILE" 2>/dev/null
+    printf 'timestamp|user|package|apk|parser|encoding|strings|class_tokens|exact_hits|audit_hits|verified|verify_miss|cache\n' > "$MANIFEST_SCAN_FILE" 2>/dev/null
+    chmod 600 "$MANIFEST_SCAN_FILE" 2>/dev/null
+    AAD_MANIFEST_STATS_FILE="$MANIFEST_SCAN_FILE"
+    export AAD_MANIFEST_STATS_FILE
+    AAD_MANIFEST_CACHE_ENABLED=1
+    AAD_MANIFEST_RULES_HASH=$(aad_manifest_rules_hash)
+    export AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH
+    mkdir -p "$MANIFEST_CACHE_DIR" 2>/dev/null
+    chmod 700 "$MANIFEST_CACHE_DIR" 2>/dev/null || true
+    aad_manifest_cache_gc "$new_state"
+    log "MANIFEST-CACHE enabled schema=v1 rules_hash=$AAD_MANIFEST_RULES_HASH dir=$MANIFEST_CACHE_DIR"
     AAD_AUDIT_FULL_SCAN=1
     export AAD_AUDIT_FULL_SCAN
 
@@ -1543,17 +3968,32 @@ full_rescan_locked() {
     scan_total=$(grep -c '|' "$new_state" 2>/dev/null)
     [ -n "$scan_total" ] || scan_total=0
 
+    AAD_APK_PATH_CACHE="$DATA_DIR/.apk_paths.$$"
+    export AAD_APK_PATH_CACHE
+    AAD_TIMING_INVENTORY_START=$(aad_now_ms)
+    if build_apk_path_inventory "$AAD_APK_PATH_CACHE"; then
+        apk_inventory_count=$(grep -c '|' "$AAD_APK_PATH_CACHE" 2>/dev/null); [ -n "$apk_inventory_count" ] || apk_inventory_count=0
+        log "MANIFEST-PATH-INVENTORY entries=$apk_inventory_count file=$AAD_APK_PATH_CACHE"
+    else
+        : > "$AAD_APK_PATH_CACHE" 2>/dev/null
+        log "MANIFEST-PATH-INVENTORY failed; per-package path fallback remains active"
+    fi
+    AAD_TIMING_INVENTORY_END=$(aad_now_ms)
+
     SCAN_CANDIDATE_CACHE_DIR="$DATA_DIR/.scan_candidates.$$"
     export SCAN_CANDIDATE_CACHE_DIR
     rm -rf "$SCAN_CANDIDATE_CACHE_DIR" 2>/dev/null
     mkdir -p "$SCAN_CANDIDATE_CACHE_DIR" 2>/dev/null
 
     [ "$AAD_SHOW_PROGRESS" = "1" ] && echo "Packages/users to check: $scan_total"
+    AAD_TIMING_PACKAGE_START=$(aad_now_ms)
 
     while IFS='|' read -r user pkg vc; do
         [ -z "$pkg" ] && continue
         processed=$((processed + 1))
         [ "$AAD_SHOW_PROGRESS" = "1" ] && echo "[$processed/$scan_total] u$user $pkg"
+        AAD_CURRENT_VERSION_CODE="$vc"
+        export AAD_CURRENT_VERSION_CODE
         n=$(process_package_user "$user" "$pkg")
         rc=$?
         case "$n" in ''|*[!0-9]*) n=0 ;; esac
@@ -1563,12 +4003,26 @@ full_rescan_locked() {
             break
         fi
     done < "$new_state"
+    AAD_TIMING_PACKAGE_END=$(aad_now_ms)
 
     rm -rf "$SCAN_CANDIDATE_CACHE_DIR" 2>/dev/null
     unset SCAN_CANDIDATE_CACHE_DIR
+    aad_package_dump_cache_reset
+    rm -f "$AAD_APK_PATH_CACHE" 2>/dev/null
+    unset AAD_APK_PATH_CACHE
     unset AAD_AUDIT_FULL_SCAN
+    unset AAD_MANIFEST_STATS_FILE
+    unset AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH AAD_CURRENT_VERSION_CODE
     rm -f "$AAD_FAIL_FAST_STATE" 2>/dev/null
-    mv "$new_state" "$STATE_FILE"
+    # Never let a failed enumeration overwrite the package-state baseline: an
+    # empty file would make the next incremental pass treat every package as
+    # changed and re-run the whole reconciliation.
+    if [ -s "$new_state" ]; then
+        mv -f "$new_state" "$STATE_FILE"
+    else
+        rm -f "$new_state" 2>/dev/null
+        log "PACKAGE-STATE-SKIP: enumeration returned no packages; previous baseline preserved."
+    fi
 
     if [ "$aborted" -eq 1 ]; then
         rm -f "$AAD_FAIL_FAST_ABORT" 2>/dev/null
@@ -1581,11 +4035,13 @@ full_rescan_locked() {
 
     rm -f "$AAD_FAIL_FAST_ABORT" 2>/dev/null
     unset AAD_FAIL_FAST_STATE AAD_FAIL_FAST_ABORT
+    AAD_TIMING_IFW_START=$(aad_now_ms)
     if ! reconcile_owned_ifw_rules; then
         rm -f "$installed_keys" 2>/dev/null
         log "FULL-SCAN: IFW reconciliation failed."
         return 1
     fi
+    AAD_TIMING_IFW_END=$(aad_now_ms)
     compute_config_hash > "$CONFIG_HASH_FILE"
     compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
     rm -f "$installed_keys" 2>/dev/null
@@ -1604,6 +4060,27 @@ full_rescan_locked() {
         }
     ' "$COMPONENT_AUDIT_FILE" 2>/dev/null)
     log "AUDIT-SUMMARY mode=$(read_component_mode) backend=$(read_component_backend) $audit_summary file=$COMPONENT_AUDIT_FILE"
+    sdk_summary=$(awk -F'|' 'NR>1 {detections++; packages[$2 "|" $3]=1; sdks[$5]=1} END {pc=0; sc=0; for (k in packages) pc++; for (k in sdks) sc++; printf "detections=%d packages/users=%d sdk_types=%d", detections+0, pc, sc}' "$SDK_FINGERPRINT_FILE" 2>/dev/null)
+    log "SDK-SUMMARY $sdk_summary file=$SDK_FINGERPRINT_FILE"
+    manifest_summary=$(awk -F'|' 'NR>1 {
+        packages[$2 "|" $3]=1;
+        if ($5=="path-miss") {pathmiss++; next}
+        apks++;
+        if ($5=="path-inaccessible") {inaccessible++; failed++; next}
+        if ($5=="extract-failed") {extractfail++; failed++; next}
+        scanned++; enc[$6]++; strings+=$7; tokens+=$8; exact+=$9; audit+=$10; verified+=$11; miss+=$12; cache[$13]++;
+        if ($6=="UNKNOWN") failed++;
+    } END {
+        pc=0; for (k in packages) pc++;
+        printf "packages/users=%d apks_seen=%d apks_processed=%d apks_parsed=%d utf8=%d utf16=%d text=%d path_miss=%d inaccessible=%d extract_failed=%d failed=%d strings=%d class_tokens=%d exact_hits=%d audit_hits=%d verified=%d verify_miss=%d cache_full_hit=%d cache_parse_hit=%d cache_miss=%d", pc, apks+0, scanned+0, cache["MISS"]+0, enc["UTF8"]+0, enc["UTF16"]+0, enc["TEXT"]+0, pathmiss+0, inaccessible+0, extractfail+0, failed+0, strings+0, tokens+0, exact+0, audit+0, verified+0, miss+0, cache["FULL_HIT"]+0, cache["PARSE_HIT"]+0, cache["MISS"]+0
+    }' "$MANIFEST_SCAN_FILE" 2>/dev/null)
+    log "MANIFEST-SUMMARY $manifest_summary file=$MANIFEST_SCAN_FILE"
+    AAD_TIMING_TOTAL_END=$(aad_now_ms)
+    timing_inventory=$(aad_elapsed_ms "$AAD_TIMING_INVENTORY_START" "$AAD_TIMING_INVENTORY_END")
+    timing_packages=$(aad_elapsed_ms "$AAD_TIMING_PACKAGE_START" "$AAD_TIMING_PACKAGE_END")
+    timing_ifw=$(aad_elapsed_ms "$AAD_TIMING_IFW_START" "$AAD_TIMING_IFW_END")
+    timing_total=$(aad_elapsed_ms "$AAD_TIMING_TOTAL_START" "$AAD_TIMING_TOTAL_END")
+    log "TIMING-SUMMARY inventory_ms=$timing_inventory package_reconcile_ms=$timing_packages ifw_ms=$timing_ifw total_ms=$timing_total"
     log "FULL-SCAN finished: packages/users=$processed operations=$total"
     [ "$AAD_SHOW_PROGRESS" = "1" ] && echo "Scan complete: $processed checked, $total policy operations."
     return 0
@@ -1612,28 +4089,87 @@ full_rescan_locked() {
 full_rescan() {
     acquire_lock || { log "LOCK timeout: full rescan skipped"; return 1; }
     full_rescan_locked
+    _fr_rc=$?
+    # release_lock is an `rm -rf` and always succeeds; without capturing the rc
+    # first this function reported success for every failed or fail-fast scan,
+    # which silently hid boot-scan failures and made the Action fail-fast
+    # summary unreachable.
     release_lock
+    return "$_fr_rc"
 }
 
 rescan_changed_packages_locked() {
     current="$DATA_DIR/package_state.current.$$"
+    old_count=$(grep -c '|' "$STATE_FILE" 2>/dev/null); [ -n "$old_count" ] || old_count=0
     list_all_package_state > "$current"
+    new_count=$(grep -c '|' "$current" 2>/dev/null); [ -n "$new_count" ] || new_count=0
+    AAD_PACKAGE_CHANGES=0
+    # Same fail-safe as the full scan: an empty enumeration is a PM failure.
+    if [ ! -s "$current" ]; then
+        rm -f "$current" 2>/dev/null
+        log "PACKAGE-DELTA-SKIP: enumeration returned no packages; nothing reconciled."
+        return 0
+    fi
+
+    # A freshly installed package is the exact case where the per-package
+    # `cmd package path` query is least reliable: PackageManager has already
+    # published the package to `list packages` while the path query can still
+    # return empty for a short window. Without the authoritative
+    # `list packages -f` inventory the delta path logged MANIFEST-PATH-MISS and
+    # silently skipped AXML Activity discovery for the new app until the next
+    # full scan, so in AGGRESSIVE its exact ad Activities stayed unblocked.
+    AAD_APK_PATH_CACHE="$DATA_DIR/.apk_paths.delta.$$"
+    export AAD_APK_PATH_CACHE
+    if build_apk_path_inventory "$AAD_APK_PATH_CACHE"; then
+        log "PACKAGE-DELTA path inventory entries=$(grep -c '|' "$AAD_APK_PATH_CACHE" 2>/dev/null)"
+    else
+        : > "$AAD_APK_PATH_CACHE" 2>/dev/null
+    fi
+    AAD_MANIFEST_CACHE_ENABLED=1
+    AAD_MANIFEST_RULES_HASH=$(aad_manifest_rules_hash)
+    export AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH
+    [ "$old_count" -ne "$new_count" ] 2>/dev/null && AAD_PACKAGE_CHANGES=1
 
     while IFS='|' read -r user pkg vc; do
         [ -z "$pkg" ] && continue
         if ! grep -Fxq -- "$user|$pkg|$vc" "$STATE_FILE" 2>/dev/null; then
+            AAD_PACKAGE_CHANGES=$((AAD_PACKAGE_CHANGES + 1))
             log "PACKAGE-CHANGE u$user: $pkg ($vc)"
+            # Keeps the manifest cache keyed by version like the full scan does.
+            AAD_CURRENT_VERSION_CODE="$vc"
+            export AAD_CURRENT_VERSION_CODE
             process_package_user "$user" "$pkg" >/dev/null
         fi
     done < "$current"
 
-    mv "$current" "$STATE_FILE"
+    rm -f "$AAD_APK_PATH_CACHE" 2>/dev/null
+    unset AAD_APK_PATH_CACHE AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH AAD_CURRENT_VERSION_CODE
+
+    mv -f "$current" "$STATE_FILE"
     cleanup_stale_records
     reconcile_owned_ifw_rules
 }
 
+PACKAGE_RESCAN_PENDING="$DATA_DIR/.package_rescan.pending"
+
 rescan_changed_packages() {
-    acquire_lock || { log "LOCK timeout: incremental rescan skipped"; return 1; }
+    # A package event that arrives while a full scan owns the lock used to be
+    # dropped after the 60s timeout, leaving the new app unhandled until the
+    # safety poll (up to 15 minutes later). Record the request instead; the
+    # polling watcher retries it on its next cycle.
+    if ! acquire_lock; then
+        : > "$PACKAGE_RESCAN_PENDING" 2>/dev/null
+        log "LOCK timeout: incremental rescan deferred (queued for retry)"
+        return 1
+    fi
+    rm -f "$PACKAGE_RESCAN_PENDING" 2>/dev/null
     rescan_changed_packages_locked
+    rc=$?
+    changes=${AAD_PACKAGE_CHANGES:-0}
     release_lock
+    if [ "$rc" -eq 0 ] && [ "$changes" -gt 0 ] 2>/dev/null; then
+        reconcile_ad_surface_killer "package-change:$changes" >/dev/null 2>&1 || true
+        launch_ad_surface_indexer_bg "package-change:$changes" >/dev/null 2>&1 || true
+    fi
+    return "$rc"
 }

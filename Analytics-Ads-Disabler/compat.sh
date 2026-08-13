@@ -4,7 +4,7 @@
 
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
 CAPABILITIES_FILE="${CAPABILITIES_FILE:-$DATA_DIR/capabilities.conf}"
-CAP_PROFILE_VERSION=12
+CAP_PROFILE_VERSION=13
 
 cap_read() {
     key="$1"; def="$2"; val=""
@@ -45,12 +45,23 @@ cap_backend_has_verb() {
     printf '%s\n' "$help" | grep -Eq "(^|[[:space:]])${verb}([[:space:]]|\[|$)"
 }
 
+# Android 7.0+ supports --user natively for every component-state verb, so this
+# is true almost everywhere. It used to return success merely because cmd or pm
+# existed, which made the "ROM without --user" handling dead code. Ask the
+# backend's own help text first and only then fall back to the optimistic answer.
 cap_backend_verb_has_user() {
     backend="$1"; verb="$2"
-    # В Android 7.0+ для cmd и pm ключ --user поддерживается нативно для всех команд управления состоянием
-    if command -v cmd >/dev/null 2>&1 || command -v pm >/dev/null 2>&1; then
+    help=$(cap_pkg_help "$backend") || return 1
+    if printf '%s\n' "$help" | grep -q -- '--user'; then
         return 0
     fi
+    # Some OEM builds ship a trimmed help text while still honouring --user.
+    # Treat API level as the tie-breaker instead of assuming either way.
+    api=$(cap_api_level)
+    case "$api" in
+        ''|*[!0-9]*) return 0 ;;
+        *) [ "$api" -ge 24 ] && return 0 ;;
+    esac
     return 1
 }
 
@@ -86,10 +97,16 @@ cap_runcon_bin() {
         echo /system/bin/runcon
         return 0
     fi
-    if [ -x /data/adb/ksu/bin/busybox ] && /data/adb/ksu/bin/busybox --list 2>/dev/null | grep -Fxq runcon; then
-        echo "/data/adb/ksu/bin/busybox runcon"
-        return 0
-    fi
+    # Any root manager's BusyBox will do, not only KernelSU's.
+    for _crb in "${AAD_BUSYBOX:-}" \
+                /data/adb/magisk/busybox \
+                /data/adb/ksu/bin/busybox \
+                /data/adb/ap/bin/busybox; do
+        if [ -n "$_crb" ] && [ -x "$_crb" ] && "$_crb" --list 2>/dev/null | grep -Fxq runcon; then
+            echo "$_crb runcon"
+            return 0
+        fi
+    done
     if command -v runcon >/dev/null 2>&1; then
         command -v runcon
         return 0
@@ -774,6 +791,7 @@ cap_install_try_idempotent_candidate() {
     out=$(cap_exec_command "$exec_mode" "$backend" "$verb" "$has_user" "$actual_user" "$target" 2>&1)
     rc=$?
     command -v log_cmd_exec >/dev/null 2>&1 && log_cmd_exec "$cmd_text" "$out" "$rc"
+    command -v aad_package_dump_invalidate >/dev/null 2>&1 && aad_package_dump_invalidate "${target%%/*}"
     cap_action_ok "$rc" "$out" || return 1
     [ "$(cap_query_component_override_state "$user" "$target" 2>/dev/null)" = "disabled" ] || return 1
     cap_remember_disable_spec "$backend" "$verb" "$has_user" "$exec_mode" "$token"
@@ -866,6 +884,9 @@ cap_exec_disable_candidate() {
 
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$actual_user" "$target")
     command -v log_cmd_exec >/dev/null 2>&1 && log_cmd_exec "$cmd_text" "$out" "$rc"
+    # The package dump cache must be dropped before the postcondition check,
+    # otherwise verification would read the pre-write snapshot.
+    command -v aad_package_dump_invalidate >/dev/null 2>&1 && aad_package_dump_invalidate "${target%%/*}"
     cap_action_ok "$rc" "$out" || return 1
     cap_component_is_disabled "$user" "$target" || return 1
     cap_remember_disable_spec "$backend" "$verb" "$has_user" "$exec_mode" "$user_token"
@@ -1022,6 +1043,7 @@ cap_exec_state_candidate() {
 
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$actual_user" "$target")
     command -v log_cmd_exec >/dev/null 2>&1 && log_cmd_exec "$cmd_text" "$out" "$rc"
+    command -v aad_package_dump_invalidate >/dev/null 2>&1 && aad_package_dump_invalidate "${target%%/*}"
     cap_action_ok "$rc" "$out" || return 1
     cap_component_state_matches "$user" "$target" "$expected" || return 1
     return 0
