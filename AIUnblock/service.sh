@@ -2,7 +2,6 @@
 
 MODDIR=${0%/*}
 
-# Лёгкие сигналы обрабатываем до любой инициализации: они не должны трогать логи.
 case "$1" in
   --signal-refresh) touch "$MODDIR/.force_refresh" 2>/dev/null; exit 0 ;;
   --signal-reload) touch "$MODDIR/.reload" 2>/dev/null; exit 0 ;;
@@ -262,16 +261,12 @@ write_public_report() {
 
 mirror_public_logs() {
   clock_now
-  # Смена состояния обновляет отчёт немедленно: иначе пользователь до 10 минут
-  # видит «Ожидание подключения к интернету», хотя всё уже работает.
   if [ "$LAST_HEALTH" = "$LAST_MIRRORED_HEALTH" ] &&
      [ "$LAST_PUBLIC_MIRROR" -gt 0 ] 2>/dev/null &&
      [ $((NOW - LAST_PUBLIC_MIRROR)) -lt "$PUBLIC_MIRROR_INTERVAL" ] 2>/dev/null; then
     return 0
   fi
   # Отметку времени ставим ТОЛЬКО когда память реально доступна. Иначе первая же
-  # попытка сразу после загрузки (когда /sdcard ещё не примонтирован) съедала
-  # весь интервал, и пользователь до 10 минут видел отчёт от прошлой версии.
   public_storage_ready || return 0
   LAST_PUBLIC_MIRROR="$NOW"
   LAST_MIRRORED_HEALTH="$LAST_HEALTH"
@@ -402,7 +397,7 @@ load_smartdns_resolvers() {
   compose_auth_dns
   if [ -z "$DOH_RESOLVERS" ]; then
     DOH_RESOLVERS="https://dns.malw.link/dns-query https://xbox-dns.ru/dns-query"
-    log "Smart DNS: включён встроенный DoH fallback"
+    log "Smart DNS: включн встроенный DoH fallback"
   fi
   log "Smart DNS: DoH=$(echo $DOH_RESOLVERS | wc -w), DNS-auth=$(echo $AUTH_DNS | wc -w)"
 }
@@ -473,7 +468,6 @@ ip6t_restore() { if [ "$IP6TABLES_RESTORE_WAIT_SUPPORTED" -eq 1 ]; then ip6table
 
 check_dependencies() {
   local missing=0 c selftest_rc=0
-  # Жёстко обязательное: без этого модуль физически не может работать.
   for c in getprop ip iptables iptables-restore awk sed grep date; do
     command -v "$c" >/dev/null 2>&1 || { log "ОШИБКА: нет обязательной команды $c"; missing=1; }
   done
@@ -491,7 +485,6 @@ check_dependencies() {
   fi
   [ -x "$CORE_BIN" ] || { log "ОШИБКА: отсутствует aiunblock-native"; missing=1; }
   if [ -x "$CORE_BIN" ]; then
-    # Результат кешируем: он нужен ещё и публичному отчёту, который раньше
     # запускал self-test заново каждые две минуты.
     NATIVE_SELFTEST_LINE=$("$CORE_BIN" self-test 2>&1)
     selftest_rc=$?
@@ -502,15 +495,13 @@ check_dependencies() {
     fi
   fi
   [ -s "$SNI_ROUTES" ] || { log "ОШИБКА: отсутствует sni_routes.conf"; missing=1; }
-  # Функциональная проверка: сам факт наличия iptables ещё не значит, что в ядре
   # есть таблица nat (важно для урезанных/GKI-сборок).
   if ! iptables -t nat -S OUTPUT >/dev/null 2>&1; then
-    log "ПРЕДУПРЕЖДЕНИЕ: таблица nat пока недоступна (ядро/netd не готовы); ждём в init_chains"
+    log "ПРЕДУПРЕЖДЕНИЕ: таблица nat пока недоступна (ядро/netd не готовы); ждм в init_chains"
   fi
   [ "$missing" -eq 0 ]
 }
 
-# Раньше единичный сбой зависимостей (например, ядро ещё не подняло netfilter)
 # убивал супервизор до перезагрузки. Теперь пробуем несколько раз.
 check_dependencies_with_retry() {
   local n=1
@@ -591,14 +582,12 @@ start_router() {
   return 1
 }
 
-# Ротацию router-лога делает общий rotate_logs; здесь только подъём упавшего роутера.
 maintain_router() {
   router_running && return 0
   rotate_file_copytruncate "$ROUTER_LOG" "$ROUTER_LOG_OLD"
   start_router
 }
 
-# После жёсткого убийства супервизора в GATEWAY_DIR могли остаться каталоги проб.
 cleanup_stale_temp() {
   rm -rf "$GATEWAY_DIR"/.select.* "$GATEWAY_DIR"/.probe.* 2>/dev/null
   rm -f "$GATEWAY_DIR"/.doh.* "$DATA_DIR"/.firewall_scan.* 2>/dev/null
@@ -614,7 +603,7 @@ acquire_lock() {
       if kill -0 "$old_pid" 2>/dev/null; then
         cmdline=$(tr '\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)
         case "$cmdline" in
-          *"$MODDIR/service.sh"*) log "Повторный supervisor отклонён: PID $old_pid"; return 1 ;;
+          *"$MODDIR/service.sh"*) log "Повторный supervisor отклонн: PID $old_pid"; return 1 ;;
         esac
         log "Найден stale lock с переиспользованным PID $old_pid; lock пересоздан"
       fi
@@ -807,9 +796,7 @@ publish_gateway() {
   mv -f "$tmp" "$path"
 }
 
-# Один процесс на всё обнаружение gateway: DoH-резолверы опрашиваются параллельно
 # внутри нативного ядра, обычный DNS используется только если DoH не ответил.
-# Раньше здесь запускался отдельный процесс на каждый резолвер плюс ещё по одному
 # на каждый DNS-сервер в запасном пути.
 discover_doh_gateways() {
   local domain="$1" token="$2" ip source discovered=""
@@ -1034,14 +1021,14 @@ refresh_all() {
 
   if [ -z "$alluids" ] && ! boot_completed; then
     RETRY_SOON=1
-    if [ "$PM_WAIT_LOGGED" -eq 0 ]; then log "PackageManager ещё не готов/UID не видны; быстрый повтор"; PM_WAIT_LOGGED=1; fi
+    if [ "$PM_WAIT_LOGGED" -eq 0 ]; then log "PackageManager ещ не готов/UID не видны; быстрый повтор"; PM_WAIT_LOGGED=1; fi
   else
     PM_WAIT_LOGGED=0
   fi
 
   if ! ipv4_network_ready; then
     WAITING_FOR_NETWORK=1; RETRY_SOON=1
-    if [ "$NETWORK_WAIT_LOGGED" -eq 0 ]; then log "IPv4-сеть недоступна; применён fail-mode=$FAIL_MODE"; NETWORK_WAIT_LOGGED=1; fi
+    if [ "$NETWORK_WAIT_LOGGED" -eq 0 ]; then log "IPv4-сеть недоступна; применн fail-mode=$FAIL_MODE"; NETWORK_WAIT_LOGGED=1; fi
     apply_failure_rules || log "ОШИБКА: не удалось применить failure rules"
     LAST_HEALTH="offline"
     return 0
@@ -1052,7 +1039,7 @@ refresh_all() {
 
   if ! authorize_ips_with_retry; then
     RETRY_SOON=1
-    log "DNS-auth не подтверждён; применён fail-mode=$FAIL_MODE"
+    log "DNS-auth не подтверждн; применн fail-mode=$FAIL_MODE"
     apply_failure_rules || log "ОШИБКА: failure rules после DNS-auth"
     LAST_HEALTH="problem"
     return 0
@@ -1060,7 +1047,7 @@ refresh_all() {
 
   refresh_proxy_rules
   if apply_uid_rules && install_hooks; then
-    log "Firewall обновлён: только UID из apps.list/apps.user.list; fail=$FAIL_MODE"
+    log "Firewall обновлн: только UID из apps.list/apps.user.list; fail=$FAIL_MODE"
   else
     RETRY_SOON=1
     log "ОШИБКА: firewall update failed"
@@ -1137,7 +1124,7 @@ main_loop() {
   reload_runtime_config
 
   while ! init_chains_with_retry; do
-    log "Firewall backend ещё не готов; повтор через 30с"
+    log "Firewall backend ещ не готов; повтор через 30с"
     sleep 30
   done
   configure_xtables_features

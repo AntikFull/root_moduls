@@ -401,7 +401,7 @@ prepare_package_cache() {
   while [ "$elapsed" -le "$wait_max" ]; do
     build_package_cache_once && return 0
     [ "$elapsed" -ge "$wait_max" ] && break
-    log_w "PackageManager/пакетная база ещё не дают UID; повтор через 2с ($elapsed/$wait_max)"
+    log_w "PackageManager/пакетная база ещ не дают UID; повтор через 2с ($elapsed/$wait_max)"
     sleep 2
     elapsed=$((elapsed + 2))
   done
@@ -634,7 +634,7 @@ ensure_conntrack_accounting() {
   cur=$(cat "$f" 2>/dev/null)
   if [ "$cur" != "1" ]; then
     echo 1 > "$f" 2>/dev/null || { log_w "Не удалось включить nf_conntrack_acct; SMART_NATIVE недоступен"; return 1; }
-    log_i "SMART: включён net.netfilter.nf_conntrack_acct=1 для bounded reply-feed"
+    log_i "SMART: включн net.netfilter.nf_conntrack_acct=1 для bounded reply-feed"
   fi
   [ "$(cat "$f" 2>/dev/null)" = "1" ] && CONNTRACK_ACCT=1
   [ "$CONNTRACK_ACCT" = "1" ]
@@ -716,11 +716,10 @@ reload_active_profile() {
   local profile profile_name profile_signature youtube_args special host debug_arg launcher pid tmp
   [ -f "$AUTO_RESULT_FILE" ] && . "$AUTO_RESULT_FILE"
   profile=${AUTO_PROFILE:-$AUTO_PROFILE_DEFAULT}
-  strategy_read "$profile" || { log_w "Быстрый reload отклонён: невалидный AUTO_PROFILE=$profile"; return 1; }
+  strategy_read "$profile" || { log_w "Быстрый reload отклонн: невалидный AUTO_PROFILE=$profile"; return 1; }
   profile_name=$STRATEGY_FILE_NAME
   profile_signature=$(strategy_catalog_signature)
   # Переход в DIRECT или из него меняет сам состав netfilter-правил, а быстрый
-  # путь их не трогает. В этих случаях отдаём управление полному reload.
   [ "$STRATEGY_FILE_MODE" = DIRECT ] && return 1
   [ -f "$RUN_DIR/direct.flag" ] && return 1
   youtube_args=$STRATEGY_FILE_ARGS
@@ -767,7 +766,7 @@ reload_active_profile() {
       END {if(!seen_p)print "AUTO_PROFILE=" p; if(!seen_pn)print "AUTO_PROFILE_NAME=" pn; if(!seen_ps)print "AUTO_STRATEGY_SIGNATURE=" ps; if(!seen_s)print "AUTO_STATUS=" s; if(!seen_k)print "AUTO_NETWORK_KEY=" k; if(!seen_i)print "AUTO_NETWORK_IFACE=" i; if(!seen_u)print "AUTO_UPDATED=" u; if(!seen_n)print "COMPAT_NOTES=" note}
     ' "$HEALTH_FILE" > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
   fi
-  log_i "AUTO-профиль переключён без пересборки firewall/UID: profile=$profile name=$profile_name pid=$pid"
+  log_i "AUTO-профиль переключн без пересборки firewall/UID: profile=$profile name=$profile_name pid=$pid"
   return 0
 }
 
@@ -846,7 +845,6 @@ else
         SMART_DIRECT=1
       else
         # Стратегия, прошедшая probe, обслуживает ВЕСЬ TLS/443 трафик, а не только
-        # хостлист YouTube. Встроенный SMART_COMPAT остаётся профилем-запаской и
         # подхватывает то, что не попало под первый фильтр (в первую очередь HTTP/80).
         SMART_AUTO_ARGS=$STRATEGY_FILE_ARGS
         SMART_YOUTUBE_ARGS=""
@@ -868,7 +866,7 @@ fi
 if [ "$SMART_DIRECT" = "1" ]; then
   AUTO_STATUS="DIRECT"
   COMPAT_STATUS="DIRECT"
-  COMPAT_NOTES="DIRECT: сеть ${AUTO_NETWORK_IFACE:-?} не фильтруется, обход отключён"
+  COMPAT_NOTES="DIRECT: сеть ${AUTO_NETWORK_IFACE:-?} не фильтруется, обход отключн"
   log_i "SMART_ACTIVE DIRECT: правила и nfqws2 не устанавливаются (профиль $AUTO_PROFILE / $AUTO_PROFILE_NAME)"
 fi
 log_i "SMART capabilities: acct=$CONNTRACK_ACCT connmark=$CONNMARK4 connbytes=$CONNBYTES4; requested=$STRATEGY_MODE engine=$STRATEGY_EFFECTIVE compat=$COMPAT_STATUS"
@@ -900,7 +898,7 @@ MANUAL_APP_UID_COUNT=$(echo "$MANUAL_APP_UIDS" | wc -w | tr -d ' ')
 APP_UID_COUNT=$(echo "$APP_UIDS" | wc -w | tr -d ' ')
 EXCLUDE_UID_COUNT=$(echo "$EXCLUDE_UIDS" | wc -w | tr -d ' ')
 log_i "Resolved UIDs: SMART effective=$APP_UID_COUNT auto=$AUTO_APP_UID_COUNT manual=$MANUAL_APP_UID_COUNT exclude=$EXCLUDE_UID_COUNT source=$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
-[ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из AUTO/ручных приложений не разрешён"
+[ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из AUTO/ручных приложений не разрешн"
 
 DIRECT_MODE_FILE="$RUN_DIR/direct.flag"
 rm -f "$DIRECT_MODE_FILE" 2>/dev/null
@@ -933,7 +931,7 @@ case "$MODE" in
       if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 EXCLUDE CONNMARK rule failed"; fi
       ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 EXCLUDE NFQUEUE"
     else
-      health_error "EXCLUDE не применён: owner match недоступен, иначе исключённые приложения попали бы в NFQUEUE"
+      health_error "EXCLUDE не применн: owner match недоступен, иначе исключнные приложения попали бы в NFQUEUE"
     fi
     if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
       for uid in $EXCLUDE_UIDS; do ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || true; done
@@ -1010,7 +1008,7 @@ if [ "$ENABLE_HOTSPOT" = "1" ]; then
 
   ACTIVE_TETHER_IFACES=$(cat "$RUN_DIR/tether-downstreams.state" 2>/dev/null)
   log_i "Tether active downstream: ${ACTIVE_TETHER_IFACES:-none}"
-  [ "$FORCE_TCP_HOTSPOT" = "1" ] && log_i "QUIC для Hotspot/USB: UDP/443 блокируется на динамически определённых downstream"
+  [ "$FORCE_TCP_HOTSPOT" = "1" ] && log_i "QUIC для Hotspot/USB: UDP/443 блокируется на динамически определнных downstream"
 fi
 
 if [ "$FORCE_TCP" = "1" ]; then
@@ -1045,10 +1043,8 @@ HOST_ARGS=""
 SPECIAL_ARGS=""
 if [ "$STRATEGY_MODE" = "SMART" ] && [ -n "${SMART_AUTO_ARGS:-}" ]; then
   # Профиль, прошедший активный probe, обслуживает весь TLS/443, а не только
-  # хостлист YouTube. SMART_COMPAT_GENERAL остаётся вторым профилем и
-  # подхватывает всё остальное (в первую очередь HTTP/80).
   SPECIAL_ARGS="$HOST_ARGS $SMART_AUTO_ARGS --new"
-  log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
+  log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применн ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
 elif [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
   SPECIAL_ARGS="--hostlist=$SMART_YOUTUBE_FILE $HOST_ARGS $SMART_YOUTUBE_ARGS --new"
   log_i "SMART profile: YouTube=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"
@@ -1133,8 +1129,8 @@ else
 fi
 ipt4_quiet -t mangle -C OUTPUT -j ZAPRET2_MANGLE || health_error "Проверка hook: ZAPRET2_MANGLE не подключена к IPv4 OUTPUT"
 [ "$FORCE_TCP" != "1" ] || ipt4_quiet -t filter -C OUTPUT -j ZAPRET2_FILTER || health_error "Проверка hook: ZAPRET2_FILTER не подключена к IPv4 OUTPUT"
-[ "$ENABLE_HOTSPOT" != "1" ] || ipt4_quiet -t mangle -C FORWARD -j ZAPRET2_MANGLE_FORWARD || health_error "Проверка hook: Hotspot NFQUEUE не подключён к IPv4 FORWARD"
-[ "$STRATEGY_EFFECTIVE" != "SMART_NATIVE" ] || ipt4_quiet -t mangle -C INPUT -j ZAPRET2_MANGLE_IN || health_error "Проверка hook: SMART_NATIVE reply feed не подключён к IPv4 INPUT"
+[ "$ENABLE_HOTSPOT" != "1" ] || ipt4_quiet -t mangle -C FORWARD -j ZAPRET2_MANGLE_FORWARD || health_error "Проверка hook: Hotspot NFQUEUE не подключн к IPv4 FORWARD"
+[ "$STRATEGY_EFFECTIVE" != "SMART_NATIVE" ] || ipt4_quiet -t mangle -C INPUT -j ZAPRET2_MANGLE_IN || health_error "Проверка hook: SMART_NATIVE reply feed не подключн к IPv4 INPUT"
 fi
 write_health
 

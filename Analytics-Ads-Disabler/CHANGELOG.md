@@ -233,25 +233,25 @@ Two v4.7.0 findings turned out to be less severe than stated, and the honest ver
 - Audit-summary теперь отдельно показывает `aggressive=N`. Exact original-state rollback, whitelist semantics, PM transport и multi-user IFW safety не изменены.
 
 - PM `runcon_shell_uid0` теперь перед SELinux-переходом в дочернем процессе закрывает только унаследованные fd, указывающие в `/data/adb/analytics_ads_disabler` или каталог модуля. Это обобщает фиксы `.desired.tmp`/`component_state.list.orphans.*` без расширения sepolicy и без изменения parent shell.
-- Рабочий OEM-совместимый transport `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."` сохранён; direct PM, learned backend и обязательная post-state verification не менялись.
-- HYBRID IFW получил multi-user safety gate: глобальное IFW-правило создаётся только если все Android users, у которых установлен пакет, согласны блокировать данный компонент. Whitelist/work-profile одного user больше не может быть перекрыт решением другого user.
-- При невозможности построить authoritative user/package snapshot IFW fail-closed в сторону безопасности: собственное IFW-правило не создаётся, PM-состояние не расширяется.
+- Рабочий OEM-совместимый transport `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."` сохранн; direct PM, learned backend и обязательная post-state verification не менялись.
+- HYBRID IFW получил multi-user safety gate: глобальное IFW-правило создатся только если все Android users, у которых установлен пакет, согласны блокировать данный компонент. Whitelist/work-profile одного user больше не может быть перекрыт решением другого user.
+- При невозможности построить authoritative user/package snapshot IFW fail-closed в сторону безопасности: собственное IFW-правило не создатся, PM-состояние не расширяется.
 - Атомарная запись IFW через временный файл без `.xml` и rename сохранена; это соответствует механизму AOSP Intent Firewall, который наблюдает только XML-файлы в `/data/system/ifw`.
-- Default backend остаётся `PM`; HYBRID по-прежнему опционален. Policy/rules/whitelist semantics и exact rollback не расширялись.
+- Default backend остатся `PM`; HYBRID по-прежнему опционален. Policy/rules/whitelist semantics и exact rollback не расширялись.
 
 ## v4.6.3 (603) — закрытие orphan FD перед PM restore
 
 - `retry_orphan_restores()` больше не выполняет PackageManager restore из цикла, чьим входом является `component_state.list.orphans.*` в `/data/adb`.
 - Snapshot orphan-state сначала считывается в память, backing-файл закрывается и удаляется, и только после этого запускаются restore-операции.
-- Устраняет подтверждённый на Xiaomi 14 Ultra / HyperOS 3 / Android 16 SELinux AVC `u:r:shell:s0 -> adb_data_file` для `component_state.list.orphans.*` без расширения sepolicy.
+- Устраняет подтвержднный на Xiaomi 14 Ultra / HyperOS 3 / Android 16 SELinux AVC `u:r:shell:s0 -> adb_data_file` для `component_state.list.orphans.*` без расширения sepolicy.
 - PM transport, IFW, SAFE/BALANCED/HYBRID, whitelist semantics, exact rollback и update-race fix v4.6.2 не изменялись.
 
 ## v4.6.2 (602) — исправление гонки обновления на HyperOS
 
 - Процессы старой версии теперь останавливаются до изменения persistent-конфигурации и до проверки Package Manager.
 - Активный boot/action-скан без watcher pid-файла также безопасно завершается, но только после проверки `/proc/<pid>/cmdline` на принадлежность модулю.
-- Старые operation/state/membership locks снимаются сразу после остановки прежних watcher-процессов, поэтому установщик не запускает параллельный пересчёт на частично обновлённых файлах.
-- Исправление основано на диагностике Xiaomi 14 Ultra, Android 16 / HyperOS 3: во время обновления старый скан и PM-проба пересекались, вызывая `Failed transaction`, `Broken pipe` и незавершённые временные каталоги. После загрузки сама v4.4.14 работала штатно.
+- Старые operation/state/membership locks снимаются сразу после остановки прежних watcher-процессов, поэтому установщик не запускает параллельный пересчт на частично обновлнных файлах.
+- Исправление основано на диагностике Xiaomi 14 Ultra, Android 16 / HyperOS 3: во время обновления старый скан и PM-проба пересекались, вызывая `Failed transaction`, `Broken pipe` и незавершнные временные каталоги. После загрузки сама v4.4.14 работала штатно.
 
 ## v4.6.1 (601) — точность Activity-аудита
 
@@ -263,17 +263,17 @@ Two v4.7.0 findings turned out to be less severe than stated, and the honest ver
 ## v4.6.0 (600) — PM/IFW-контур после сверки с App Manager и Blocker
 
 - Проверены актуальные исходники `MuntashirAkon/AppManager` и `lihenggui/blocker`, включая PM, IFW и комбинированные контроллеры.
-- Сохранён основной PM-контур модуля: он точнее сторонних реализаций восстанавливает исходный override и проверяет фактическое состояние после каждой операции.
+- Сохранн основной PM-контур модуля: он точнее сторонних реализаций восстанавливает исходный override и проверяет фактическое состояние после каждой операции.
 - Добавлен опциональный `COMPONENT_BACKEND=HYBRID`: Services/Receivers получают второй IFW-слой, а точные рекламные Activities блокируются только через IFW.
 - Providers по-прежнему изменяются только через Package Manager, поскольку Android Intent Firewall их не поддерживает.
 - IFW хранится в отдельном файле `/data/system/ifw/analytics_ads_disabler.xml`, заменяется атомарно и удаляется при переходе на PM или деинсталляции.
 - Добавлены проверка доступности IFW, лимит Activity на пакет/категорию и отдельные действия `IFW_BLOCK` в аудите.
-- `PM` остаётся безопасным backend по умолчанию; включение HYBRID выполняется явно в установщике или настройках.
+- `PM` остатся безопасным backend по умолчанию; включение HYBRID выполняется явно в установщике или настройках.
 
 ## v4.5.0 (500) — типизированный аудит и режимы SAFE/BALANCED
 
 - Сохранена универсальная capability-логика Magisk, KernelSU/Next и APatch без списков моделей и прошивок.
-- `COMPONENT_MODE=SAFE` сохраняет прежнее отключение Services/Receivers и остаётся режимом по умолчанию.
+- `COMPONENT_MODE=SAFE` сохраняет прежнее отключение Services/Receivers и остатся режимом по умолчанию.
 - `COMPONENT_MODE=BALANCED` дополнительно отключает только Providers из точных секций `*_PROVIDER_SAFE`.
 - Activities и неоднозначные Providers обнаруживаются, но записываются только в `component_audit.log` без изменения состояния.
 - Добавлены типизированные секции правил, миграция новых секций без перезаписи пользовательских правил и статистика `AUDIT-SUMMARY`.
@@ -281,7 +281,7 @@ Two v4.7.0 findings turned out to be less severe than stated, and the honest ver
 
 - PackageManager-команды теперь всегда запускаются со stdin из `/dev/null`.
 - Исправлено наследование временных файлов политики из `/data/adb/analytics_ads_disabler/.desired.tmp.*` через Binder в `system_server`.
-- Устраняет `translate fd failed` и `Failed transaction` на Android 16 с KernelSU/ReSukiSU при включённом SELinux.
+- Устраняет `translate fd failed` и `Failed transaction` на Android 16 с KernelSU/ReSukiSU при включнном SELinux.
 - Сохранены проверки реального результата операции и все прежние безопасные варианты транспорта PM.
 
 - Restored the proven Android 16 `runcon u:r:shell:s0 /system/bin/sh -c "exec ..."` PM transport after v4.4.12 showed OEM SELinux can deny direct execution of `/system/bin/cmd`/`pm` from the transitioned shell domain.
@@ -403,12 +403,12 @@ Two v4.7.0 findings turned out to be less severe than stated, and the honest ver
 
 - **Исправлен HyperOS 3 / Android 16 кейс с Binder `FAILED_TRANSACTION`:** если PackageManager-команды из текущего root-контекста не проходят Binder, модуль непрерывно не перебирает одинаково нерабочие `cmd`/`pm` варианты.
 - **Добавлен runtime-профиль контекста исполнения:** capability probe теперь выбирает не только backend/verb/`--user`, но и `direct`, `su_uid2000` или `su_shell`. Shell UID используется только если безопасный probe на заведомо отсутствующем компоненте подтвердил доступ к PackageManager.
-- **Без OEM-хардкода:** нет привязки к Xiaomi/HyperOS/Android 16/KernelSU; обычные устройства продолжают использовать `direct`, поэтому модуль остаётся универсальным для Magisk / KernelSU / APatch и разных ROM.
+- **Без OEM-хардкода:** нет привязки к Xiaomi/HyperOS/Android 16/KernelSU; обычные устройства продолжают использовать `direct`, поэтому модуль остатся универсальным для Magisk / KernelSU / APatch и разных ROM.
 - **Убран fallback storm на каждом компоненте:** после профилирования выполняется одна рабочая команда. При hard Binder failure профиль один раз инвалидируется, заново определяется и операция повторяется один раз.
 - **Восстановление состояния использует отдельный профилированный action:** `enabled`, `disabled` и `default` выбирают соответствующий рабочий профиль, включая execution context.
 - **Capability schema поднята до v8:** старый `capabilities.conf` автоматически будет пересоздан.
 
-- **Тотальное трассировочное логирование всех команд:** Добавлена функция `log_cmd_exec`, логирующая саму исполняемую системную команду (`cmd`, `pm`, `dumpsys`), её выводимый результат (stdout + stderr) и код завершения (`$rc`).
+- **Тотальное трассировочное логирование всех команд:** Добавлена функция `log_cmd_exec`, логирующая саму исполняемую системную команду (`cmd`, `pm`, `dumpsys`), е выводимый результат (stdout + stderr) и код завершения (`$rc`).
 - **Глубокая детализация в файле журнала:** Все низкоуровневые вызовы, зонды, перебор каскадов и изменения состояний протоколируются с точными временными метками `[YYYY-MM-DD HH:MM:SS]`.
 
 - **Расширенный каскадный перебор:** В `cap_disable_component` добавлена поддержка обратной совместимости с `disable-user` для устройств, где OEM разрешал этот глагол для любых объектов.

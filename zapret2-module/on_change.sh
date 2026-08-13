@@ -37,12 +37,12 @@ echo $$ > "$LOCKDIR/pid" 2>/dev/null
 trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT HUP INT TERM
 case "$1" in
   *apps.list|*auto_apps.list|*exclude.list)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: СЂСѓС‡РЅРѕРµ РёР·РјРµРЅРµРЅРёРµ СЃРїРёСЃРєР° РїСЂРёР»РѕР¶РµРЅРёР№ ($1), Р±С‹СЃС‚СЂС‹Р№ sync С‡РµСЂРµР· 1СЃ" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: СССРРР РРРРРРРРР СРРСРР РСРРРРРРРР ($1), РСССССР sync СРСРР 1С" >> "$LOG_FILE"
     sleep 1
     sh "$MODDIR/app-sync.sh" apply >/dev/null 2>&1 || sh "$MODDIR/service.sh" reload
     ;;
   *)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: СЂСѓС‡РЅРѕРµ РёР·РјРµРЅРµРЅРёРµ ($1 $2), РїРѕР»РЅР°СЏ РїРµСЂРµР·Р°РіСЂСѓР·РєР° С‡РµСЂРµР· 2СЃ" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: СССРРР РРРРРРРРР ($1 $2), РРРРРС РРСРРРРССРРР СРСРР 2С" >> "$LOG_FILE"
     sleep 2
     sh "$MODDIR/service.sh" reload
     ;;

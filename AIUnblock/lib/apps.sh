@@ -1,10 +1,4 @@
 #!/system/bin/sh
-# AI Unblock RU вЂ” per-app/per-UID target list.
-# Р‘С‹СЃС‚СЂС‹Р№ РїСѓС‚СЊ: appid Р±РµСЂС‘Рј РёР· /data/system/packages.list РѕРґРЅРёРј РїСЂРѕС…РѕРґРѕРј awk,
-# UID РґР»СЏ РѕСЃС‚Р°Р»СЊРЅС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ СЃС‡РёС‚Р°РµРј РєР°Рє user*100000+appid (СЃС…РµРјР° Android).
-# Р Р°РЅСЊС€Рµ РЅР° РєР°Р¶РґС‹Р№ РїР°РєРµС‚ Рё РєР°Р¶РґРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ Р·Р°РїСѓСЃРєР°Р»СЃСЏ `pm list packages`,
-# С‚Рѕ РµСЃС‚СЊ 6вЂ“12 СЃС‚Р°СЂС‚РѕРІ JVM РЅР° РєР°Р¶РґСѓСЋ РїРµСЂРµРїСЂРѕРІРµСЂРєСѓ вЂ” СЃР°РјС‹Р№ РґРѕСЂРѕРіРѕР№ СѓС‡Р°СЃС‚РѕРє РјРѕРґСѓР»СЏ.
-# РњРµРґР»РµРЅРЅС‹Р№ РїСѓС‚СЊ С‡РµСЂРµР· pm РѕСЃС‚Р°Р»СЃСЏ РєР°Рє Р·Р°РїР°СЃРЅРѕР№ РґР»СЏ РЅРµСЃС‚Р°РЅРґР°СЂС‚РЅС‹С… РїСЂРѕС€РёРІРѕРє.
 
 PACKAGES_LIST="${PACKAGES_LIST:-/data/system/packages.list}"
 
@@ -33,7 +27,6 @@ android_user_ids() {
   echo $out
 }
 
-# Р—Р°РїР°СЃРЅРѕР№ РїСѓС‚СЊ: СЂР°Р±РѕС‚Р°РµС‚ РґР°Р¶Рµ РµСЃР»Рё packages.list РЅРµРґРѕСЃС‚СѓРїРµРЅ, РЅРѕ РґРѕСЂРѕРіРѕР№.
 package_uids_pm() {
   local package_name="$1" users="$2" user_id output
   for user_id in $users; do
@@ -126,7 +119,6 @@ apps_resolve_uids() {
     done
 
     if [ -z "$appid" ]; then
-      # РџР°РєРµС‚ РЅРµ РЅР°Р№РґРµРЅ РІ packages.list (РёР»Рё С„Р°Р№Р» РЅРµРґРѕСЃС‚СѓРїРµРЅ) вЂ” РёРґС‘Рј С‡РµСЂРµР· pm.
       for uid in $(package_uids_pm "$package_name" "$users"); do
         apps_assign "$role" "$uid" || true
       done
@@ -142,7 +134,6 @@ apps_resolve_uids() {
       uid=$((user * 100000 + appid % 100000))
       apps_assign "$role" "$uid" || true
     done
-    # РџСЂРёР»РѕР¶РµРЅРёРµ РјРѕР¶РµС‚ Р»РµР¶Р°С‚СЊ РЅР° adopted storage вЂ” РєР°С‚Р°Р»РѕРіРё РІ /data/user РЅРµ РІРёРґРЅС‹.
     [ "$installed" -eq 1 ] || apps_assign "$role" "$appid" || true
   done
 }

@@ -38,8 +38,6 @@ refresh_fast_cache() {
       awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list >> "$tmp"
       continue
     fi
-    # РЎРј. service.sh: packages.list РЅРµ Р·РЅР°РµС‚ РїСЂРѕ РїСЂРѕС„РёР»Рё, РїРѕСЌС‚РѕРјСѓ РІРѕ РІС‚РѕСЂРёС‡РЅРѕРј
-    # РїСЂРѕС„РёР»Рµ РїР°РєРµС‚ СЃС‡РёС‚Р°РµС‚СЃСЏ СѓСЃС‚Р°РЅРѕРІР»РµРЅРЅС‹Рј С‚РѕР»СЊРєРѕ РїСЂРё РЅР°Р»РёС‡РёРё РєР°С‚Р°Р»РѕРіР° РґР°РЅРЅС‹С….
     [ -d "/data/user/$user" ] || continue
     awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list 2>/dev/null | \
     while read -r pkg uid usr; do

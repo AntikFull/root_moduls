@@ -13,8 +13,6 @@ NFQTTL_DAEMON_LOG=/data/local/tmp/nfqttl_daemon_stdout.log
 
 # Флаги-файлы в папке модуля (создать/удалить -> reboot):
 #   debug     - подробный лог + LOG-правила
-#   noquic    - резать QUIC (UDP/443) от клиентов, чтобы весь трафик шёл по TCP
-#   no6       - полностью запретить IPv6-форвардинг клиентам (самый надёжный
 #               способ убрать утечки через 464XLAT/clat)
 DEBUG_MODE=0
 NOQUIC=0
@@ -27,8 +25,6 @@ NO6=0
 CELL_IFS="rmnet+ rmnet_data+ r_rmnet_data+ rmnet_mhi+ rmnet_ipa+ ccmni+ pdp+ v4-rmnet+ v4-rmnet_data+ tun+"
 CLIENT_IFS="wlan1 wlan2 ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+"
 
-# Обёртки. -w нужен, чтобы не драться с netd за xtables lock: без него часть
-# правил молча не применяется в момент подъёма точки доступа.
 IPT_W=""
 if iptables -w 2 -t mangle -L -n >/dev/null 2>&1; then
     IPT_W="-w 5"
@@ -54,8 +50,6 @@ nfqttl_daemon_log_rotate() {
 
 # Проверки состояния. Реализованы БЕЗ форков: watchdog крутится постоянно,
 # каждый лишний exec в цикле — это пробуждение CPU и расход батареи.
-# QUEUE_STAT_* заполняются попутно: queue_dropped растёт => ядро роняет пакеты,
-# user_dropped растёт => демон не успевает читать очередь.
 QUEUE_DROPPED=0
 USER_DROPPED=0
 
@@ -84,7 +78,6 @@ nfqttl_alive() {
     return 1
 }
 
-# Признак активной раздачи. wlan0 исключён намеренно — это обычный клиентский
 # Wi-Fi, он "up" почти всегда и давал бы ложное срабатывание.
 tether_up() {
     for _d in /sys/class/net/*; do
@@ -266,7 +259,6 @@ grep -q HL  /proc/net/ip6_tables_targets 2>/dev/null && HAS_HL6=1
 #    ВАЖНО: в v8.3 это правило висело в FORWARD, где оно мертво. Ядро в
 #    ip_forward() проверяет ttl<=1 и генерирует ICMP time-exceeded ДО вызова
 #    хука FORWARD, поэтому пакет туда просто не доходит. Единственное место,
-#    где его ещё можно перехватить, — PREROUTING.
 #    Вместо DROP поднимаем TTL до 64: проба доезжает до клиента, клиент
 #    отвечает штатно, и для оператора картина неотличима от одиночного
 #    устройства. Молчание в ответ на пробу — тоже сигнал.
@@ -347,7 +339,6 @@ IPT6 -t mangle -I FORWARD 1 -j nfqttlo
 
 # 6. Клиентские фильтры. Раньше 8 интерфейсов x N доменов давали сотни правил
 #    в FORWARD, и каждый пересылаемый пакет проходил весь этот список.
-#    Теперь: один переход nfqttlb -> (8 дешёвых сравнений интерфейса) ->
 #    nfqttlc, где лежит один экземпляр каждого правила.
 for _cmd in IPT4 IPT6; do
     "$_cmd" -t mangle -N nfqttlb
@@ -427,7 +418,6 @@ IPT4 -t nat -A PREROUTING -j nfqttln
 IPT6 -t nat -A PREROUTING -j nfqttln
 
 # 8. MSS-клэмп только в сторону оператора: Windows анонсирует MSS 1460, что
-#    само по себе отличается от того, что шлёт модем. В сторону клиента клэмп
 #    оператору не виден и был лишней работой.
 for _cmd in IPT4 IPT6; do
     "$_cmd" -t mangle -N nfqttlm
@@ -445,7 +435,6 @@ wd_log "старт $VERSION: native_ttl4=$HAS_TTL4 native_hl6=$HAS_HL6 nfqueue=$
 #    Энергетика: пока раздача выключена, утечь нечему — опрос раз в 60 с.
 #    Пока раздача активна — раз в 10 с (окно утечки при падении демона было
 #    до 20 с). Сама проверка очереди читает один файл в /proc и не порождает
-#    ни одного процесса; тяжёлые iptables -C и переприменение offload
 #    вызываются только по событию (раз в минуту / на включении раздачи).
 #    Если ядро умеет TTL/HL само — watchdog не нужен вообще и не запускается.
 WD_MAX_RESTARTS=50
@@ -483,7 +472,7 @@ watchdog() {
             if nfqueue_bound; then
                 stable=$((stable + 1))
                 if [ "$stable" -ge 60 ] && [ "$restarts" -gt 0 ]; then
-                    wd_log "демон стабилен — сброс счётчика рестартов ($restarts -> 0)"
+                    wd_log "демон стабилен  сброс счтчика рестартов ($restarts -> 0)"
                     restarts=0
                     stable=0
                 fi

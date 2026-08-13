@@ -1,52 +1,41 @@
-# РЎРїРёСЃРѕРє РїР°РєРµС‚РѕРІ РїСЂРёР»РѕР¶РµРЅРёР№ Zapret2 eCubz (СЂРµР¶РёРј INCLUDE / EXCLUDE)
-# РђРІС‚РѕСЂ: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
-# РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕРґС…РІР°С‚С‹РІР°РµС‚СЃСЏ СЏРґРµСЂРЅС‹Рј РІРѕС‚С‡РµСЂРѕРј inotifyd РїСЂРё СЃРѕС…СЂР°РЅРµРЅРёРё.
 
-# --- YouTube & Р’РёРґРµРѕСЃРµСЂРІРёСЃС‹ ---
 com.google.android.youtube
 com.google.android.youtube.tv
 app.revanced.android.youtube
 com.vanced.android.youtube
 
-# --- Р‘СЂР°СѓР·РµСЂС‹ Google Chrome ---
 com.android.chrome
 com.chrome.beta
 com.chrome.dev
 com.chrome.canary
 
-# --- Р‘СЂР°СѓР·РµСЂС‹ РЇРЅРґРµРєСЃ ---
 com.yandex.browser
 com.yandex.browser.alpha
 com.yandex.browser.beta
 com.yandex.browser.lite
 com.yandex.aliceapp
 
-# --- Р‘СЂР°СѓР·РµСЂС‹ Mozilla Firefox ---
 org.mozilla.firefox
 org.mozilla.firefox_beta
 org.mozilla.fenix
 org.mozilla.klar
 org.mozilla.focus
 
-# --- Р‘СЂР°СѓР·РµСЂС‹ Opera ---
 com.opera.browser
 com.opera.mini.native
 com.opera.touch
 com.opera.gx
 
-# --- Р‘СЂР°СѓР·РµСЂС‹ Microsoft Edge ---
 com.microsoft.emmx
 com.microsoft.emmx.canary
 com.microsoft.emmx.dev
 com.microsoft.emmx.beta
 
-# --- Р‘СЂР°СѓР·РµСЂС‹ Brave & Vivaldi ---
 com.brave.browser
 com.brave.browser_beta
 com.vivaldi.browser
 com.vivaldi.browser.snapshot
 
-# --- РџСЂРѕС‡РёРµ РїРѕРїСѓР»СЏСЂРЅС‹Рµ Р±СЂР°СѓР·РµСЂС‹ ---
 com.sec.android.app.sbrowser
 com.sec.android.app.sbrowser.beta
 org.torproject.torbrowser
@@ -61,7 +50,6 @@ com.UCMobile.intl
 com.mi.globalbrowser
 com.mi.globalbrowser.mini
 
-# --- РњРµСЃСЃРµРЅРґР¶РµСЂС‹ Рё СЃРѕС†РёР°Р»СЊРЅС‹Рµ СЃРµС‚Рё ---
 com.discord
 com.discord.canary
 org.telegram.messenger

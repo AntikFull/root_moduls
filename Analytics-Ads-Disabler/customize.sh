@@ -103,7 +103,6 @@ mkdir -p "$DATA_DIR"
 chmod 700 "$DATA_DIR" 2>/dev/null
 
 # При обновлении сначала полностью останавливаем runtime старой версии. Иначе
-# config watcher может начать полный пересчёт на частично обновлённых настройках
 # одновременно с PM-пробами установщика. На некоторых HyperOS это перегружает
 # Binder Package Manager и приводит к Failed transaction/Broken pipe.
 stop_previous_worker() {

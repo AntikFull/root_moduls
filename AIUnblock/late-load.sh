@@ -1,5 +1,4 @@
 #!/system/bin/sh
-# KernelSU late-load replacement for post-fs-data; С‚Р°РєР¶Рµ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РґРѕ OverlayFS mount.
 MODDIR=${0%/*}
 [ -f "$MODDIR/lib/hosts.sh" ] || exit 0
 . "$MODDIR/lib/hosts.sh"

@@ -219,7 +219,6 @@ cap_runtime_hard_failure() {
 cap_runtime_reached_pm() {
     out="$1"; rc="$2"
 
-    # PackageManager РїРѕРґС‚РІРµСЂРґРёР» РѕР±СЂР°Р±РѕС‚РєСѓ РєРѕРјР°РЅРґС‹ Рё РѕС‚РєР»РѕРЅРёР» С‚РѕР»СЊРєРѕ РЅРµСЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РєРѕРјРїРѕРЅРµРЅС‚
     printf '%s\n' "$out" | grep -Eiq \
         'does not exist|Unknown component|Unknown package|not found|not installed|new state:' && return 0
 
@@ -482,7 +481,6 @@ EOF_SPEC
     watch_backend=$(cap_probe_watch_backend)
 
     cat > "$tmp" <<EOF_CAP
-# Analytics & Ads Disabler вЂ” auto-detected device capability profile
 CAP_PROFILE_VERSION=$CAP_PROFILE_VERSION
 DEVICE_SIGNATURE=$(cap_device_signature)
 ROOT_MANAGER=$(cap_root_manager)

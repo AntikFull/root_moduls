@@ -23,9 +23,6 @@ pid_is_nfqws() {
 failures=0
 while :; do
   sleep "$HEALTH_WATCH_INTERVAL"
-  # DIRECT: РЅР° СЌС‚РѕР№ СЃРµС‚Рё РѕР±С…РѕРґ РЅРµ РЅСѓР¶РµРЅ, nfqws2 РЅР°РјРµСЂРµРЅРЅРѕ РЅРµ Р·Р°РїСѓС‰РµРЅ.
-  # Р‘РµР· СЌС‚РѕР№ РїСЂРѕРІРµСЂРєРё watcher РїСЂРёРЅСЏР» Р±С‹ С€С‚Р°С‚РЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ Р·Р° РґРІРѕР№РЅРѕР№ СЃР±РѕР№
-  # Рё СЂР°Р· РІ РјРёРЅСѓС‚Сѓ РґС‘СЂРіР°Р» РїРѕР»РЅС‹Р№ reload.
   if [ -f "$RUN_DIR/direct.flag" ]; then failures=0; continue; fi
   pid=$(cat "$PID_FILE" 2>/dev/null)
   ok=1

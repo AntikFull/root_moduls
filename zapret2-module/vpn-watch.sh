@@ -54,7 +54,6 @@ start_netlink_monitor() {
   exec 9<> "$NETLINK_FIFO" || return 0
 
   # ip monitor uses rtnetlink and blocks in the kernel. Подписываемся только на
-  # link/address/route: `monitor all` тянет ещё и neigh (ARP), а это десятки
   # событий в минуту на людном Wi-Fi — цикл просыпался бы впустую.
   "$IP_BIN" monitor link address route >&9 2>/dev/null &
   IPMON_PID=$!
@@ -96,7 +95,6 @@ probe_read_timeout() {
   rm -f "$probe" 2>/dev/null
 }
 
-# Ждём следующего netlink-события до $1 секунд. Пока событий нет, процесс
 # спит в ядре: ни пробуждений таймера каждые 2 сек, ни форков `sleep`.
 wait_for_event() {
   local timeout="$1" line
@@ -128,7 +126,6 @@ now_epoch() {
   case "$n" in ''|*[!0-9]*) echo 0 ;; *) echo "$n" ;; esac
 }
 
-# Дешёвая подпись интерфейсов: только sysfs + `ip addr`, без dumpsys.
 # Резервная периодическая проверка ролей эскалируется до дорогого
 # net-role.sh role-signature (два dumpsys) лишь когда эта подпись изменилась.
 cheap_snapshot() { "$MODDIR/net-role.sh" signature 2>/dev/null; }
@@ -149,7 +146,6 @@ while :; do
   roles=""
   role_check_due=0
 
-  # Лёгкий периодический триггер: auto-select сам применяет разный TTL для
   # Wi-Fi и мобильной сети и не выполняет HTTPS-probe, пока кэш свежий.
   if [ "$AUTO_SELECT_ENABLED" = 1 ] && [ "$AUTO_PERIODIC_RECHECK" -ge 300 ] 2>/dev/null && \
      [ $((now - last_auto_check)) -ge "$AUTO_PERIODIC_RECHECK" ] 2>/dev/null; then
@@ -170,7 +166,6 @@ while :; do
   elif [ "$event_pending" = 1 ] && [ $((now - event_since)) -ge "$VPN_EVENT_DEBOUNCE" ] 2>/dev/null; then
     role_check_due=1
   elif [ $((now - last_role_check)) -ge "$VPN_ROLE_RECHECK" ] 2>/dev/null; then
-    # Резервная проверка: сначала дешёвая sysfs-подпись. Если интерфейсы,
     # их состояния и адреса не менялись, роли измениться не могли — dumpsys
     # не запускаем вовсе.
     cheap=$(cheap_snapshot)

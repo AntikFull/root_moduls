@@ -9,9 +9,6 @@ rm -rf "$OUT/arm64-v8a" "$OUT/armeabi-v7a" "$OUT/x86_64" "$OUT/x86"
 mkdir -p "$OUT/arm64-v8a" "$OUT/armeabi-v7a" "$OUT/x86_64" "$OUT/x86"
 LDFLAGS="-s -w -buildid= -X main.version=$VERSION"
 
-# РџР°РєРµС‚ СЃРѕР±РёСЂР°РµС‚СЃСЏ С†РµР»РёРєРѕРј (РЅРµ РѕРґРЅРёРј main.go): С‚СЂР°РЅСЃРїР°СЂРµРЅС‚РЅС‹Р№ SO_ORIGINAL_DST
-# РІС‹РЅРµСЃРµРЅ РІ origdst_linux.go, Р° origdst_other.go РґР°С‘С‚ Р·Р°РіР»СѓС€РєСѓ, С‡С‚РѕР±С‹ РїР°СЂСЃРµСЂС‹
-# Рё СЃРµС‚РµРІС‹Рµ РїСЂРѕР±С‹ РјРѕР¶РЅРѕ Р±С‹Р»Рѕ СЃРѕР±СЂР°С‚СЊ Рё РїСЂРѕРІРµСЂРёС‚СЊ РЅР° РјР°С€РёРЅРµ СЂР°Р·СЂР°Р±РѕС‚С‡РёРєР°.
 cd "$SRC"
 
 GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o "$OUT/arm64-v8a/aiunblock-native" .
@@ -25,8 +22,6 @@ GOOS=linux GOARCH=386 GO386=sse2 CGO_ENABLED=0 go build -trimpath -buildvcs=fals
   cd "$OUT"
   : > SHA256SUMS.all
   for f in arm64-v8a/aiunblock-native arm64-v8a/aiunblock-native.static armeabi-v7a/aiunblock-native x86_64/aiunblock-native x86/aiunblock-native; do
-    # sha256sum РІ Р±РёРЅР°СЂРЅРѕРј СЂРµР¶РёРјРµ (Git Bash РЅР° Windows) РїРёС€РµС‚ РёРјСЏ РєР°Рє "*path" вЂ”
-    # СѓСЃС‚Р°РЅРѕРІС‰РёРє СЃРІРµСЂСЏРµС‚ РІС‚РѕСЂРѕРµ РїРѕР»Рµ РєР°Рє РµСЃС‚СЊ, РїРѕСЌС‚РѕРјСѓ Р·РІС‘Р·РґРѕС‡РєСѓ СѓР±РёСЂР°РµРј СЃСЂР°Р·Сѓ.
     sha256sum "$f" | sed 's/ \*/  /' >> SHA256SUMS.all
   done
   {

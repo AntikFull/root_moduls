@@ -96,9 +96,9 @@ startup_value() { sed -n "s/^$1=//p" "$START_STATE_FILE" 2>/dev/null | head -n1;
 
 cmd_status() {
   load_conf
-  local pid=0 state="РћРЎРўРђРќРћР’Р›Р•Рќ" health source warnings effective
+  local pid=0 state="РРРРРРРРРР" health source warnings effective
   [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
-  if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid"; then state="Р РђР‘РћРўРђР•Рў"; else pid=0; fi
+  if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid"; then state="РРРРРРРР"; else pid=0; fi
   health=$(health_value HEALTH); source=$(health_value PACKAGE_SOURCE); warnings=$(health_value WARNINGS); effective=$(health_value STRATEGY_EFFECTIVE)
   echo "Zapret2: $state (PID: ${pid:-0}) health=${health:-UNKNOWN}"
   echo "MODE=${MODE:-INCLUDE}, STRATEGY=${STRATEGY_MODE:-SMART}->${effective:-${STRATEGY_MODE:-SMART}}, FORCE_TCP=${FORCE_TCP:-1}, QUIC_MODE=${QUIC_MODE:-SELECTED}, package_source=${source:-unknown}"
@@ -110,8 +110,6 @@ cmd_json_status() {
   local pid=0 running=false direct=false manual_apps=0 auto_apps=0 excluded=0 scope health warnings source compat compat_notes effective acct connbytes4 connmark4 nfq4 owner4 startup_state startup_phase startup_progress startup_updated now age late_start_pid late_start_waiting=false downstream vpn_iface vpn_meta vpn_mode vpn_watcher_pid health_watcher_pid vpn_watcher_alive=false health_watcher_alive=false youtube_count auto_profile auto_status auto_network_iface auto_network_key auto_updated
   [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
   [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid" && running=true || pid=0
-  # DIRECT: РЅР° СЌС‚РѕР№ СЃРµС‚Рё РѕР±С…РѕРґ РЅРµ РЅСѓР¶РµРЅ, РїРѕСЌС‚РѕРјСѓ nfqws2 РЅР°РјРµСЂРµРЅРЅРѕ РЅРµ Р·Р°РїСѓС‰РµРЅ.
-  # Р”Р»СЏ UI СЌС‚Рѕ СЂР°Р±РѕС‡РµРµ СЃРѕСЃС‚РѕСЏРЅРёРµ, Р° РЅРµ "РѕСЃС‚Р°РЅРѕРІР»РµРЅ".
   direct=false
   if [ -f "$RUN_DIR/direct.flag" ]; then direct=true; running=true; pid=0; fi
   [ -f "$APPS_LIST" ] && manual_apps=$(grep -cvE '^[[:space:]]*(#|$)' "$APPS_LIST")
@@ -142,9 +140,9 @@ cmd_json_status() {
   if [ -z "$downstream" ]; then vpn_mode=IDLE; else case "$vpn_meta" in disabled) vpn_mode=OFF ;; *'|vpn=|'*) [ "${VPN_FALLBACK_MODE:-ANTIDPI}" = BLOCK ] && vpn_mode=BLOCK || vpn_mode=ANTIDPI ;; *'|vpn='*) vpn_mode=VPN ;; *) vpn_mode=IDLE ;; esac; fi
   vpn_watcher_pid=$(cat "$RUN_DIR/vpn-watcher.pid" 2>/dev/null); case "$vpn_watcher_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$vpn_watcher_pid" vpn-watch.sh && vpn_watcher_alive=true ;; esac
   health_watcher_pid=$(cat "$RUN_DIR/health-watcher.pid" 2>/dev/null); case "$health_watcher_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$health_watcher_pid" service-watch.sh && health_watcher_alive=true ;; esac
-  if [ "$running" = true ]; then startup_state=READY; startup_phase="РЎР»СѓР¶Р±Р° СЂР°Р±РѕС‚Р°РµС‚"; startup_progress=100
-  elif [ "$startup_state" = WAITING ] && [ "$late_start_waiting" = true ]; then startup_phase="РћР¶РёРґР°РЅРёРµ Р·Р°РІРµСЂС€РµРЅРёСЏ Р·Р°РіСЂСѓР·РєРё Android"
-  elif { [ "$startup_state" = STARTING ] || [ "$startup_state" = WAITING ]; } && [ "$age" -gt 390 ] 2>/dev/null; then startup_state=STALE; startup_phase="РђРІС‚РѕР·Р°РїСѓСЃРє РЅРµ Р·Р°РІРµСЂС€РёР»СЃСЏ Р·Р° 6 РјРёРЅСѓС‚"; fi
+  if [ "$running" = true ]; then startup_state=READY; startup_phase="РРСРРР СРРРСРРС"; startup_progress=100
+  elif [ "$startup_state" = WAITING ] && [ "$late_start_waiting" = true ]; then startup_phase="РРРРРРРР РРРРССРРРС РРРССРРР Android"
+  elif { [ "$startup_state" = STARTING ] || [ "$startup_state" = WAITING ]; } && [ "$age" -gt 390 ] 2>/dev/null; then startup_state=STALE; startup_phase="РРСРРРРССР РР РРРРССРРСС РР 6 РРРСС"; fi
   printf '{"running":%s,"direct":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"manual_apps_count":%s,"auto_apps_count":%s,"auto_apps_enabled":"%s","exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","smart_youtube_count":%s,"compat_status":"%s","compat_notes":"%s","auto_profile":"%s","auto_status":"%s","auto_network_key":"%s","auto_network_iface":"%s","auto_updated":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s,"tether_downstream":"%s","vpn_iface":"%s","vpn_mode":"%s","vpn_watcher_alive":%s,"health_watcher_alive":%s}\n' \
     "$running" "$direct" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$((manual_apps+auto_apps))" "$manual_apps" "$auto_apps" "${AUTO_APPS_ENABLED:-1}" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-SMART}")" "$(json_escape "$effective")" "$youtube_count" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_network_key:-none}")" "$(json_escape "${auto_network_iface:-none}")" "${auto_updated:-0}" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}" "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated" "$(json_escape "$downstream")" "$(json_escape "$vpn_iface")" "$(json_escape "$vpn_mode")" "$vpn_watcher_alive" "$health_watcher_alive"
 }
@@ -317,7 +315,7 @@ cmd_json_apps() {
 
 cmd_add_del() {
   local list="$1" op="$2" pkg="$3" file other tmp
-  validate_pkg "$pkg" || { echo "РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ РёРјСЏ РїР°РєРµС‚Р°"; return 1; }
+  validate_pkg "$pkg" || { echo "РРРРРСССРРРР РРС РРРРСР"; return 1; }
   file=$(list_file "$list") || return 1
   mark_control_write
   if [ "$op" = add ]; then
@@ -340,8 +338,8 @@ remove_pkg_exact() {
 
 set_app_state_only() {
   local pkg="$1" state="$2"
-  validate_pkg "$pkg" || { echo "РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ РёРјСЏ РїР°РєРµС‚Р°"; return 1; }
-  case "$state" in include|exclude|none) ;; *) echo "РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ РїСЂРёР»РѕР¶РµРЅРёСЏ"; return 1 ;; esac
+  validate_pkg "$pkg" || { echo "РРРРРСССРРРР РРС РРРРСР"; return 1; }
+  case "$state" in include|exclude|none) ;; *) echo "РРРРРСССРРРР СРССРСРРР РСРРРРРРРС"; return 1 ;; esac
   mark_control_write
   remove_pkg_exact "$APPS_LIST" "$pkg" || return 1
   remove_pkg_exact "$EXCLUDE_LIST" "$pkg" || return 1
@@ -371,7 +369,7 @@ cmd_replace_list() {
   printf '%s\n' "$input" | while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[!A-Za-z0-9._#\ -]* ) exit 1 ;; esac
     echo "$line"
-  done > "$tmp" || { rm -f "$tmp"; echo "РќРµРґРѕРїСѓСЃС‚РёРјС‹Рµ СЃРёРјРІРѕР»С‹ РІ СЃРїРёСЃРєРµ"; return 1; }
+  done > "$tmp" || { rm -f "$tmp"; echo "РРРРРСССРРСР СРРРРРС Р СРРСРР"; return 1; }
   mark_control_write
   mv -f "$tmp" "$file"
   chmod 0600 "$file" 2>/dev/null || true
@@ -404,7 +402,7 @@ cmd_nfqws_debug() {
   fi
   set_conf NFQWS_DEBUG "$2"
   reload_service
-  [ "$2" = 1 ] && echo "nfqws debug РІРєР»СЋС‡С‘РЅ: $NFQWS_LOG" || echo "nfqws debug РІС‹РєР»СЋС‡РµРЅ"
+  [ "$2" = 1 ] && echo "nfqws debug РРРСССР: $NFQWS_LOG" || echo "nfqws debug РСРРССРР"
 }
 cmd_diag() { sh "$MODDIR/diagnostics.sh"; }
 cmd_export_logs() { sh "$MODDIR/log-export.sh" now; }
@@ -412,7 +410,7 @@ cmd_module_version() { sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null
 cmd_auto_status() { sh "$MODDIR/auto-select.sh" status; }
 cmd_auto_run() { sh "$MODDIR/auto-select.sh" force; }
 cmd_auto_clear() { sh "$MODDIR/auto-select.sh" clear; sh "$MODDIR/service.sh" reload; }
-cmd_webui() { echo "WebUI РїСЂРµРґРѕСЃС‚Р°РІР»СЏРµС‚СЃСЏ РјРµРЅРµРґР¶РµСЂРѕРј KernelSU С‡РµСЂРµР· webroot/index.html"; }
+cmd_webui() { echo "WebUI РСРРРССРРРСРССС РРРРРРРСРР KernelSU СРСРР webroot/index.html"; }
 
 case "$1" in
   status) cmd_status ;;
@@ -449,5 +447,5 @@ case "$1" in
   webui) cmd_webui ;;
   log) tail -n "${2:-150}" "$LOG_FILE" 2>/dev/null ;;
   nfqws-log) tail -n "${2:-150}" "$NFQWS_LOG" 2>/dev/null ;;
-  *) echo "РљРѕРјР°РЅРґС‹: status, json-status, json-apps, json-app-lists, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
+  *) echo "РРРРРРС: status, json-status, json-apps, json-app-lists, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
 esac

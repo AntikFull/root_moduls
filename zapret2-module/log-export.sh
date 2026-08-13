@@ -25,7 +25,7 @@ wait_for_export_dir() {
 }
 
 if ! wait_for_export_dir; then
-  [ "$MODE" = now ] && echo "Shared storage /sdcard РµС‰С‘ РЅРµРґРѕСЃС‚СѓРїРЅРѕ" >&2 && exit 1
+  [ "$MODE" = now ] && echo "Shared storage /sdcard РСС РРРРСССРРР" >&2 && exit 1
   exit 0
 fi
 mkdir -p "$INTERNAL_DIR" 2>/dev/null

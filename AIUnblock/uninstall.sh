@@ -24,7 +24,6 @@ delete_all() {
 
 remove_firewall_rules() {
   local chain uid
-  # РЎРЅР°С‡Р°Р»Р° СѓР±РёСЂР°РµРј С‚РѕР»СЊРєРѕ РЅР°С€Рё tagged hooks.
   delete_all iptables -t nat -D OUTPUT -p tcp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_OUT
   delete_all iptables -D OUTPUT -p udp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_QUIC
   delete_all iptables -D OUTPUT -p tcp --dport 443 -m comment --comment AIUNBLOCK_FAIL -j AIUNBLOCK_FAIL
@@ -33,7 +32,6 @@ remove_firewall_rules() {
   delete_all ip6tables -D OUTPUT -p udp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_V6
   delete_all ip6tables -D OUTPUT -m comment --comment AIUNBLOCK -j AIUNBLOCK_V6
 
-  # РЈРґР°Р»СЏРµРј legacy untagged hooks РїСЂРѕС€Р»С‹С… РІРµСЂСЃРёР№ С‚РѕР»СЊРєРѕ РїРѕ СѓРЅРёРєР°Р»СЊРЅС‹Рј AIUNBLOCK chain names.
   delete_all iptables -t nat -D OUTPUT -p tcp --dport 443 -j AIUNBLOCK_OUT
   delete_all iptables -D OUTPUT -p udp --dport 443 -j AIUNBLOCK_QUIC
   delete_all iptables -D OUTPUT -p tcp --dport 443 -j AIUNBLOCK_GUARD
@@ -68,10 +66,8 @@ stop_pid_file "$LOCKDIR/pid" "$MODDIR/service.sh"
 stop_pid_file "$ROUTER_PID_FILE" "aiunblock-native"
 command -v restore_saved_locales >/dev/null 2>&1 && restore_saved_locales "$MODDIR"
 remove_firewall_rules
-# Р’РђР–РќРћ: /system/etc/hosts РЅРµ umount'РёРј вЂ” mount РјРѕР¶РµС‚ РїСЂРёРЅР°РґР»РµР¶Р°С‚СЊ РґСЂСѓРіРѕРјСѓ РјРѕРґСѓР»СЋ.
 rm -rf "$LOCKDIR"
 rm -f "$ROUTER_PID_FILE" "$MODDIR/.force_refresh" "$MODDIR/.reload"
-# РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РїРѕРїСЂРѕСЃРёР» РЅРµ РѕСЃС‚Р°РІР»СЏС‚СЊ СЃС‚Р°СЂС‹Рµ Р»РѕРіРё РїРѕСЃР»Рµ СѓРґР°Р»РµРЅРёСЏ РјРѕРґСѓР»СЏ.
 rm -rf /data/adb/AIUnblock/logs /data/adb/AIUnblock/diagnostics 2>/dev/null || true
 rm -f /data/adb/AIUnblock/.log_version /data/adb/AIUnblock/.public_log_version /data/adb/AIUnblock/.last_auto_diag 2>/dev/null || true
 rm -rf /sdcard/eCubz/AIUnblock/logs 2>/dev/null || true

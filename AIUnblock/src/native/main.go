@@ -541,9 +541,9 @@ func tlsDialIP(ip, domain string, timeout time.Duration) (*tls.Conn, error) {
 	return tc, nil
 }
 
-// gatewayLoc возвращает страну выхода соединения по данным Cloudflare
-// (/cdn-cgi/trace). Пустая строка означает «определить не удалось» — так бывает
-// у не-Cloudflare доменов (googleapis.com), и это НЕ повод отбраковывать gateway.
+// gatewayLoc РРРРСРСРРС СССРРС РССРРР СРРРРёРРРРёС РР РРРРСР Cloudflare
+// (/cdn-cgi/trace). РСССРС СССРРР РРРРСРРС ВРРСРРРРРёСС РР СРРРРССВ в СРР РСРРРС
+// С РР-Cloudflare РРРРРРР (googleapis.com), Рё ССР РР РРРРР РСРСРРРРСРРСС gateway.
 func gatewayLoc(ip, domain string, timeout time.Duration) string {
 	c, err := tlsDialIP(ip, domain, timeout)
 	if err != nil {
@@ -599,10 +599,10 @@ func probeGateway(ip, domain string, timeout time.Duration) (int, error) {
 	return code, nil
 }
 
-// runTrace: диагностика «через какую страну реально выходит этот gateway».
-// Cloudflare отдаёт это в /cdn-cgi/trace обычным текстом, без анти-ботовой стены,
-// поэтому по нему видно то, чего не видно по коду ответа: 403 может быть и
-// гео-блоком, и просто защитой от ботов.
+// runTrace: РРёРРРРССРёРР ВСРСРР РРРСС СССРРС СРРРСРР РССРРРёС ССРС gatewayВ.
+// Cloudflare РСРРСС ССР Р /cdn-cgi/trace РРССРСР СРРССРР, РРР РРСРё-РРСРРРР ССРРС,
+// РРССРРС РР РРРС РРёРРР СР, СРРР РР РРёРРР РР РРРС РСРРСР: 403 РРРРС РССС Рё
+// РРР-РРРРРР, Рё РСРССР РРСРёСРР РС РРСРР.
 func runTrace(args []string) int {
 	fs := flag.NewFlagSet("trace", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -703,10 +703,10 @@ func runProbe(args []string) int {
 
 	timeout := time.Duration(*secs) * time.Second
 
-	// Адрес, который выдаёт обычный резолвер, — это сам заблокированный сервер.
-	// Пропустив его, модуль считает «маршрут найден», хотя обхода нет: именно так
-	// NotebookLM получал реальный IP Google, а ChatGPT — российский edge Cloudflare.
-	// Для не-Cloudflare сервисов это единственный доступный признак.
+	// РРСРС, РРСРССР РСРРСС РРССРСР СРРРРРРС, в ССР СРР РРРРРРРёСРРРРРСР СРСРРС.
+	// РСРРСССРёР РРР, РРРСРС ССРёСРРС ВРРССССС РРРРРРВ, СРСС РРСРРР РРС: РёРРРРР СРР
+	// NotebookLM РРРССРР СРРРСРСР IP Google, Р ChatGPT в СРССРёРСРРёР edge Cloudflare.
+	// РРС РР-Cloudflare СРСРРёСРР ССР РРРёРССРРРРСР РРСССРРСР РСРёРРРР.
 	realServer := map[string]bool{}
 	if *publicDNS != "" {
 		if answers, err := dnsQueryA(*publicDNS, hosts[0], timeout); err == nil {
@@ -747,9 +747,9 @@ func runProbe(args []string) int {
 					return
 				}
 			}
-			// Ответ 200..499 сам по себе НЕ означает, что блокировка обойдена:
-			// заблокированный edge отвечает ровно так же. Проверяем страну выхода
-			// один раз на кандидата, а не на каждый домен.
+			// РСРРС 200..499 СРР РР СРРР РР РРРРСРРС, ССР РРРРРёСРРРР РРРРРРРР:
+			// РРРРРРРёСРРРРРСР edge РСРРСРРС СРРРР СРР РР. РСРРРССРР СССРРС РССРРР
+			// РРРёР СРР РР РРРРРёРРСР, Р РР РР РРРРСР РРРРР.
 			if *rejectLoc != "" {
 				if loc := gatewayLoc(gateway, hosts[0], timeout); loc != "" && loc == strings.ToUpper(*rejectLoc) {
 					return
@@ -1026,10 +1026,10 @@ func resolveViaBootstrap(host string, servers []string, timeout time.Duration) (
 	return out, nil
 }
 
-// readHTTPResponse — минимальный разбор ответа HTTP/1.x вместо net/http.
-// Нужен ровно один POST на DoH-резолвер, а весь пакет net/http тянет в бинарник
-// около мегабайта на каждую ABI. Поддерживаются Content-Length, chunked и
-// «читать до закрытия» (мы всегда шлём Connection: close).
+// readHTTPResponse в РРёРРёРРРСРСР СРРРРС РСРРСР HTTP/1.x РРРССР net/http.
+// РСРРР СРРРР РРРёР POST РР DoH-СРРРРРРС, Р РРСС РРРРС net/http ССРРС Р РРёРРСРРёР
+// РРРРР РРРРРРРСР РР РРРРСС ABI. РРРРРСРРёРРСССС Content-Length, chunked Рё
+// ВСРёСРСС РР РРРСССРёСВ (РС РСРРРР СРСР Connection: close).
 func readHTTPResponse(r *bufio.Reader, limit int64) (int, []byte, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -1105,7 +1105,7 @@ func readHTTPResponse(r *bufio.Reader, limit int64) (int, []byte, error) {
 				return 0, nil, err
 			}
 			body = append(body, chunk...)
-			// CRLF после чанка
+			// CRLF РРСРР СРРРР
 			if _, err = r.Discard(2); err != nil {
 				return 0, nil, err
 			}
@@ -1161,9 +1161,9 @@ func dohQuery(resolver, domain string, bootstrapServers []string, timeout time.D
 			last = e
 			continue
 		}
-		// Без ALPN сервер, предпочитающий HTTP/2, отвечает на наш HTTP/1.1-запрос
-		// кодом 505. Явно договариваемся об http/1.1 — иначе часть штатных
-		// DoH-резолверов (например dns.malw.link) не работает вообще.
+		// РРР ALPN СРСРРС, РСРРРРСРёСРССРёР HTTP/2, РСРРСРРС РР РРС HTTP/1.1-РРРСРС
+		// РРРРР 505. РРРР РРРРРРСРёРРРРСС РР http/1.1 в РёРРСР СРССС ССРСРСС
+		// DoH-СРРРРРРСРР (РРРСРёРРС dns.malw.link) РР СРРРСРРС РРРРСР.
 		tc := tls.Client(raw, &tls.Config{
 			ServerName: u.Hostname(),
 			RootCAs:    roots,

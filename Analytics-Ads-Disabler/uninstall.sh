@@ -26,7 +26,6 @@ stop_owned_pidfile "$AD_SURFACE_PID_FILE" "ad_surface_indexer.sh"
 
 ad_killer_cleanup >/dev/null 2>&1 || true
 
-# РЈРґР°Р»СЏРµС‚СЃСЏ С‚РѕР»СЊРєРѕ СЃРѕР±СЃС‚РІРµРЅРЅС‹Р№ IFW-С„Р°Р№Р»; РїСЂР°РІРёР»Р° App Manager, Blocker Рё РґСЂСѓРіРёС… РїСЂРѕРіСЂР°РјРј РЅРµ Р·Р°С‚СЂР°РіРёРІР°СЋС‚СЃСЏ.
 if [ -e "$IFW_RULE_FILE" ]; then
     if rm -f "$IFW_RULE_FILE" 2>/dev/null; then
         ulog "IFW REMOVED $IFW_RULE_FILE"

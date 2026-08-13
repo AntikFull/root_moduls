@@ -1,14 +1,14 @@
 ## v4.8.0 — расширение покрытия
 
-- **Network Killer: 17 SDK вместо 3.** `[ADS_NETWORK_HOST]` вырос с 6 правил до 69. Теперь хосты есть у каждого SDK, чью рекламную поверхность умеет находить индексатор. Где возможно, бьём по init/config-эндпоинтам, а не по CDN с креативами — так SDK вообще не инициализируется.
-- **Отключение init-провайдеров.** Рекламные SDK стартуют через ContentProvider ещё до `Application.onCreate()`. Секция `[ADS_PROVIDER_AGGRESSIVE]` расширена с 8 до 16 точных правил плюс regex, ограниченный рекламными namespace'ами. Firebase/Sentry/androidx.startup он задеть не может по построению.
-- **Мост для Xposed.** Если найден LSPosed/LSPatch/Xposed, модуль выкладывает `xposed_targets.json` — точный список «пакет → SDK → поверхности → уверенность» из завершённого Surface Index. Сам модуль по-прежнему ничего не хукает: это данные для модуля-компаньона, который сможет убрать и сам рекламный контейнер, а не только его загрузку. Управляется `XPOSED_BRIDGE=auto|1|0`.
+- **Network Killer: 17 SDK вместо 3.** `[ADS_NETWORK_HOST]` вырос с 6 правил до 69. Теперь хосты есть у каждого SDK, чью рекламную поверхность умеет находить индексатор. Где возможно, бьм по init/config-эндпоинтам, а не по CDN с креативами  так SDK вообще не инициализируется.
+- **Отключение init-провайдеров.** Рекламные SDK стартуют через ContentProvider ещ до `Application.onCreate()`. Секция `[ADS_PROVIDER_AGGRESSIVE]` расширена с 8 до 16 точных правил плюс regex, ограниченный рекламными namespace'ами. Firebase/Sentry/androidx.startup он задеть не может по построению.
+- **Мост для Xposed.** Если найден LSPosed/LSPatch/Xposed, модуль выкладывает `xposed_targets.json`  точный список пакет  SDK  поверхности  уверенность из завершнного Surface Index. Сам модуль по-прежнему ничего не хукает: это данные для модуля-компаньона, который сможет убрать и сам рекламный контейнер, а не только его загрузку. Управляется `XPOSED_BRIDGE=auto|1|0`.
 
 ## v4.7.0 — что изменилось
 
 **Критично:**
-- Пустой ответ PackageManager больше не стирает базу состояний. Раньше один сбой Binder приводил к потере и списка управляемых компонентов, и сохранённых оригинальных состояний — откатить было уже нечем.
-- Удаление модуля наконец действительно откатывает компоненты. `uninstall.sh` выполняется в post-fs-data, где PackageManager ещё нет, поэтому все восстановления падали, а следом `rm -rf` уничтожал данные. Теперь откат двухфазный: на загруженной системе — сразу, иначе через отложенный воркер после `sys.boot_completed`.
+- Пустой ответ PackageManager больше не стирает базу состояний. Раньше один сбой Binder приводил к потере и списка управляемых компонентов, и сохраннных оригинальных состояний  откатить было уже нечем.
+- Удаление модуля наконец действительно откатывает компоненты. `uninstall.sh` выполняется в post-fs-data, где PackageManager ещ нет, поэтому все восстановления падали, а следом `rm -rf` уничтожал данные. Теперь откат двухфазный: на загруженной системе  сразу, иначе через отложенный воркер после `sys.boot_completed`.
 - `full_rescan()` возвращал код `release_lock`, то есть всегда 0 — ошибки сканирования и fail-fast были не видны.
 - Индексатор рекламных поверхностей на стоковых прошивках молча не находил ничего: `unzip -Z1` не поддерживается ни toybox, ни BusyBox.
 
@@ -20,7 +20,7 @@
 **Network Killer:**
 - Убраны дублирующиеся правила (один хост принадлежал двум SDK-лейблам).
 - Новый режим `ip`: TLS-SNI требует `xt_string`, которого нет во многих GKI-ядрах. Режим `ip` использует только `xt_owner` и работает почти везде. Включается через `AD_KILLER_IP_FALLBACK=1`.
-- В логе теперь видно, какой именно матч отсутствует в ядре, и цепочка переустанавливается, если её снёс netd.
+- В логе теперь видно, какой именно матч отсутствует в ядре, и цепочка переустанавливается, если е снс netd.
 
 **Правила:**
 - `onesignal`, `braze`/`appboy` больше не отключаются автоматически — они доставляют реальные уведомления. Секция `[ANALYTICS_PUSH_RISK]`, включается через `BLOCK_PUSH_SDK=1`.
@@ -61,7 +61,7 @@
 
 ## <a name="русский"></a>  Описание (Russian)
 
-**Analytics & Ads Disabler** — адаптивный systemless-модуль для Magisk / KernelSU / KernelSU Next / APatch. Режим `SAFE` отключает совпавшие Services/Receivers, `BALANCED` дополнительно обрабатывает только точные безопасные Provider-правила, а `AGGRESSIVE` добавляет отдельный allowlist точных рекламных Provider/Activity для более сильного подавления рекламы. Backend `PM` остаётся стандартным, а опциональный `HYBRID` добавляет IFW-защиту для управляемых Services/Receivers и точных рекламных Activities. Неоднозначные Activity/Provider остаются только в аудите.
+**Analytics & Ads Disabler**  адаптивный systemless-модуль для Magisk / KernelSU / KernelSU Next / APatch. Режим `SAFE` отключает совпавшие Services/Receivers, `BALANCED` дополнительно обрабатывает только точные безопасные Provider-правила, а `AGGRESSIVE` добавляет отдельный allowlist точных рекламных Provider/Activity для более сильного подавления рекламы. Backend `PM` остатся стандартным, а опциональный `HYBRID` добавляет IFW-защиту для управляемых Services/Receivers и точных рекламных Activities. Неоднозначные Activity/Provider остаются только в аудите.
 
 ### Режимы компонентов
 - `SAFE` — только совпавшие рекламные/аналитические Service и Receiver.
@@ -77,19 +77,19 @@
 -  **Блокировка рекламы и трекинга:** Отключение рекламных ресиверов и служб сбора данных (Yandex Metrica, Google Analytics, Firebase, AppMetrica и др.).
 -  **Поддержка динамического отслеживания:** Автоматически обрабатывает новые и обновляемые приложения.
 -  **Белые списки:** Возможность внесения исключений в `whitelist.list`, `white_ads.list`, `white_analytics.list`.
--  **Full Activity Scanner:** В AGGRESSIVE/HYBRID resolver-таблицы дополняются чтением compiled `AndroidManifest.xml` из base/split APK. Exact Activity затем подтверждаются read-only запросом PackageManager с учётом уже disabled компонентов.
--  **Manifest Cache:** Неизменённые APK не распаковываются и не парсятся повторно на каждом reboot/Action. Изменение `rules.conf` переиспользует class-token cache, но заново вычисляет правила и PM verification; изменение APK/versionCode автоматически инвалидирует запись.
+-  **Full Activity Scanner:** В AGGRESSIVE/HYBRID resolver-таблицы дополняются чтением compiled `AndroidManifest.xml` из base/split APK. Exact Activity затем подтверждаются read-only запросом PackageManager с учтом уже disabled компонентов.
+-  **Manifest Cache:** Неизменнные APK не распаковываются и не парсятся повторно на каждом reboot/Action. Изменение `rules.conf` переиспользует class-token cache, но заново вычисляет правила и PM verification; изменение APK/versionCode автоматически инвалидирует запись.
 -  **Background Ad Surface Indexer:** После завершения PM/IFW policy отдельный read-only worker ищет `BANNER/MREC/NATIVE/APP_OPEN/INTERSTITIAL/REWARDED/SPLASH/VIDEO` в DEX и compiled layouts. Пакеты с уже известным ADS evidence идут первыми, поэтому диагностический DEX-индекс больше не задерживает готовность основной защиты.
--  **Strict RESOURCE Evidence:** DEX означает наличие API/класса SDK (`CAPABILITY`). RESOURCE разрешён только для отдельного allowlist реальных View/ViewGroup-контейнеров (`LAYOUT_CONFIRMED`); при совпадении обоих источников ставится `MULTI_EVIDENCE`.
--  **Surface Cache v4:** DEX matcher проверяет каждый fingerprint детерминированно после сертифицированного `strings`-прохода либо raw-exact fallback. Неизменённые APK/правила дают `FULL_HIT`; изменение surface-правил — `RULE_RESCAN`; изменение APK — `MISS`. Surface3 результаты v4.6.13 не переиспользуются.
+-  **Strict RESOURCE Evidence:** DEX означает наличие API/класса SDK (`CAPABILITY`). RESOURCE разрешн только для отдельного allowlist реальных View/ViewGroup-контейнеров (`LAYOUT_CONFIRMED`); при совпадении обоих источников ставится `MULTI_EVIDENCE`.
+-  **Surface Cache v4:** DEX matcher проверяет каждый fingerprint детерминированно после сертифицированного `strings`-прохода либо raw-exact fallback. Неизменнные APK/правила дают `FULL_HIT`; изменение surface-правил  `RULE_RESCAN`; изменение APK  `MISS`. Surface3 результаты v4.6.13 не переиспользуются.
 -  **Deterministic Matcher:** System/BusyBox `strings` проходят self-test сразу по всем активным DEX fingerprints; принимается только backend с полным результатом. Каждый fingerprint затем проверяется отдельным fixed-string match. При отсутствии рабочего `strings` используется raw-exact fallback. Для single-pattern grep выбирается рабочий System/BusyBox backend.
 -  **Surface Audit:** `ad_surface_scan.log` записывает SDK, формат, source, confidence, рекомендуемый будущий слой (`RUNTIME_NETWORK`/`COMPONENT_RUNTIME`), cache-state и время обработки APK.
 -  **Fullscreen Ads Killer:** Точные fullscreen/interstitial Activity известных рекламных SDK могут быть отключены PM и, в HYBRID, дополнительно перекрыты IFW. Широкие совпадения остаются audit-only.
--  **Banner / Native / App-Open Network Killer v1:** В `AGGRESSIVE` завершённый Surface Index сопоставляется с точными рекламными hostname для обнаруженного SDK и блокируется только для UID соответствующего приложения через собственную цепочку `AAD_ADKILL`. По умолчанию используются точные HTTPS-host rules; `AD_KILLER_FORCE_TCP=0`, поэтому QUIC/UDP 443 не трогается без явного opt-in. SAFE/BALANCED сетевой Killer снимают.
+-  **Banner / Native / App-Open Network Killer v1:** В `AGGRESSIVE` завершнный Surface Index сопоставляется с точными рекламными hostname для обнаруженного SDK и блокируется только для UID соответствующего приложения через собственную цепочку `AAD_ADKILL`. По умолчанию используются точные HTTPS-host rules; `AD_KILLER_FORCE_TCP=0`, поэтому QUIC/UDP 443 не трогается без явного opt-in. SAFE/BALANCED сетевой Killer снимают.
 -  **SDK Fingerprinter:** `sdk_fingerprint.log` показывает обнаруженные рекламные SDK и evidence по пакетам, не используя fingerprint как разрешение на отключение.
--  **Аудит компонентов:** Отчёт `component_audit.log` разделяет найденные компоненты по типу, категории, риску и принятому действию.
--  **Изолированный IFW:** HYBRID использует только `/data/system/ifw/analytics_ads_disabler.xml`, не перезаписывая правила App Manager, Blocker и других программ. Поскольку IFW глобален для Android users, правило создаётся только при единогласной policy для компонента во всех профилях, где установлен пакет.
--  **Точный откат:** При отключении HYBRID или удалении модуля собственный IFW-файл удаляется, а PM-компоненты возвращаются к сохранённому исходному override.
+-  **Аудит компонентов:** Отчт `component_audit.log` разделяет найденные компоненты по типу, категории, риску и принятому действию.
+-  **Изолированный IFW:** HYBRID использует только `/data/system/ifw/analytics_ads_disabler.xml`, не перезаписывая правила App Manager, Blocker и других программ. Поскольку IFW глобален для Android users, правило создатся только при единогласной policy для компонента во всех профилях, где установлен пакет.
+-  **Точный откат:** При отключении HYBRID или удалении модуля собственный IFW-файл удаляется, а PM-компоненты возвращаются к сохраннному исходному override.
 -  **Изолированный сетевой слой:** Killer не изменяет DNS/hosts и управляет только собственной filter-chain `AAD_ADKILL`. При отсутствии совместимого `iptables` owner+string backend он работает fail-open и не меняет PM/IFW.
 
 ---

@@ -1,5 +1,4 @@
 #!/system/bin/sh
-# AI Unblock RU вЂ” РїРѕРґРіРѕС‚РѕРІРєР° optional hosts Р”Рћ mount stage.
 
 HOSTS_MARKER="# AIUnblock-hosts"
 
@@ -9,9 +8,6 @@ hosts_status_write() {
   chmod 0600 "$moddir/.hosts_status" 2>/dev/null
 }
 
-# Р’РђР–РќРћ: СЃСЋРґР° РЅРµР»СЊР·СЏ Р·РІР°С‚СЊ `log` вЂ” РІ Android РµСЃС‚СЊ СЃРёСЃС‚РµРјРЅС‹Р№ Р±РёРЅР°СЂРЅРёРє /system/bin/log,
-# Рё `command -v log` РЅР°С…РѕРґРёР» РёРјРµРЅРЅРѕ РµРіРѕ, РёР·-Р·Р° С‡РµРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ СѓС…РѕРґРёР»Рё РІ logcat,
-# Р° РЅРµ РІ Р»РѕРі РјРѕРґСѓР»СЏ. РџРёС€РµРј РІ С„Р°Р№Р» РЅР°РїСЂСЏРјСѓСЋ.
 hosts_log() {
   local message="$1" dir="/data/adb/AIUnblock/logs"
   [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null
@@ -25,8 +21,6 @@ ksu_runtime_detected() {
   return 1
 }
 
-# РџСЂРѕРІРµСЂРєР° РїРѕСЃС‚С„Р°РєС‚СѓРј: СЂРµР°Р»СЊРЅРѕ Р»Рё РЅР°С€ hosts РѕРєР°Р·Р°Р»СЃСЏ РІ СЃРёСЃС‚РµРјРµ.
-# Р Р°Р±РѕС‚Р°РµС‚ РѕРґРёРЅР°РєРѕРІРѕ РЅР° Magisk (magic mount), KernelSU/APatch (OverlayFS) Рё metamodule.
 hosts_overlay_applied() {
   grep -q "^$HOSTS_MARKER" /system/etc/hosts 2>/dev/null
 }
@@ -42,7 +36,7 @@ verify_hosts_overlay() {
     hosts_status_write "$moddir" "active"
   else
     hosts_status_write "$moddir" "not-mounted"
-    hosts_log "hosts: overlay РЅРµ СЃРјРѕРЅС‚РёСЂРѕРІР°РЅ СЌС‚РѕР№ РїСЂРѕС€РёРІРєРѕР№/РјРµРЅРµРґР¶РµСЂРѕРј root; per-app routing РїСЂРѕРґРѕР»Р¶Р°РµС‚ СЂР°Р±РѕС‚Р°С‚СЊ"
+    hosts_log "hosts: overlay РР СРРРСРСРРРР ССРР РСРСРРРРР/РРРРРРРСРР root; per-app routing РСРРРРРРРС СРРРСРСС"
   fi
 }
 
@@ -67,7 +61,7 @@ prepare_hosts_tree() {
     if [ -n "$conflict_id" ]; then
       rm -rf "$moddir/system" 2>/dev/null
       hosts_status_write "$moddir" "conflict:$conflict_id"
-      hosts_log "hosts: РѕС‚РєР»СЋС‡С‘РЅ optional overlay РёР·-Р·Р° РєРѕРЅС„Р»РёРєС‚Р° СЃ '$conflict_id'; per-app routing РїСЂРѕРґРѕР»Р¶Р°РµС‚ СЂР°Р±РѕС‚Р°С‚СЊ"
+      hosts_log "hosts: РСРРСССР optional overlay РР-РР РРРСРРРСР С '$conflict_id'; per-app routing РСРРРРРРРС СРРРСРСС"
       return 0
     fi
   fi
@@ -75,13 +69,13 @@ prepare_hosts_tree() {
   [ "$ENABLE_HOSTS_ROUTING" -eq 0 ] || [ -s "$ai_hosts" ] || {
     rm -rf "$moddir/system" 2>/dev/null
     hosts_status_write "$moddir" "missing:hosts.ai"
-    hosts_log "hosts: РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ etc/hosts.ai; optional overlay РѕС‚РєР»СЋС‡С‘РЅ"
+    hosts_log "hosts: РССССССРСРС etc/hosts.ai; optional overlay РСРРСССР"
     return 0
   }
   [ "$ENABLE_ADBLOCK" -eq 0 ] || [ -s "$adblock_hosts" ] || {
     rm -rf "$moddir/system" 2>/dev/null
     hosts_status_write "$moddir" "missing:hosts.adblock"
-    hosts_log "hosts: РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ etc/hosts.adblock; optional overlay РѕС‚РєР»СЋС‡С‘РЅ"
+    hosts_log "hosts: РССССССРСРС etc/hosts.adblock; optional overlay РСРРСССР"
     return 0
   }
 
@@ -89,7 +83,6 @@ prepare_hosts_tree() {
   target="$moddir/system/etc/hosts"
   tmp="$target.tmp.$$"
 
-  # РњР°СЂРєРµСЂ РЅСѓР¶РµРЅ, С‡С‚РѕР±С‹ РїРѕСЃР»Рµ Р·Р°РіСЂСѓР·РєРё С‡РµСЃС‚РЅРѕ РїСЂРѕРІРµСЂРёС‚СЊ, СЃРјРѕРЅС‚РёСЂРѕРІР°Р»СЃСЏ Р»Рё overlay.
   printf '%s\n' "$HOSTS_MARKER" > "$tmp" || return 1
   if [ "$ENABLE_HOSTS_ROUTING" -eq 1 ]; then
     cat "$ai_hosts" >> "$tmp" || return 1
@@ -104,9 +97,6 @@ prepare_hosts_tree() {
   chmod 0644 "$tmp" 2>/dev/null
   mv -f "$tmp" "$target" || return 1
 
-  # Р Р°РЅСЊС€Рµ РЅР° KernelSU Р±РµР· metamodule overlay РІС‹РєР»СЋС‡Р°Р»СЃСЏ Р·Р°СЂР°РЅРµРµ вЂ” РЅРѕ KSU/APatch
-  # СѓРјРµСЋС‚ РјРѕРЅС‚РёСЂРѕРІР°С‚СЊ system/ РјРѕРґСѓР»СЏ СЃР°РјРё. Р“РѕС‚РѕРІРёРј РґРµСЂРµРІРѕ РІСЃРµРіРґР°, Р° С„Р°РєС‚ РјРѕРЅС‚РёСЂРѕРІР°РЅРёСЏ
-  # РїСЂРѕРІРµСЂСЏРµРј РїРѕСЃР»Рµ Р·Р°РіСЂСѓР·РєРё (verify_hosts_overlay).
   if ksu_runtime_detected && [ ! -e /data/adb/metamodule ] && [ ! -L /data/adb/metamodule ]; then
     hosts_status_write "$moddir" "prepared:ksu-overlayfs"
   else

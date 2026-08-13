@@ -1,5 +1,3 @@
-# Р’ firewall РїРѕРїР°РґР°СЋС‚ РўРћР›Р¬РљРћ РїР°РєРµС‚С‹ РёР· СЌС‚РѕРіРѕ СЃРїРёСЃРєР° (Рё apps.user.list).
-# gemini_sni = С‚РѕР»СЊРєРѕ exact-SNI РґРѕРјРµРЅС‹ Gemini РІРЅСѓС‚СЂРё Google App.
 gemini_sni com.google.android.googlequicksearchbox
 gemini     com.google.android.apps.bard
 notebook   com.google.android.apps.labs.language.tailwind

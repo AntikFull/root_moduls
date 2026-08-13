@@ -102,7 +102,7 @@ set_hosts_mode() {
   # Подготавливаем backing tree для следующего mount stage, но НИКОГДА не umount текущий /system/etc/hosts.
   [ -f "$MODDIR/lib/hosts.sh" ] && . "$MODDIR/lib/hosts.sh"
   command -v prepare_hosts_tree >/dev/null 2>&1 && prepare_hosts_tree "$MODDIR" >/dev/null 2>&1
-  echo "Hosts mode=$mode сохранён. Для гарантированного применения system overlay нужен reboot."
+  echo "Hosts mode=$mode сохранн. Для гарантированного применения system overlay нужен reboot."
 }
 
 set_fail_mode() {
@@ -207,7 +207,6 @@ collect_diag() {
 
   if [ -n "$archive" ] && [ -s "$archive" ]; then
     rm -rf "$tmp"
-    # Не даём автоматическим архивам бесконечно копиться: храним последние три.
     if [ "$outbase" = "$PUBLIC_LOG_DIR" ]; then chmod 0644 "$archive" 2>/dev/null; else chmod 0600 "$archive" 2>/dev/null; fi
     if [ "$mode" = auto ]; then
       count=0

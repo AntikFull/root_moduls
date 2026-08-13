@@ -1,6 +1,5 @@
 #!/system/bin/sh
 umask 077
-# РћС‡РёСЃС‚РєР° С‚РѕР»СЊРєРѕ РїСЂРѕС†РµСЃСЃРѕРІ Рё РїСЂР°РІРёР», РїСЂРёРЅР°РґР»РµР¶Р°С‰РёС… СЌС‚РѕРјСѓ РјРѕРґСѓР»СЋ.
 
 MODDIR=${0%/*}
 RUN_DIR="$MODDIR/run"
@@ -38,7 +37,6 @@ sh "$MODDIR/vpn-routing.sh" cleanup 2>/dev/null
 IPT="iptables -w 5"
 IP6T="ip6tables -w 5"
 
-# Р’СЂРµРјРµРЅРЅР°СЏ РѕС‡РµСЂРµРґСЊ Р°РєС‚РёРІРЅРѕРіРѕ AUTO РёСЃРїРѕР»СЊР·СѓРµС‚ С‚РѕР»СЊРєРѕ СЌС‚РѕС‚ РґРёР°РїР°Р·РѕРЅ sport.
 while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
 while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN 2>/dev/null; do :; done
 while $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done

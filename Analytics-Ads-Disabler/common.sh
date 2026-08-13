@@ -3014,8 +3014,6 @@ ifw_filter_global_candidates() {
     done < "$raw"
 }
 
-# IFW РЅРµ СѓРјРµРµС‚ Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ Provider Рё РґРµР№СЃС‚РІСѓРµС‚ РіР»РѕР±Р°Р»СЊРЅРѕ РґР»СЏ РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№.
-# РњРѕРґСѓР»СЊ РІР»Р°РґРµРµС‚ С‚РѕР»СЊРєРѕ РѕРґРЅРёРј РѕС‚РґРµР»СЊРЅС‹Рј XML Рё РЅРёРєРѕРіРґР° РЅРµ РёР·РјРµРЅСЏРµС‚ С„Р°Р№Р»С‹ App Manager/Blocker.
 reconcile_owned_ifw_rules() {
     backend=$(read_component_backend)
     if [ "$backend" != "HYBRID" ]; then
@@ -3051,7 +3049,6 @@ reconcile_owned_ifw_rules() {
 
     awk -F'|' 'NF>=3 && $2!="" {print $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed"
     awk -F'|' 'NF>=3 && $1!="" && $2!="" {print $1 "|" $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed_pairs"
-    # РќРµРїСѓСЃС‚РѕР№ РїРµСЂРІС‹Р№ РІС…РѕРґ СѓСЃС‚СЂР°РЅСЏРµС‚ РЅРµРѕРґРЅРѕР·РЅР°С‡РЅРѕСЃС‚СЊ NR==FNR РІ СЃС‚Р°СЂС‹С… awk.
     printf '#\n' >> "$managed"
 
     list_all_installed_package_keys > "$installed" 2>/dev/null
@@ -3063,7 +3060,6 @@ reconcile_owned_ifw_rules() {
         return 1
     fi
 
-    # Р”РІРѕР№РЅРѕР№ СЃР»РѕР№ IFW+PM РїСЂРёРјРµРЅСЏРµС‚СЃСЏ С‚РѕР»СЊРєРѕ Рє РєРѕРјРїРѕРЅРµРЅС‚Р°Рј, РєРѕС‚РѕСЂС‹РјРё РјРѕРґСѓР»СЊ СЂРµР°Р»СЊРЅРѕ РІР»Р°РґРµРµС‚.
     awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="RECEIVER" && owned[$8] {print $8}' \
         "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$receivers_raw"
     awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="SERVICE" && owned[$8] {print $8}' \
@@ -3071,7 +3067,6 @@ reconcile_owned_ifw_rules() {
     ifw_filter_global_candidates "$receivers_raw" "$managed_pairs" "$installed" "$receivers"
     ifw_filter_global_candidates "$services_raw" "$managed_pairs" "$installed" "$services"
 
-    # Activity СЂР°Р·СЂРµС€Р°СЋС‚СЃСЏ С‚РѕР»СЊРєРѕ РѕС‚РґРµР»СЊРЅС‹РјРё С‚РѕС‡РЅС‹РјРё РїСЂР°РІРёР»Р°РјРё Рё СЃ Р»РёРјРёС‚РѕРј РЅР° РїР°РєРµС‚/РєР°С‚РµРіРѕСЂРёСЋ.
     awk -F'|' 'FNR>1 && $2!="" && $5=="ACTIVITY" && ($7=="IFW_BLOCK" || ($7=="DISABLE" && $6=="HYBRID")) {print $2 "|" $8}' \
         "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activity_pairs"
     ifw_limit=$(read_ifw_activity_limit)

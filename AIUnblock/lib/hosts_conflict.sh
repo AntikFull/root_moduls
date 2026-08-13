@@ -1,5 +1,4 @@
 #!/system/bin/sh
-# AI Unblock RU вЂ” РѕР±РЅР°СЂСѓР¶РµРЅРёРµ РґСЂСѓРіРѕРіРѕ Р°РєС‚РёРІРЅРѕРіРѕ hosts-РјРѕРґСѓР»СЏ.
 
 hosts_conflict_detected() {
   local own_id="$1" dir id
@@ -30,8 +29,6 @@ hosts_conflict_detected() {
     fi
   done
 
-  # РќРµРєРѕС‚РѕСЂС‹Рµ KernelSU metamodules РґРµСЂР¶Р°С‚ РѕР±СЉРµРґРёРЅС‘РЅРЅРѕРµ РґРµСЂРµРІРѕ РѕС‚РґРµР»СЊРЅРѕ РѕС‚ metadata-dir.
-  # РџСЂРѕРІРµСЂСЏРµРј РµРіРѕ С‚РѕР»СЊРєРѕ РєР°Рє РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє, РЅРµ СЃС‡РёС‚Р°СЏ СЃР°Рј С„Р°РєС‚ РЅР°Р»РёС‡РёСЏ metamodule РєРѕРЅС„Р»РёРєС‚РѕРј.
   for dir in /data/adb/metamodule/mnt/*/; do
     [ -d "$dir" ] || continue
     id="${dir%/}"

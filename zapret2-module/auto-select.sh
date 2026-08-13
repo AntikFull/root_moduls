@@ -1,6 +1,4 @@
 #!/system/bin/sh
-# РђРєС‚РёРІРЅС‹Р№ РїРѕРґР±РѕСЂ СЃС‚СЂР°С‚РµРіРёРё РґР»СЏ СЏРґРµСЂ Р±РµР· xt_connbytes.
-# РўРµСЃС‚РѕРІС‹Р№ С‚СЂР°С„РёРє РёР·РѕР»РёСЂСѓРµС‚СЃСЏ РїРѕ Р»РѕРєР°Р»СЊРЅРѕРјСѓ TCP-РїРѕСЂС‚Сѓ Рё РѕС‚РґРµР»СЊРЅРѕР№ NFQUEUE.
 
 umask 077
 MODDIR=${0%/*}
@@ -27,14 +25,11 @@ chmod 0700 "$RUN_DIR" "$STATE_DIR" "$LOG_DIR" 2>/dev/null || true
 : "${AUTO_TEST_PORT_MIN:=39000}" "${AUTO_TEST_PORT_MAX:=39049}" "${AUTO_TEST_TIMEOUT:=5}"
 : "${AUTO_PROFILE_DEFAULT:=strategy_2}"
 : "${AUTO_ALLOW_DIRECT:=1}"
-# РљРѕРЅС‚СЂРѕР»СЊРЅС‹Рµ С…РѕСЃС‚С‹. РџСЂРѕРіРѕРЅСЏСЋС‚СЃСЏ С†РµР»РёРєРѕРј Рё РґР»СЏ Р±Р°Р·РѕРІРѕР№ Р»РёРЅРёРё, Рё РґР»СЏ РєР°Р¶РґРѕРіРѕ
-# РєР°РЅРґРёРґР°С‚Р°, РїРѕСЌС‚РѕРјСѓ СЃРїРёСЃРѕРє РЅР°РјРµСЂРµРЅРЅРѕ РєРѕСЂРѕС‚РєРёР№.
 : "${AUTO_PROBE_HOSTS_GENERAL:=discord.com=200// www.instagram.com=200// x.com=200//}"
 : "${AUTO_PROBE_HOSTS_GOOGLE:=www.youtube.com=204//generate_204 youtubei.googleapis.com=204//generate_204 redirector.googlevideo.com=200//report_mapping}"
 PROBE_SPEC_FILE="$RUN_DIR/auto-probe-spec.$$"
 BASELINE_FILE="$RUN_DIR/auto-probe-base.$$"
 CANDIDATE_FILE="$RUN_DIR/auto-probe-cand.$$"
-# 0 вЂ” РїСЂРѕРІРµСЂСЏС‚СЊ РІСЃРµ СЃС‚СЂР°С‚РµРіРёРё; РёРЅР°С‡Рµ РѕРіСЂР°РЅРёС‡РµРЅРёРµ РЅР° РѕРґРёРЅ РїСЂРѕРіРѕРЅ.
 : "${AUTO_PROBE_MAX_CANDIDATES:=0}"
 [ -f "$STRATEGY_LIB" ] && . "$STRATEGY_LIB"
 
@@ -150,8 +145,8 @@ sync_health_result() {
     /^AUTO_UPDATED=/ {print "AUTO_UPDATED=" u; next}
     /^COMPAT_STATUS=/ {if (n == "DIRECT") {print "COMPAT_STATUS=DIRECT"; next}; print; next}
     /^COMPAT_NOTES=/ {
-      if (n == "DIRECT") print "COMPAT_NOTES=DIRECT: СЃРµС‚СЊ " i " РЅРµ С„РёР»СЊС‚СЂСѓРµС‚СЃСЏ, РѕР±С…РѕРґ РѕС‚РєР»СЋС‡С‘РЅ"
-      else print "COMPAT_NOTES=SMART_ACTIVE: Р°РєС‚РёРІРЅС‹Р№ РїСЂРѕС„РёР»СЊ " p " / " n " (" s ")"
+      if (n == "DIRECT") print "COMPAT_NOTES=DIRECT: СРСС " i " РР СРРССССРССС, РРСРР РСРРСССР"
+      else print "COMPAT_NOTES=SMART_ACTIVE: РРСРРРСР РСРСРРС " p " / " n " (" s ")"
       next
     }
     {print}
@@ -170,7 +165,7 @@ request_profile_reload() {
     return 0
   fi
   [ -x "$MODDIR/service.sh" ] || return 1
-  log "AUTO: РїСЂРёРјРµРЅС‘РЅРЅС‹Р№ РїСЂРѕС„РёР»СЊ ${applied:-unknown} -> $selected, Р·Р°РїСЂР°С€РёРІР°РµС‚СЃСЏ Р±С‹СЃС‚СЂС‹Р№ reload"
+  log "AUTO: РСРРРРСРРСР РСРСРРС ${applied:-unknown} -> $selected, РРРСРСРРРРССС РСССССР reload"
   sh "$MODDIR/service.sh" reload-profile >/dev/null 2>&1 &
 }
 
@@ -194,7 +189,7 @@ resolve_current() {
   local snapshot iface identity key cache profile updated now age status ttl default_profile
   default_profile=$AUTO_PROFILE_DEFAULT
   valid_profile "$default_profile" || default_profile=$(strategy_first_valid)
-  [ -n "$default_profile" ] || { log "AUTO: РЅРµС‚ РІР°Р»РёРґРЅС‹С… С„Р°Р№Р»РѕРІ СЃС‚СЂР°С‚РµРіРёР№"; return 1; }
+  [ -n "$default_profile" ] || { log "AUTO: РРС РРРРРРСС СРРРРР СССРСРРРР"; return 1; }
   snapshot=$(active_network_snapshot)
   iface=$(snapshot_field "$snapshot" 1)
   [ -n "$iface" ] || iface=$(default_iface)
@@ -240,7 +235,6 @@ cleanup_test() {
   while "$IPT" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
   while "$IP6T" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
   while "$IP6T" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
-  # РЈРґР°Р»РµРЅРёРµ РїСЂР°РІРёР» СЂР°РЅРЅРёС… С‚РµСЃС‚РѕРІС‹С… СЃР±РѕСЂРѕРє, РіРґРµ Android curl РёРіРЅРѕСЂРёСЂРѕРІР°Р» --local-port.
   while "$IPT" -w 5 -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
   while "$IPT" -w 5 -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN 2>/dev/null; do :; done
   stale_pid=$(cat "$TEST_NFQ_PID_FILE" 2>/dev/null)
@@ -336,7 +330,6 @@ resolve_host_ipv6() {
   return 1
 }
 
-# Р—Р°РїРёСЃСЊ РєРѕРЅС‚СЂРѕР»СЊРЅРѕРіРѕ С…РѕСЃС‚Р°: host[=http_РєРѕРґ][//РїСѓС‚СЊ]. РџСѓСЃС‚РѕР№ РїСѓС‚СЊ = "/".
 parse_probe_entry() {
   local entry="$1" rest
   P_HOST=${entry%%=*}
@@ -358,12 +351,12 @@ prepare_probe_dns() {
   for group in GENERAL GOOGLE; do
     eval "entries=\$AUTO_PROBE_HOSTS_$group"
     for entry in $entries; do
-      parse_probe_entry "$entry" || { log "AUTO probe: РЅРµРєРѕСЂСЂРµРєС‚РЅР°СЏ Р·Р°РїРёСЃСЊ С…РѕСЃС‚Р° '$entry' РІ РіСЂСѓРїРїРµ $group, РїСЂРѕРїСѓС‰РµРЅР°"; continue; }
+      parse_probe_entry "$entry" || { log "AUTO probe: РРРРССРРСРРС РРРРСС СРССР '$entry' Р РССРРР $group, РСРРССРРР"; continue; }
       total=$((total + 1))
       ip=$(resolve_host_ipv4 "$iface" "$P_HOST" "$dns_servers") || ip=""
       ip6=$(resolve_host_ipv6 "$iface" "$P_HOST" "$dns_servers") || ip6=""
       if [ -z "$ip" ] && [ -z "$ip6" ]; then
-        log "AUTO РѕС‚Р»РѕР¶РµРЅ: РєРѕРЅС‚СЂРѕР»СЊРЅС‹Р№ С…РѕСЃС‚ $P_HOST ($group) РЅРµ СЂР°Р·СЂРµС€С‘РЅ РЅР° $iface"
+        log "AUTO РСРРРРР: РРРССРРСРСР СРСС $P_HOST ($group) РР СРРСРССР РР $iface"
         rm -f "$PROBE_SPEC_FILE" 2>/dev/null
         return 1
       fi
@@ -388,10 +381,6 @@ probe_url() {
   [ "$code" = "$expected" ]
 }
 
-# РџСЂРѕРіРѕРЅ РІСЃРµС… РєРѕРЅС‚СЂРѕР»СЊРЅС‹С… С…РѕСЃС‚РѕРІ. Р РµР·СѓР»СЊС‚Р°С‚ вЂ” С„Р°Р№Р» "host|0|1" РїР»СЋСЃ СЃС‡С‘С‚С‡РёРєРё.
-# Р Р°РЅСЊС€Рµ СЃСѓС‚СЊ Р±С‹Р»Р° "РІСЃРµ С…РѕСЃС‚С‹ РѕР±СЏР·Р°РЅС‹ РїСЂРѕР№С‚Рё", РёР·-Р·Р° С‡РµРіРѕ РѕРґРёРЅ С…РѕСЃС‚, РєРѕС‚РѕСЂС‹Р№
-# РЅРµ С‡РёРЅРёС‚СЃСЏ РѕР±С…РѕРґРѕРј РІ РїСЂРёРЅС†РёРїРµ (Discord РІ Р Р¤ Р±Р»РѕРєРёСЂСѓРµС‚СЃСЏ РїРѕ IP), РѕР±РЅСѓР»СЏР»
-# СЂРµР·СѓР»СЊС‚Р°С‚ РґР»СЏ РІСЃРµС… РєР°РЅРґРёРґР°С‚РѕРІ СЃСЂР°Р·Сѓ.
 probe_run_all() {
   local iface="$1" outfile="$2" group host code path ip4 ip6 ok
   PROBE_PASS=0; PROBE_FAIL=0; PROBE_FAILED_ON=""
@@ -416,9 +405,6 @@ probe_run_all() {
   return 0
 }
 
-# РћС†РµРЅРєР° РєР°РЅРґРёРґР°С‚Р° РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ Р±Р°Р·РѕРІРѕР№ Р»РёРЅРёРё (Р·Р°РјРµСЂ РІРѕРѕР±С‰Рµ Р±РµР· РѕР±С…РѕРґР°):
-# FIXED  вЂ” С…РѕСЃС‚ РЅРµ РѕС‚РєСЂС‹РІР°Р»СЃСЏ Р±РµР· РѕР±С…РѕРґР°, РЅРѕ РѕС‚РєСЂС‹Р»СЃСЏ СЃ СЌС‚РѕР№ СЃС‚СЂР°С‚РµРіРёРµР№;
-# BROKEN вЂ” С…РѕСЃС‚ РѕС‚РєСЂС‹РІР°Р»СЃСЏ Р±РµР· РѕР±С…РѕРґР°, Р° СЃС‚СЂР°С‚РµРіРёСЏ РµРіРѕ СЃР»РѕРјР°Р»Р°.
 score_against_baseline() {
   awk -F'|' '
     NR==FNR { base[$1]=$2; next }
@@ -430,9 +416,6 @@ score_against_baseline() {
   ' "$BASELINE_FILE" "$1" 2>/dev/null
 }
 
-# nfqws2 РїРёС€РµС‚ РѕС€РёР±РєРё lua РІ СЌС‚РѕС‚ Р¶Рµ Р»РѕРі. Р•СЃР»Рё РєР°РЅРґРёРґР°С‚ СЃ РЅРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Рј
-# РјР°СЂРєРµСЂРѕРј/Р°СЂРіСѓРјРµРЅС‚РѕРј РІР°Р»РёС‚ desync ("bad marker list"), РѕРЅ РЅРµ РґРѕР»Р¶РµРЅ РїРѕР±РµР¶РґР°С‚СЊ
-# С‚РѕР»СЊРєРѕ РїРѕС‚РѕРјСѓ, С‡С‚Рѕ РїР°РєРµС‚С‹ РїСЂРѕС€Р»Рё РЅРµРјРѕРґРёС„РёС†РёСЂРѕРІР°РЅРЅС‹РјРё.
 log_size() {
   local size
   size=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' ')
@@ -464,22 +447,21 @@ run_probe() {
   trap 'cleanup_test; rm -rf "$LOCK_DIR" 2>/dev/null; rm -f "$PROBE_PID_FILE" "$PROBE_SPEC_FILE" "$BASELINE_FILE" "$CANDIDATE_FILE" 2>/dev/null' EXIT
   [ "$AUTO_SELECT_ENABLED" = 1 ] || { resolve_current >/dev/null; return 0; }
   [ "$AUTO_TEST_QNUM" = "${QNUM:-200}" ] && AUTO_TEST_QNUM=$((AUTO_TEST_QNUM + 1))
-  # РЈР±РёСЂР°РµРј С‚РѕР»СЊРєРѕ СЃРѕР±СЃС‚РІРµРЅРЅСѓСЋ С‚РµСЃС‚РѕРІСѓСЋ РѕС‡РµСЂРµРґСЊ Рё РїСЂРѕС†РµСЃСЃ РѕС‚ РїСЂРµСЂРІР°РЅРЅРѕРіРѕ probe.
   cleanup_test
   service_pid=$(cat "$RUN_DIR/service.lock/pid" 2>/dev/null)
   case "$service_pid" in
     ''|0|*[!0-9]*) ;;
-    *) if kill -0 "$service_pid" 2>/dev/null; then log "AUTO РѕС‚Р»РѕР¶РµРЅ: service.sh Р·Р°РЅСЏС‚ (PID $service_pid)"; resolve_current >/dev/null; return 0; fi ;;
+    *) if kill -0 "$service_pid" 2>/dev/null; then log "AUTO РСРРРРР: service.sh РРРСС (PID $service_pid)"; resolve_current >/dev/null; return 0; fi ;;
   esac
-  command -v curl >/dev/null 2>&1 || { log "AUTO РїСЂРѕРїСѓС‰РµРЅ: curl РЅРµРґРѕСЃС‚СѓРїРµРЅ"; resolve_current >/dev/null; return 1; }
-  [ -x "$BIN_DIR/nfqws2" ] || { log "AUTO РїСЂРѕРїСѓС‰РµРЅ: nfqws2 РЅРµРґРѕСЃС‚СѓРїРµРЅ"; resolve_current >/dev/null; return 1; }
+  command -v curl >/dev/null 2>&1 || { log "AUTO РСРРССРР: curl РРРРСССРРР"; resolve_current >/dev/null; return 1; }
+  [ -x "$BIN_DIR/nfqws2" ] || { log "AUTO РСРРССРР: nfqws2 РРРРСССРРР"; resolve_current >/dev/null; return 1; }
   snapshot=$(active_network_snapshot)
   iface=$(snapshot_field "$snapshot" 1)
   [ -n "$iface" ] || iface=$(default_iface)
-  [ -n "$iface" ] || { log "AUTO РїСЂРѕРїСѓС‰РµРЅ: РЅРµС‚ IPv4 default route"; resolve_current >/dev/null; return 1; }
-  case "$iface" in tun*|wg*|awg*|vpn*|warp*|tailscale*|zt*) log "AUTO РїСЂРѕРїСѓС‰РµРЅ: default route С‡РµСЂРµР· VPN $iface"; resolve_current >/dev/null; return 1 ;; esac
+  [ -n "$iface" ] || { log "AUTO РСРРССРР: РРС IPv4 default route"; resolve_current >/dev/null; return 1; }
+  case "$iface" in tun*|wg*|awg*|vpn*|warp*|tailscale*|zt*) log "AUTO РСРРССРР: default route СРСРР VPN $iface"; resolve_current >/dev/null; return 1 ;; esac
   catalog=$(strategy_catalog_signature)
-  [ -n "$(strategy_first_valid)" ] || { log "AUTO РїСЂРѕРїСѓС‰РµРЅ: СЃРїРёСЃРѕРє СЃС‚СЂР°С‚РµРіРёР№ РїСѓСЃС‚ РёР»Рё РЅРµРІР°Р»РёРґРµРЅ"; return 1; }
+  [ -n "$(strategy_first_valid)" ] || { log "AUTO РСРРССРР: СРРСРР СССРСРРРР РССС РРР РРРРРРРРР"; return 1; }
   identity="$(network_identity "$iface" "$snapshot")|STRATEGIES=$catalog"; key=$(network_key "$identity") || return 1
   ttl=$(cache_ttl_for_iface "$iface")
   case "$ttl" in ''|*[!0-9]*) ttl=$AUTO_CACHE_TTL ;; esac
@@ -495,16 +477,13 @@ run_probe() {
   fi
 
   if ! prepare_probe_dns "$iface" "$snapshot"; then
-    log "AUTO РѕС‚Р»РѕР¶РµРЅ: РєРѕРЅС‚СЂРѕР»СЊРЅС‹Рµ РёРјРµРЅР° РЅРµ СЂР°Р·СЂРµС€РµРЅС‹ РґР»СЏ iface=$iface"
+    log "AUTO РСРРРРР: РРРССРРСРСР РРРРР РР СРРСРСРРС РРС iface=$iface"
     resolve_current >/dev/null
     return 1
   fi
 
   log "AUTO probe start: key=$key iface=$iface previous=${previous:-none} catalog=$catalog"
 
-  # РЁР°Рі 1. Р‘Р°Р·РѕРІР°СЏ Р»РёРЅРёСЏ: Р·Р°РјРµСЂ РІРѕРѕР±С‰Рµ Р±РµР· РѕР±С…РѕРґР°. РћРЅ Р¶Рµ РѕС‚РІРµС‡Р°РµС‚ РЅР° РІРѕРїСЂРѕСЃ
-  # "РЅСѓР¶РµРЅ Р»Рё РѕР±С…РѕРґ СЌС‚РѕР№ СЃРµС‚Рё РІРѕРѕР±С‰Рµ" Рё РѕС‚РґРµР»СЏРµС‚ С…РѕСЃС‚С‹, РєРѕС‚РѕСЂС‹Рµ РЅРµ С‡РёРЅСЏС‚СЃСЏ
-  # РЅРёРєР°РєРёРј desync (Р±Р»РѕРєРёСЂРѕРІРєР° РїРѕ IP), РѕС‚ С‚РµС…, С‡С‚Рѕ С‡РёРЅСЏС‚СЃСЏ.
   direct_profile=""
   strategy_list > "$RUN_DIR/auto-strategies.$$"
   while IFS='|' read -r number profile path; do
@@ -513,15 +492,15 @@ run_probe() {
   done < "$RUN_DIR/auto-strategies.$$"
 
   install_direct_rule
-  probe_run_all "$iface" "$BASELINE_FILE" || { log "AUTO: РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРЅСЏС‚СЊ Р±Р°Р·РѕРІСѓСЋ Р»РёРЅРёСЋ"; return 1; }
+  probe_run_all "$iface" "$BASELINE_FILE" || { log "AUTO: РР СРРРРСС СРССС РРРРРСС РРРРС"; return 1; }
   baseline_fail=$PROBE_FAIL
-  log "AUTO baseline (Р±РµР· РѕР±С…РѕРґР°): ok=$PROBE_PASS fail=$baseline_fail${PROBE_FAILED_ON:+ failed=$PROBE_FAILED_ON}"
+  log "AUTO baseline (РРР РРСРРР): ok=$PROBE_PASS fail=$baseline_fail${PROBE_FAILED_ON:+ failed=$PROBE_FAILED_ON}"
 
   if [ "$baseline_fail" = 0 ]; then
     cleanup_test
     rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" "$BASELINE_FILE" "$CANDIDATE_FILE" 2>/dev/null
     if [ -n "$direct_profile" ] && [ "$AUTO_ALLOW_DIRECT" = 1 ]; then
-      log "AUTO: СЃРµС‚СЊ РЅРµ С„РёР»СЊС‚СЂСѓРµС‚СЃСЏ, РІС‹Р±СЂР°РЅ DIRECT ($direct_profile)"
+      log "AUTO: СРСС РР СРРССССРССС, РСРСРР DIRECT ($direct_profile)"
       save_cache "$key" "$direct_profile" "$iface"
       request_profile_reload "$direct_profile" || true
       return 0
@@ -529,14 +508,12 @@ run_probe() {
     selected=${previous:-$AUTO_PROFILE_DEFAULT}
     valid_profile "$selected" || selected=$(strategy_first_valid)
     [ -n "$selected" ] || return 1
-    log "AUTO: СЃРµС‚СЊ РЅРµ С„РёР»СЊС‚СЂСѓРµС‚СЃСЏ, РЅРѕ DIRECT РЅРµРґРѕСЃС‚СѓРїРµРЅ; РѕСЃС‚Р°РІР»РµРЅ РїСЂРѕС„РёР»СЊ=$selected"
+    log "AUTO: СРСС РР СРРССССРССС, РР DIRECT РРРРСССРРР; РССРРРРР РСРСРРС=$selected"
     save_cache "$key" "$selected" "$iface"
     request_profile_reload "$selected" || true
     return 0
   fi
 
-  # РЁР°Рі 2. РљР°РЅРґРёРґР°С‚С‹ РѕС†РµРЅРёРІР°СЋС‚СЃСЏ РїРѕ С‡РёСЃР»Сѓ РїРѕС‡РёРЅРµРЅРЅС‹С… С…РѕСЃС‚РѕРІ. РљР°РЅРґРёРґР°С‚, РєРѕС‚РѕСЂС‹Р№
-  # Р»РѕРјР°РµС‚ С‚Рѕ, С‡С‚Рѕ СЂР°Р±РѕС‚Р°Р»Рѕ Р±РµР· РѕР±С…РѕРґР°, РѕС‚Р±СЂР°СЃС‹РІР°РµС‚СЃСЏ РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ СЃС‡С‘С‚Р°.
   best=""; best_fixed=0; tried=0
   while IFS='|' read -r number profile path; do
     if ! strategy_read "$profile"; then
@@ -560,7 +537,7 @@ run_probe() {
       continue
     fi
     if candidate_had_lua_error "$log_before"; then
-      log "AUTO candidate=$profile result=INVALID_ARGS (nfqws2 РѕС‚РІРµСЂРі desync-Р°СЂРіСѓРјРµРЅС‚С‹)"
+      log "AUTO candidate=$profile result=INVALID_ARGS (nfqws2 РСРРСР desync-РСРСРРРСС)"
       continue
     fi
     set -- $(score_against_baseline "$CANDIDATE_FILE")
@@ -579,18 +556,18 @@ run_probe() {
   if [ -z "$best" ]; then
     selected=${previous:-$AUTO_PROFILE_DEFAULT}
     valid_profile "$selected" || selected=$(strategy_first_valid)
-    [ -n "$selected" ] || { log "AUTO: РЅРµС‚ РІР°Р»РёРґРЅС‹С… С„Р°Р№Р»РѕРІ СЃС‚СЂР°С‚РµРіРёР№"; return 1; }
-    log "AUTO: РЅРё РѕРґРёРЅ РєР°РЅРґРёРґР°С‚ РЅРёС‡РµРіРѕ РЅРµ РїРѕС‡РёРЅРёР», СЃРѕС…СЂР°РЅС‘РЅ РїСЂРѕС„РёР»СЊ=$selected"
+    [ -n "$selected" ] || { log "AUTO: РРС РРРРРРСС СРРРРР СССРСРРРР"; return 1; }
+    log "AUTO: РР РРРР РРРРРРРС РРСРРР РР РРСРРРР, СРССРРСР РСРСРРС=$selected"
     write_result "$selected" "$key" "$iface" FAILED "$previous_updated"
     request_profile_reload "$selected" || true
     return 1
   fi
   if [ "$best_fixed" -ge "$baseline_fail" ] 2>/dev/null; then
     save_cache "$key" "$best" "$iface" SELECTED
-    log "AUTO selected: key=$key iface=$iface profile=$best name=$(profile_name "$best") fixed=$best_fixed/$baseline_fail (РїРѕР»РЅРѕСЃС‚СЊСЋ)"
+    log "AUTO selected: key=$key iface=$iface profile=$best name=$(profile_name "$best") fixed=$best_fixed/$baseline_fail (РРРРРСССС)"
   else
     save_cache "$key" "$best" "$iface" PARTIAL
-    log "AUTO selected: key=$key iface=$iface profile=$best name=$(profile_name "$best") fixed=$best_fixed/$baseline_fail (С‡Р°СЃС‚РёС‡РЅРѕ; РѕСЃС‚Р°Р»СЊРЅС‹Рµ С…РѕСЃС‚С‹ РЅРµ С‡РёРЅСЏС‚СЃСЏ РѕР±С…РѕРґРѕРј)"
+    log "AUTO selected: key=$key iface=$iface profile=$best name=$(profile_name "$best") fixed=$best_fixed/$baseline_fail (СРССРСРР; РССРРСРСР СРССС РР СРРСССС РРСРРРР)"
   fi
   request_profile_reload "$best" || true
 }
@@ -607,8 +584,6 @@ acquire_lock() {
 schedule_probe() {
   [ "$AUTO_SELECT_ENABLED" = 1 ] || return 0
   pid=$(cat "$PROBE_PID_FILE" 2>/dev/null)
-  # РџСЂРѕРІРµСЂСЏРµРј РЅРµ С‚РѕР»СЊРєРѕ "Р¶РёРІ Р»Рё PID", РЅРѕ Рё С‡С‚Рѕ СЌС‚Рѕ РґРµР№СЃС‚РІРёС‚РµР»СЊРЅРѕ РЅР°С€ probe:
-  # РїРµСЂРµРёСЃРїРѕР»СЊР·РѕРІР°РЅРЅС‹Р№ СЏРґСЂРѕРј PID РёРЅР°С‡Рµ РЅР°РІСЃРµРіРґР° Р·Р°Р±Р»РѕРєРёСЂРѕРІР°Р» Р±С‹ РїР»Р°РЅРёСЂРѕРІР°РЅРёРµ.
   case "$pid" in
     ''|0|*[!0-9]*) ;;
     *) if kill -0 "$pid" 2>/dev/null && tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Fq "$MODDIR/auto-select.sh"; then return 0; fi ;;

@@ -1,6 +1,5 @@
 #!/system/bin/sh
 umask 077
-# Zapret2 eCubz вЂ” standalone installer for Magisk / KernelSU / APatch.
 
 SKIPUNZIP=1
 
@@ -79,7 +78,7 @@ manager_name() {
 }
 
 ui_print "***************************************"
-ui_print " Zapret2 eCubz вЂ” universal installer"
+ui_print " Zapret2 eCubz в universal installer"
 ui_print " Magisk / KernelSU / APatch"
 ui_print "***************************************"
 
@@ -91,7 +90,7 @@ ACTIVE_MODDIR="/data/adb/modules/zapret2-android"
 UPGRADE_BACKUP="/data/local/tmp/zapret2-upgrade.$$"
 UPGRADE_FROM=""
 if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
-  mkdir -p "$UPGRADE_BACKUP" 2>/dev/null || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РІСЂРµРјРµРЅРЅСѓСЋ РєРѕРїРёСЋ РЅР°СЃС‚СЂРѕРµРє"
+  mkdir -p "$UPGRADE_BACKUP" 2>/dev/null || fail_install "РР СРРРРСС СРРРРСС РСРРРРРСС РРРРС РРСССРРР"
   for keep in zapret2.conf apps.list exclude.list auto_domains.list exclude_domains.list; do
     [ -f "$ACTIVE_MODDIR/$keep" ] && cp -f "$ACTIVE_MODDIR/$keep" "$UPGRADE_BACKUP/$keep" 2>/dev/null
   done
@@ -149,13 +148,13 @@ restore_upgrade_data() {
   ilog "upgrade_preserved=config,apps,exclude,auto_domains,exclude_domains,strategies,auto_cache"
 }
 
-[ -n "$MODPATH" ] || fail_install "MODPATH РЅРµ Р·Р°РґР°РЅ СѓСЃС‚Р°РЅРѕРІС‰РёРєРѕРј"
-mkdir -p "$MODPATH" 2>/dev/null || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ $MODPATH"
+[ -n "$MODPATH" ] || fail_install "MODPATH РР РРРРР СССРРРРСРРРР"
+mkdir -p "$MODPATH" 2>/dev/null || fail_install "РР СРРРРСС СРРРРСС $MODPATH"
 if [ -n "$ZIPFILE" ] && [ -f "$ZIPFILE" ]; then
-  ui_print "- Р Р°СЃРїР°РєРѕРІРєР° РјРѕРґСѓР»СЏ..."
-  unzip -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>>"$TMP_INSTALL_LOG" || fail_install "РћС€РёР±РєР° СЂР°СЃРїР°РєРѕРІРєРё ZIP"
+  ui_print "- РРСРРРРРРР РРРСРС..."
+  unzip -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>>"$TMP_INSTALL_LOG" || fail_install "РСРРРР СРСРРРРРРР ZIP"
 else
-  [ -f "$MODPATH/module.prop" ] || fail_install "ZIPFILE РЅРµРґРѕСЃС‚СѓРїРµРЅ Рё РјРѕРґСѓР»СЊ РЅРµ СЂР°СЃРїР°РєРѕРІР°РЅ"
+  [ -f "$MODPATH/module.prop" ] || fail_install "ZIPFILE РРРРСССРРР Р РРРСРС РР СРСРРРРРРР"
   ilog "archive=pre-extracted"
 fi
 rm -rf "$MODPATH/META-INF" "$MODPATH/common" 2>/dev/null
@@ -164,10 +163,6 @@ if [ -n "$UPGRADE_FROM" ] && [ -f "$MODPATH/zapret2.conf" ]; then
   old_strategy=$(sed -n 's/^STRATEGY_MODE=//p' "$MODPATH/zapret2.conf" | head -n1 | tr -d '"')
   case "$old_strategy" in SIMPLE|AUTO|'') sed -i 's/^STRATEGY_MODE=.*/STRATEGY_MODE="SMART"/' "$MODPATH/zapret2.conf" ;; esac
   grep -q '^AUTO_APPS_ENABLED=' "$MODPATH/zapret2.conf" 2>/dev/null || sed -i '/^STRATEGY_MODE=/a AUTO_APPS_ENABLED="1"' "$MODPATH/zapret2.conf"
-  # v2.9.1: strategy_1 С‚РµРїРµСЂСЊ DIRECT ("РѕР±С…РѕРґ РЅРµ РЅСѓР¶РµРЅ"). РџРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёРµ
-  # РєР°С‚Р°Р»РѕРіРё СЃС‚СЂР°С‚РµРіРёР№ РїРµСЂРµРЅРѕСЃСЏС‚СЃСЏ СЃРѕ СЃРґРІРёРіРѕРј РЅР° РµРґРёРЅРёС†Сѓ, DIRECT СЃС‚Р°РІРёС‚СЃСЏ
-  # РїРµСЂРІС‹Рј РєР°РЅРґРёРґР°С‚РѕРј. РџСЂРѕС„РёР»СЊ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РґРѕ РїРµСЂРІРѕРіРѕ probe вЂ” РїРµСЂРІР°СЏ СЂРµР°Р»СЊРЅР°СЏ
-  # СЃС‚СЂР°С‚РµРіРёСЏ, РёРЅР°С‡Рµ РЅРѕРІР°СЏ СЃРµС‚СЊ РѕСЃС‚Р°Р»Р°СЃСЊ Р±С‹ Р±РµР· РѕР±С…РѕРґР°.
   if [ -d "$MODPATH/strategies" ] && ! grep -lq '^# MODE=DIRECT' "$MODPATH"/strategies/strategy_* 2>/dev/null; then
     migrate_tmp="$MODPATH/strategies/.migrate.$$"
     mkdir -p "$migrate_tmp" 2>/dev/null
@@ -184,30 +179,25 @@ if [ -n "$UPGRADE_FROM" ] && [ -f "$MODPATH/zapret2.conf" ]; then
     ilog "upgrade_migration=strategies_shifted direct_candidate=strategy_1"
   fi
   sed -i 's/^AUTO_PROFILE_DEFAULT=.*/AUTO_PROFILE_DEFAULT="strategy_2"/' "$MODPATH/zapret2.conf"
-  # РљР»СЋС‡Рё, РґРѕР±Р°РІР»РµРЅРЅС‹Рµ РІ 2.9.1: merge_previous_config СЃРѕС…СЂР°РЅСЏРµС‚ С‚РѕР»СЊРєРѕ С‚Рµ,
-  # С‡С‚Рѕ СѓР¶Рµ Р±С‹Р»Рё РІ СЃС‚Р°СЂРѕРј РєРѕРЅС„РёРіРµ, РїРѕСЌС‚РѕРјСѓ РЅРѕРІС‹Рµ РїРѕРґСЃС‚Р°РІР»СЏРµРј СЏРІРЅРѕ.
   for newkey in 'AUTO_ALLOW_DIRECT="1"' \
     'AUTO_PROBE_HOSTS_GENERAL="discord.com=200// www.instagram.com=200// x.com=200//"' \
     'AUTO_PROBE_HOSTS_GOOGLE="www.youtube.com=204//generate_204 youtubei.googleapis.com=204//generate_204 i.ytimg.com=204//generate_204 redirector.googlevideo.com=200//report_mapping"'; do
     key=${newkey%%=*}
     grep -q "^$key=" "$MODPATH/zapret2.conf" 2>/dev/null || printf '%s\n' "$newkey" >> "$MODPATH/zapret2.conf"
   done
-  # РЎС‚Р°СЂС‹Рµ Р·РЅР°С‡РµРЅРёСЏ С‚Р°Р№РјРµСЂРѕРІ watcher-Р° СЃРѕС…СЂР°РЅСЏСЋС‚СЃСЏ merge-РѕРј Рё СЃРІРµР»Рё Р±С‹ РЅР° РЅРµС‚
-  # РїРµСЂРµС…РѕРґ РЅР° СЃРѕР±С‹С‚РёР№РЅРѕРµ РѕР¶РёРґР°РЅРёРµ. РџРѕРґС‚СЏРіРёРІР°РµРј РёС… Рє РЅРѕРІС‹Рј СѓРјРѕР»С‡Р°РЅРёСЏРј.
   sed -i -e 's/^VPN_WATCH_INTERVAL="[0-9]*"/VPN_WATCH_INTERVAL="20"/' \
          -e 's/^VPN_RETRY_INTERVAL="[0-9]*"/VPN_RETRY_INTERVAL="2"/' \
          -e 's/^VPN_ROLE_RECHECK="[0-9]*"/VPN_ROLE_RECHECK="120"/' \
          -e 's/^VPN_VERIFY_INTERVAL="[0-9]*"/VPN_VERIFY_INTERVAL="300"/' \
          -e 's/^HEALTH_WATCH_INTERVAL="[0-9]*"/HEALTH_WATCH_INTERVAL="60"/' "$MODPATH/zapret2.conf"
-  # РљСЌС€ РїРѕРґР±РѕСЂР° РїРѕСЃС‚СЂРѕРµРЅ РЅР° СЃС‚Р°СЂС‹С… РЅРѕРјРµСЂР°С… СЃС‚СЂР°С‚РµРіРёР№ Рё СЃС‚Р°СЂРѕРј РЅР°Р±РѕСЂРµ probe-С…РѕСЃС‚РѕРІ.
   rm -f "$MODPATH"/state/auto-*.env 2>/dev/null
   if [ -f "$MODPATH/apps.list" ] && [ -f "$MODPATH/auto_apps.list" ]; then
     awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) auto[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in auto)) print $0}' "$MODPATH/auto_apps.list" "$MODPATH/apps.list" > "$MODPATH/apps.list.smart.$$" && mv -f "$MODPATH/apps.list.smart.$$" "$MODPATH/apps.list"
   fi
   ilog "upgrade_migration=smart old_strategy=${old_strategy:-unset} auto_apps=enabled manual_catalog_duplicates=removed"
 fi
-mkdir -p "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ runtime РєР°С‚Р°Р»РѕРіРё logs/run/state"
-chmod 0700 "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹СЃС‚Р°РІРёС‚СЊ РїСЂР°РІР° runtime РєР°С‚Р°Р»РѕРіРѕРІ"
+mkdir -p "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "РР СРРРРСС СРРРРСС runtime РРСРРРРР logs/run/state"
+chmod 0700 "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "РР СРРРРСС РСССРРРСС РСРРР runtime РРСРРРРРР"
 
 ABI=$(getprop ro.product.cpu.abi 2>/dev/null)
 [ -n "$ABI" ] || ABI="$ARCH"
@@ -216,19 +206,19 @@ case "$ABI" in
   armeabi-v7a|armeabi|arm|armv7l) ABI_DIR=android-arm ;;
   x86_64|x64) ABI_DIR=android-x86_64 ;;
   x86) ABI_DIR=android-x86 ;;
-  *) fail_install "РќРµРїРѕРґРґРµСЂР¶РёРІР°РµРјР°СЏ Р°СЂС…РёС‚РµРєС‚СѓСЂР°: ${ABI:-unknown}" ;;
+  *) fail_install "РРРРРРРСРРРРРРРС РССРСРРСССР: ${ABI:-unknown}" ;;
 esac
 
-ui_print "- РђСЂС…РёС‚РµРєС‚СѓСЂР°: ${ABI:-unknown} -> $ABI_DIR"
+ui_print "- РССРСРРСССР: ${ABI:-unknown} -> $ABI_DIR"
 ilog "selected_abi=$ABI_DIR"
-[ -d "$MODPATH/binaries/$ABI_DIR" ] || fail_install "Р’ ZIP РЅРµС‚ Р±РёРЅР°СЂРЅРёРєРѕРІ $ABI_DIR"
-mkdir -p "$MODPATH/bin" 2>/dev/null || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ bin"
-cp -f "$MODPATH/binaries/$ABI_DIR/"* "$MODPATH/bin/" 2>>"$TMP_INSTALL_LOG" || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ ABI-Р±РёРЅР°СЂРЅРёРєРё"
-cp -f "$MODPATH/binaries/"*.lua "$MODPATH/bin/" 2>>"$TMP_INSTALL_LOG" || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ Lua-С„Р°Р№Р»С‹ zapret2"
+[ -d "$MODPATH/binaries/$ABI_DIR" ] || fail_install "Р ZIP РРС РРРРСРРРРР $ABI_DIR"
+mkdir -p "$MODPATH/bin" 2>/dev/null || fail_install "РР СРРРРСС СРРРРСС bin"
+cp -f "$MODPATH/binaries/$ABI_DIR/"* "$MODPATH/bin/" 2>>"$TMP_INSTALL_LOG" || fail_install "РР СРРРРСС СССРРРРРСС ABI-РРРРСРРРР"
+cp -f "$MODPATH/binaries/"*.lua "$MODPATH/bin/" 2>>"$TMP_INSTALL_LOG" || fail_install "РР СРРРРСС СССРРРРРСС Lua-СРРРС zapret2"
 rm -rf "$MODPATH/binaries" 2>/dev/null
 
-[ -s "$MODPATH/bin/nfqws2" ] || fail_install "nfqws2 РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ РїРѕСЃР»Рµ СЂР°СЃРїР°РєРѕРІРєРё"
-[ -s "$MODPATH/bin/zapret-lib.lua" ] || fail_install "zapret-lib.lua РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ РїРѕСЃР»Рµ СЂР°СЃРїР°РєРѕРІРєРё"
+[ -s "$MODPATH/bin/nfqws2" ] || fail_install "nfqws2 РССССССРСРС РРСРР СРСРРРРРРР"
+[ -s "$MODPATH/bin/zapret-lib.lua" ] || fail_install "zapret-lib.lua РССССССРСРС РРСРР СРСРРРРРРР"
 
 for f in \
   "$MODPATH/bin/nfqws2" "$MODPATH/bin/ip2net" "$MODPATH/bin/mdig" "$MODPATH/bin/zapret2-control" \
@@ -236,7 +226,7 @@ for f in \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
   "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh"
 do
-  set_exec "$f" || fail_install "РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹СЃС‚Р°РІРёС‚СЊ +x: $f"
+  set_exec "$f" || fail_install "РР СРРРРСС РСССРРРСС +x: $f"
 done
 
 volume_select() {
@@ -276,12 +266,12 @@ ask_yes_no() {
   if [ "$default_answer" = yes ]; then default_text="Р”Рђ"; else default_text="РќР•Рў"; fi
   ui_print " "
   ui_print "$question"
-  ui_print "Р“СЂРѕРјРєРѕСЃС‚СЊ [+] вЂ” Р”Рђ, [-] вЂ” РќР•Рў (12 СЃРµРє: $default_text)"
+  ui_print "РСРРРРССС [+] в РР, [-] в РРР (12 СРР: $default_text)"
   volume_select "$default_answer"
 }
 
 CONF_TARGET="$MODPATH/zapret2.conf"
-[ -f "$CONF_TARGET" ] || fail_install "zapret2.conf РЅРµ РЅР°Р№РґРµРЅ"
+[ -f "$CONF_TARGET" ] || fail_install "zapret2.conf РР РРРРРР"
 
 if [ -n "$UPGRADE_FROM" ]; then
   ENABLE_HOTSPOT_VAL=$(sed -n 's/^ENABLE_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$ENABLE_HOTSPOT_VAL" ] || ENABLE_HOTSPOT_VAL=1
@@ -289,13 +279,13 @@ if [ -n "$UPGRADE_FROM" ]; then
   FORCE_TCP_HOTSPOT_VAL=$(sed -n 's/^FORCE_TCP_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$FORCE_TCP_HOTSPOT_VAL" ] || FORCE_TCP_HOTSPOT_VAL=1
   DNS_FORWARD_HOTSPOT_VAL=$(sed -n 's/^DNS_FORWARD_HOTSPOT=//p' "$CONF_TARGET" | head -n1 | tr -d '"'); [ -n "$DNS_FORWARD_HOTSPOT_VAL" ] || DNS_FORWARD_HOTSPOT_VAL=0
   ilog "upgrade_questions=skipped preserved_user_choices=1"
-  ui_print "- РћР±РЅРѕРІР»РµРЅРёРµ: РЅР°СЃС‚СЂРѕР№РєРё Hotspot/VPN/QUIC/DNS СЃРѕС…СЂР°РЅРµРЅС‹"
+  ui_print "- РРРРРРРРРР: РРСССРРРР Hotspot/VPN/QUIC/DNS СРССРРРРС"
 else
-  if ask_yes_no "РћР±СЂР°Р±Р°С‚С‹РІР°С‚СЊ Wi-Fi Hotspot Рё USB-РјРѕРґРµРј?" yes; then
+  if ask_yes_no "РРСРРРССРРСС Wi-Fi Hotspot Р USB-РРРРР?" yes; then
     ENABLE_HOTSPOT_VAL=1
-    if ask_yes_no "РќР°РїСЂР°РІР»СЏС‚СЊ РєР»РёРµРЅС‚РѕРІ СЂР°Р·РґР°С‡Рё С‡РµСЂРµР· VPN С‚РµР»РµС„РѕРЅР°?" no; then ENABLE_VPN_HOTSPOT_VAL=1; else ENABLE_VPN_HOTSPOT_VAL=0; fi
-    if ask_yes_no "Р‘Р»РѕРєРёСЂРѕРІР°С‚СЊ QUIC (UDP/443) Сѓ РєР»РёРµРЅС‚РѕРІ СЂР°Р·РґР°С‡Рё?" yes; then FORCE_TCP_HOTSPOT_VAL=1; else FORCE_TCP_HOTSPOT_VAL=0; fi
-    if ask_yes_no "РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ РїРµСЂРµРЅР°РїСЂР°РІР»СЏС‚СЊ DNS РєР»РёРµРЅС‚РѕРІ СЂР°Р·РґР°С‡Рё?" no; then DNS_FORWARD_HOTSPOT_VAL=1; else DNS_FORWARD_HOTSPOT_VAL=0; fi
+    if ask_yes_no "РРРСРРРССС РРРРРСРР СРРРРСР СРСРР VPN СРРРСРРР?" no; then ENABLE_VPN_HOTSPOT_VAL=1; else ENABLE_VPN_HOTSPOT_VAL=0; fi
+    if ask_yes_no "РРРРРСРРРСС QUIC (UDP/443) С РРРРРСРР СРРРРСР?" yes; then FORCE_TCP_HOTSPOT_VAL=1; else FORCE_TCP_HOTSPOT_VAL=0; fi
+    if ask_yes_no "РСРРСРРСРРСРР РРСРРРРСРРРССС DNS РРРРРСРР СРРРРСР?" no; then DNS_FORWARD_HOTSPOT_VAL=1; else DNS_FORWARD_HOTSPOT_VAL=0; fi
   else
     ENABLE_HOTSPOT_VAL=0; ENABLE_VPN_HOTSPOT_VAL=0; FORCE_TCP_HOTSPOT_VAL=0; DNS_FORWARD_HOTSPOT_VAL=0
   fi
@@ -317,7 +307,7 @@ ilog "installer=success"
 flush_install_log
 
 ui_print " "
-ui_print "- РќР°СЃС‚СЂРѕР№РєР° Zapret2 Р·Р°РІРµСЂС€РµРЅР°"
-ui_print "- РџРѕСЃР»Рµ СѓСЃС‚Р°РЅРѕРІРєРё РїРµСЂРµР·Р°РіСЂСѓР·РёС‚Рµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ"
-ui_print "- Р›РѕРі СѓСЃС‚Р°РЅРѕРІРєРё: /sdcard/eCubz/zapret2_install.log"
-ui_print "- РћСЃС‚Р°Р»СЊРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚СѓРїРЅС‹ РІ WebUI"
+ui_print "- РРСССРРРР Zapret2 РРРРССРРР"
+ui_print "- РРСРР СССРРРРРР РРСРРРРССРРСР ССССРРССРР"
+ui_print "- РРР СССРРРРРР: /sdcard/eCubz/zapret2_install.log"
+ui_print "- РССРРСРСР РРСССРРРР РРСССРРС Р WebUI"

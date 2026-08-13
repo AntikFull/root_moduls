@@ -1,5 +1,4 @@
 #!/system/bin/sh
-# AI Unblock RU вЂ” optional per-app locale, С‚РѕР»СЊРєРѕ РѕРґРёРЅ СЂР°Р· РїРѕСЃР»Рµ boot-completed.
 
 locale_state_contains() {
   local state_file="$1" package_name="$2" user_id="$3"
@@ -57,7 +56,6 @@ restore_saved_locales() {
   while IFS='|' read -r package_name user_id saved; do
     [ -n "$package_name" ] || continue
     current=$(locale_get "$package_name" "$user_id")
-    # РќРµ РїРµСЂРµС‚РёСЂР°РµРј СЏР·С‹Рє, РµСЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ СѓР¶Рµ СЃР°Рј РёР·РјРµРЅРёР» РµРіРѕ РїРѕСЃР»Рµ AIUnblock.
     [ "$current" = "en-US" ] || continue
     if [ -n "$saved" ]; then
       cmd locale set-app-locales "$package_name" --user "$user_id" --locales "$saved" >/dev/null 2>&1 || true
