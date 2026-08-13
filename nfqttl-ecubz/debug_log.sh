@@ -18,7 +18,6 @@ else
     echo "module.prop NOT FOUND"
 fi
 
-# Проверка "протухшего" состояния сервиса без перезагрузки
 APPLIED_VER="Неизвестно"
 if [ -f "$MODDIR/.applied_version" ]; then
     APPLIED_VER=$(cat "$MODDIR/.applied_version" | tr -d '\r')
@@ -30,7 +29,6 @@ if [ "$APPLIED_VER" != "Неизвестно" ] && [ -n "$CURRENT_VER" ] && ! ec
     echo "⚠️ [ВНИМАНИЕ] Версия на диске ($CURRENT_VER) отличается от активной в памяти ($APPLIED_VER)! ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА УСТРОЙСТВА!"
 fi
 
-# Проверка устаревших правила catch-all (!lo)
 if iptables -t mangle -L POSTROUTING -n -v 2>/dev/null | grep -q "!lo"; then
     echo "⚠️ [ВНИМАНИЕ] В iptables висит устаревшее правило !lo — служба v7.5 еще не перезапущена! Сделайте reboot."
 fi
@@ -90,10 +88,10 @@ iptables -t mangle -L FORWARD -n -v 2>/dev/null
 echo "[IPv4 Mangle POSTROUTING]"
 iptables -t mangle -L POSTROUTING -n -v 2>/dev/null
 
-# Проверка дублей правил
-NFQ_COUNT=$(iptables -t mangle -L POSTROUTING -n -v 2>/dev/null | grep -c "nfqttlo" || echo 0)
-if [ "$NFQ_COUNT" -gt 25 ]; then
-    echo "⚠️ [ВНИМАНИЕ] Обнаружено накопление дубликатов правил nfqttlo ($NFQ_COUNT шт) в IPv4 POSTROUTING!"
+NFQ_COUNT=$(iptables -t mangle -S 2>/dev/null | grep -c -- "-j nfqttl")
+NFQ_COUNT=${NFQ_COUNT:-0}
+if [ "$NFQ_COUNT" -gt 12 ]; then
+    echo "⚠️ [ВНИМАНИЕ] Обнаружено накопление дубликатов переходов nfqttl* ($NFQ_COUNT шт) в IPv4 mangle!"
 fi
 
 echo "[IPv4 Mangle NFQTTL CHAINS]"
@@ -113,9 +111,10 @@ ip6tables -t mangle -L FORWARD -n -v 2>/dev/null
 echo "[IPv6 Mangle POSTROUTING]"
 ip6tables -t mangle -L POSTROUTING -n -v 2>/dev/null
 
-IP6_NFQ_COUNT=$(ip6tables -t mangle -L POSTROUTING -n -v 2>/dev/null | grep -c "nfqttlo" || echo 0)
-if [ "$IP6_NFQ_COUNT" -gt 25 ]; then
-    echo "⚠️ [ВНИМАНИЕ] Обнаружено накопление дубликатов правил nfqttlo ($IP6_NFQ_COUNT шт) в IPv6 POSTROUTING!"
+IP6_NFQ_COUNT=$(ip6tables -t mangle -S 2>/dev/null | grep -c -- "-j nfqttl")
+IP6_NFQ_COUNT=${IP6_NFQ_COUNT:-0}
+if [ "$IP6_NFQ_COUNT" -gt 12 ]; then
+    echo "⚠️ [ВНИМАНИЕ] Обнаружено накопление дубликатов переходов nfqttl* ($IP6_NFQ_COUNT шт) в IPv6 mangle!"
 fi
 
 echo "[IPv6 Mangle NFQTTL CHAINS]"
@@ -157,5 +156,4 @@ echo "=================================================================="
 echo " Deep Diagnostic Report Complete: $LOGFILE"
 echo "=================================================================="
 
-# дамп правил — незачем отдавать его на чтение и запись кому попало.
 chmod 600 "$LOGFILE" 2>/dev/null || true

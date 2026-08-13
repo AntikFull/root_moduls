@@ -1,6 +1,6 @@
 id=nfqttl_ecubz
 name=Nfqttl eCubz
-version=v10
-versionCode=100
+version=v12
+versionCode=120
 author=eCubz (https://t.me/eCubz)
 description=Smart Multi-Engine TTL fix, Absolute IPv6 Hop Limit Lock & Zero-Leak Forward. Группа: https://t.me/module_ecubz
