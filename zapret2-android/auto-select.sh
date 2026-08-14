@@ -515,6 +515,18 @@ run_probe() {
 
   log "AUTO probe start: key=$key iface=$iface previous=${previous:-none} catalog=$catalog"
 
+  cur_mode=""
+  [ -f "$RESULT_FILE" ] && cur_mode=$(sed -n 's/^MODE=//p' "$RESULT_FILE" | head -n1 | tr -d '"')
+  if [ "$cur_mode" = "DIRECT" ]; then
+    fallback_prof=${AUTO_PROFILE_DEFAULT:-strategy_2}
+    valid_profile "$fallback_prof" || fallback_prof=$(strategy_first_valid)
+    if [ -n "$fallback_prof" ]; then
+      log "AUTO probe transition: сброс DIRECT -> $fallback_prof (PROBING) на время тестирования $iface"
+      write_result "$fallback_prof" "$key" "$iface" PROBING "$now"
+      request_profile_reload "$fallback_prof" || true
+    fi
+  fi
+
   direct_profile=""
   strategy_list > "$RUN_DIR/auto-strategies.$$"
   while IFS='|' read -r number profile path; do

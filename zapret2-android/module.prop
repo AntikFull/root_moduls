@@ -1,7 +1,7 @@
 id=zapret2-android
 name=Zapret2 eCubz
-version=v3.0.1
-versionCode=3010
+version=v3.0.2
+versionCode=3020
 author=eCubz (https://t.me/eCubz)
-description=Zapret2 eCubz v3.0.1: универсальный установщик (Magisk/KernelSU/APatch), поддержка probe_hosts.list, автовыключение обхода на Wi-Fi по SSID, режим DIRECT, событийный watcher. Группа: https://t.me/module_ecubz
+description=Zapret2 eCubz v3.0.2: устранена незащищенная задержка при смене Wi-Fi->Mobile, универсальный установщик (Magisk/KernelSU/APatch), автовыключение на Wi-Fi по SSID, режим DIRECT. Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/zapret2-android/update.json
