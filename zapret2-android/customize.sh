@@ -31,7 +31,7 @@ fail_install() {
 set_exec() {
   [ -f "$1" ] || return 0
   chown 0:0 "$1" 2>/dev/null
-  chmod 0755 "$1" 2>/dev/null || return 1
+  chmod 0755 "$1" 2>/dev/null || chmod 755 "$1" 2>/dev/null || true
 }
 
 set_permissions() {
@@ -152,7 +152,19 @@ restore_upgrade_data() {
 mkdir -p "$MODPATH" 2>/dev/null || fail_install "Не удалось создать каталог $MODPATH"
 if [ -n "$ZIPFILE" ] && [ -f "$ZIPFILE" ]; then
   ui_print "- Распаковка архива..."
-  unzip -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>>"$TMP_INSTALL_LOG" || fail_install "Ошибка распаковки ZIP"
+  UNZIP_BIN="unzip"
+  if ! command -v unzip >/dev/null 2>&1; then
+    if command -v busybox >/dev/null 2>&1; then
+      UNZIP_BIN="busybox unzip"
+    elif [ -f /data/adb/ksu/bin/busybox ]; then
+      UNZIP_BIN="/data/adb/ksu/bin/busybox unzip"
+    elif [ -f /data/adb/ap/bin/busybox ]; then
+      UNZIP_BIN="/data/adb/ap/bin/busybox unzip"
+    elif [ -f /data/adb/magisk/busybox ]; then
+      UNZIP_BIN="/data/adb/magisk/busybox unzip"
+    fi
+  fi
+  $UNZIP_BIN -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>>"$TMP_INSTALL_LOG" || unzip -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>>"$TMP_INSTALL_LOG" || fail_install "Ошибка распаковки ZIP"
 else
   [ -f "$MODPATH/module.prop" ] || fail_install "ZIPFILE отсутствует и модуль не распакован"
   ilog "archive=pre-extracted"
