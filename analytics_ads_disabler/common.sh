@@ -640,7 +640,9 @@ launch_ad_surface_indexer_bg() {
                 oldcmd=$(tr '\000' ' ' < "/proc/$oldpid/cmdline" 2>/dev/null)
                 case "$oldcmd" in
                     *ad_surface_indexer.sh*)
-                        : > "$DATA_DIR/.surface_index.rerun" 2>/dev/null
+                        printf '%s\n' "$reason" > "$DATA_DIR/.surface_index.rerun.tmp.$$" 2>/dev/null \
+                            && mv -f "$DATA_DIR/.surface_index.rerun.tmp.$$" "$DATA_DIR/.surface_index.rerun" 2>/dev/null
+                        rm -f "$DATA_DIR/.surface_index.rerun.tmp.$$" 2>/dev/null
                         log "AD-SURFACE-INDEX already running pid=$oldpid; queued rerun reason=$reason"
                         return 0
                         ;;
@@ -1605,31 +1607,25 @@ build_apk_path_inventory() {
 
 cap_package_paths_readonly() {
     user="$1"; pkg="$2"
-    raw_paths=""
-    out=$(cmd package path --user "$user" "$pkg" 2>/dev/null)
-    [ -n "$out" ] || out=$(pm path --user "$user" "$pkg" 2>/dev/null)
-    [ -n "$out" ] || out=$(cmd package path "$pkg" 2>/dev/null)
-    [ -n "$out" ] || out=$(pm path "$pkg" 2>/dev/null)
-    direct_paths=$(printf '%s\n' "$out" | sed -n 's/^package://p' | awk 'NF')
+    paths_tmp=$(aad_mktemp_near "$DATA_DIR/.package_paths")
+    [ -n "$paths_tmp" ] || return 0
+    : > "$paths_tmp"
 
-    cached_paths=""
+    cmd package path --user "$user" "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
+    [ -s "$paths_tmp" ] || pm path --user "$user" "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
+    [ -s "$paths_tmp" ] || cmd package path "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
+    [ -s "$paths_tmp" ] || pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
+
     if [ -n "${AAD_APK_PATH_CACHE:-}" ] && [ -f "$AAD_APK_PATH_CACHE" ]; then
-        cached_paths=$(awk -F'|' -v u="$user" -v p="$pkg" '$1==u && $2==p {print $3}' "$AAD_APK_PATH_CACHE" 2>/dev/null)
+        awk -F'|' -v u="$user" -v p="$pkg" '$1==u && $2==p {print $3}' \
+            "$AAD_APK_PATH_CACHE" >> "$paths_tmp" 2>/dev/null
     fi
-    raw_paths=$(printf '%s\n%s\n' "$direct_paths" "$cached_paths" | awk 'NF' | sort -u)
-    [ -n "$raw_paths" ] || return 0
 
-    {
-        printf '%s\n' "$raw_paths"
-        printf '%s\n' "$raw_paths" | while IFS= read -r base_apk; do
-            [ -n "$base_apk" ] || continue
-            apk_dir=${base_apk%/*}
-            [ -d "$apk_dir" ] || continue
-            for sibling in "$apk_dir"/*.apk; do
-                [ -f "$sibling" ] && printf '%s\n' "$sibling"
-            done
-        done
-    } | awk 'NF' | sort -u
+    # cmd/pm package path уже возвращает base и split APK конкретного пакета.
+    # Нельзя добавлять все соседние *.apk: OEM часто хранит сотни overlay в общем
+    # каталоге, из-за чего один пакет ошибочно сканировал APK других пакетов.
+    awk 'NF && !seen[$0]++ {print}' "$paths_tmp" 2>/dev/null
+    rm -f "$paths_tmp" 2>/dev/null
 }
 
 cap_activity_component_exists() {
@@ -2357,8 +2353,18 @@ record_ad_surface_scan_package() {
     paths=$(cap_package_paths_readonly "$user" "$pkg")
     [ -n "$paths" ] || return 0
     vc="${AAD_CURRENT_VERSION_CODE:-unknown}"
+    max_apks=$(read_setting AD_SURFACE_MAX_APKS_PER_PACKAGE 64)
+    case "$max_apks" in ''|*[!0-9]*) max_apks=64 ;; esac
+    [ "$max_apks" -ge 1 ] 2>/dev/null || max_apks=1
+    [ "$max_apks" -le 256 ] 2>/dev/null || max_apks=256
+    apk_count=0
     while IFS= read -r apk; do
         [ -n "$apk" ] || continue
+        apk_count=$((apk_count + 1))
+        if [ "$apk_count" -gt "$max_apks" ] 2>/dev/null; then
+            log "AD-SURFACE-APK-LIMIT u$user package=$pkg limit=$max_apks remaining_paths_skipped=yes"
+            break
+        fi
         scan_ad_surfaces_for_apk "$user" "$pkg" "$vc" "$apk"
     done <<EOF
 $paths

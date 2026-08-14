@@ -1,6 +1,7 @@
 {
-  "version": "v5.0.0",
-  "versionCode": 5000,
-  "zipUrl": "https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v5.0.0_5000.zip",
-  "changelog": "https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/changelog.md"
+  "version": "v5.3.1",
+  "versionCode": 5310,
+  "zipUrl": "https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v5.3.1_5310.zip",
+  "changelog": "https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/CHANGELOG.md"
 }
+

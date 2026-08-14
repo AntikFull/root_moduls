@@ -1,8 +1,8 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v5.0.0
-versionCode=5000
+version=v5.3.1
+versionCode=5310
 author=eCubz (https://t.me/eCubz)
-description=v5.0.0: Трёхрежимная защита от рекламы и аналитики (SAFE/BALANCED/AGGRESSIVE), AXML Full Activity Scanner, Ad Surface Indexer, Network Killer и HYBRID IFW+PM. Логи: /data/adb/analytics_ads_disabler/logs • Группа: https://t.me/module_ecubz
+description=v5.3.1: Исправлены повторное сканирование соседних OEM APK, ожидание воркеров и многочасовой нагрев Ad Surface Indexer. Логи: /data/adb/analytics_ads_disabler/logs • Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/update.json
 minMagisk=20400

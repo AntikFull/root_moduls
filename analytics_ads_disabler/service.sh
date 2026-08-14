@@ -23,7 +23,160 @@ while [ "$(/system/bin/getprop sys.boot_completed 2>/dev/null)" != "1" ]; do
     sleep 5
 done
 trace "BOOT-COMPLETE observed loops=$wait_loops"
-sleep 3
+
+early_uint_setting() {
+    _eus_key="$1"
+    _eus_default="$2"
+    _eus_min="$3"
+    _eus_max="$4"
+    _eus_file="$DATA_DIR/settings.conf"
+    [ -f "$_eus_file" ] || _eus_file="$MODDIR/settings.conf"
+    _eus_value=$(sed -n "s/^[[:space:]]*${_eus_key}[[:space:]]*=[[:space:]]*//p" "$_eus_file" 2>/dev/null | tail -n 1)
+    _eus_value=${_eus_value%%[!0-9]*}
+    case "$_eus_value" in
+        ''|*[!0-9]*) _eus_value="$_eus_default" ;;
+    esac
+    [ "$_eus_value" -lt "$_eus_min" ] 2>/dev/null && _eus_value="$_eus_min"
+    [ "$_eus_value" -gt "$_eus_max" ] 2>/dev/null && _eus_value="$_eus_max"
+    printf '%s\n' "$_eus_value"
+}
+
+early_uptime_seconds() {
+    _eus_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    case "$_eus_uptime" in
+        ''|*[!0-9]*) _eus_uptime=0 ;;
+    esac
+    printf '%s\n' "$_eus_uptime"
+}
+
+early_mem_available_kb() {
+    _ema_value=$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
+    [ -n "$_ema_value" ] || _ema_value=$(awk '/^MemFree:/ {print $2; exit}' /proc/meminfo 2>/dev/null)
+    case "$_ema_value" in
+        ''|*[!0-9]*) _ema_value=0 ;;
+    esac
+    printf '%s\n' "$_ema_value"
+}
+
+early_cpu_totals() {
+    awk '/^cpu[[:space:]]/ {
+        total=0
+        for (i=2; i<=NF; i++) total += $i
+        idle=$5 + $6
+        printf "%.0f %.0f\n", total, idle
+        exit
+    }' /proc/stat 2>/dev/null
+}
+
+early_cpu_idle_percent() {
+    _ecp_sample="$1"
+    set -- $(early_cpu_totals)
+    _ecp_total_before=${1:-0}
+    _ecp_idle_before=${2:-0}
+    sleep "$_ecp_sample"
+    set -- $(early_cpu_totals)
+    _ecp_total_after=${1:-0}
+    _ecp_idle_after=${2:-0}
+    _ecp_total_delta=$((_ecp_total_after - _ecp_total_before))
+    _ecp_idle_delta=$((_ecp_idle_after - _ecp_idle_before))
+    if [ "$_ecp_total_delta" -gt 0 ] 2>/dev/null && [ "$_ecp_idle_delta" -ge 0 ] 2>/dev/null; then
+        printf '%s\n' $((_ecp_idle_delta * 100 / _ecp_total_delta))
+    else
+        printf '0\n'
+    fi
+}
+
+early_boot_animation_ready() {
+    _eba_exit=$(/system/bin/getprop service.bootanim.exit 2>/dev/null)
+    _eba_state=$(/system/bin/getprop init.svc.bootanim 2>/dev/null)
+    [ "$_eba_exit" = "1" ] && return 0
+    [ "$_eba_state" = "stopped" ] && return 0
+    [ -z "$_eba_exit$_eba_state" ] && return 0
+    return 1
+}
+
+early_package_manager_ready() {
+    /system/bin/cmd package list users >/dev/null 2>&1 && return 0
+    command -v pm >/dev/null 2>&1 && pm list users >/dev/null 2>&1
+}
+
+wait_for_os_stability() {
+    _wos_enabled=$(early_uint_setting BOOT_STABILIZATION 1 0 1)
+    _wos_min_uptime=$(early_uint_setting BOOT_STABILIZATION_MIN_UPTIME_SEC 120 0 900)
+    _wos_max_wait=$(early_uint_setting BOOT_STABILIZATION_MAX_WAIT_SEC 300 15 1800)
+    _wos_sample=$(early_uint_setting BOOT_STABILIZATION_SAMPLE_SEC 5 2 30)
+    _wos_required=$(early_uint_setting BOOT_STABILIZATION_REQUIRED_SAMPLES 3 1 12)
+    _wos_min_idle=$(early_uint_setting BOOT_STABILIZATION_MIN_IDLE_PERCENT 60 10 95)
+    _wos_min_mem=$(early_uint_setting BOOT_STABILIZATION_MIN_AVAILABLE_KB 1048576 131072 16777216)
+
+    AAD_BOOT_STABILIZATION_RESULT=disabled
+    AAD_BOOT_STABILIZATION_WAIT_SEC=0
+    AAD_BOOT_STABILIZATION_IDLE_PERCENT=0
+    AAD_BOOT_STABILIZATION_MEM_AVAILABLE_KB=$(early_mem_available_kb)
+    AAD_BOOT_STABILIZATION_STABLE_SAMPLES=0
+    [ "$_wos_enabled" = "1" ] || {
+        trace "BOOT-STABILIZATION disabled"
+        return 0
+    }
+
+    _wos_started=$(early_uptime_seconds)
+    _wos_stable=0
+    _wos_last_log=-30
+    trace "BOOT-STABILIZATION begin min_uptime=${_wos_min_uptime}s max_wait=${_wos_max_wait}s sample=${_wos_sample}s required=$_wos_required min_idle=${_wos_min_idle}% min_mem_kb=$_wos_min_mem"
+
+    while :; do
+        _wos_now=$(early_uptime_seconds)
+        _wos_elapsed=$((_wos_now - _wos_started))
+        [ "$_wos_elapsed" -lt 0 ] 2>/dev/null && _wos_elapsed=0
+        if [ "$_wos_elapsed" -ge "$_wos_max_wait" ] 2>/dev/null; then
+            AAD_BOOT_STABILIZATION_RESULT=timeout
+            break
+        fi
+
+        _wos_mem=$(early_mem_available_kb)
+        _wos_bootanim=0
+        early_boot_animation_ready && _wos_bootanim=1
+        _wos_pm=0
+        _wos_idle=0
+
+        if [ "$_wos_now" -ge "$_wos_min_uptime" ] 2>/dev/null && [ "$_wos_bootanim" = "1" ]; then
+            _wos_idle=$(early_cpu_idle_percent "$_wos_sample")
+            early_package_manager_ready && _wos_pm=1
+        else
+            sleep "$_wos_sample"
+        fi
+
+        if [ "$_wos_now" -ge "$_wos_min_uptime" ] 2>/dev/null \
+           && [ "$_wos_bootanim" = "1" ] \
+           && [ "$_wos_pm" = "1" ] \
+           && [ "$_wos_idle" -ge "$_wos_min_idle" ] 2>/dev/null \
+           && [ "$_wos_mem" -ge "$_wos_min_mem" ] 2>/dev/null; then
+            _wos_stable=$((_wos_stable + 1))
+        else
+            _wos_stable=0
+        fi
+
+        _wos_after=$(early_uptime_seconds)
+        _wos_elapsed=$((_wos_after - _wos_started))
+        if [ $((_wos_elapsed - _wos_last_log)) -ge 30 ] 2>/dev/null || [ "$_wos_stable" -gt 0 ]; then
+            trace "BOOT-STABILIZATION sample elapsed=${_wos_elapsed}s uptime=${_wos_after}s idle=${_wos_idle}% mem_kb=$_wos_mem bootanim=$_wos_bootanim pm=$_wos_pm stable=${_wos_stable}/${_wos_required}"
+            _wos_last_log=$_wos_elapsed
+        fi
+
+        if [ "$_wos_stable" -ge "$_wos_required" ] 2>/dev/null; then
+            AAD_BOOT_STABILIZATION_RESULT=stable
+            break
+        fi
+    done
+
+    AAD_BOOT_STABILIZATION_WAIT_SEC=$_wos_elapsed
+    AAD_BOOT_STABILIZATION_IDLE_PERCENT=$_wos_idle
+    AAD_BOOT_STABILIZATION_MEM_AVAILABLE_KB=$_wos_mem
+    AAD_BOOT_STABILIZATION_STABLE_SAMPLES=$_wos_stable
+    trace "BOOT-STABILIZATION end result=$AAD_BOOT_STABILIZATION_RESULT wait_s=$AAD_BOOT_STABILIZATION_WAIT_SEC idle=${AAD_BOOT_STABILIZATION_IDLE_PERCENT}% mem_kb=$AAD_BOOT_STABILIZATION_MEM_AVAILABLE_KB stable=$AAD_BOOT_STABILIZATION_STABLE_SAMPLES/$_wos_required"
+}
+
+wait_for_os_stability
 trace "COMMON-SOURCE begin"
 
 AAD_DEFER_CAPABILITY_INIT=1
@@ -68,6 +221,7 @@ log "CONFIG-PATH runtime=$DATA_DIR module_alias=$MODDIR"
 log "=== $MODULE_VERSION_LABEL starting pid=$$ ==="
 log "BOOT-TRACE: service entry recorded at $BOOT_TRACE"
 log "BOOT-READY: sys.boot_completed=$(/system/bin/getprop sys.boot_completed 2>/dev/null) (observed before common.sh)"
+log "BOOT-STABILIZATION result=${AAD_BOOT_STABILIZATION_RESULT:-unknown} wait_s=${AAD_BOOT_STABILIZATION_WAIT_SEC:-0} idle=${AAD_BOOT_STABILIZATION_IDLE_PERCENT:-0}% mem_available_kb=${AAD_BOOT_STABILIZATION_MEM_AVAILABLE_KB:-0} stable_samples=${AAD_BOOT_STABILIZATION_STABLE_SAMPLES:-0}"
 log "TOOLCHAIN busybox=${AAD_BUSYBOX:-none} applet_dir=$AAD_APPLET_DIR awk=$(command -v awk 2>/dev/null || echo missing) unzip=$(command -v unzip 2>/dev/null || echo missing) od=$(command -v od 2>/dev/null || echo missing) inotifyd=$(command -v inotifyd 2>/dev/null || echo missing)"
 trace "DEBUG-LOG initialized path=$LOGFILE"
 

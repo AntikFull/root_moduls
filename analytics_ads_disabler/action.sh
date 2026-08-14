@@ -106,6 +106,14 @@ action_write_settings() {
     return 0
 }
 
+action_running_surface_pid() {
+    _arsp_pid=$(cat "$AD_SURFACE_PID_FILE" 2>/dev/null)
+    case "$_arsp_pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$_arsp_pid" 2>/dev/null || return 1
+    aad_pid_matches_marker "$_arsp_pid" "ad_surface_indexer.sh" || return 1
+    printf '%s\n' "$_arsp_pid"
+}
+
 echo "$MODULE_VERSION_LABEL"
 echo "PM disable: $CAP_PM_DISABLE_BACKEND $CAP_PM_DISABLE_VERB (user=$CAP_PM_DISABLE_HAS_USER exec=$CAP_PM_DISABLE_EXEC)"
 echo "PM learned: ${CAP_PM_LEARNED_DISABLE_BACKEND:-none} ${CAP_PM_LEARNED_DISABLE_VERB:-disable} (user=${CAP_PM_LEARNED_DISABLE_HAS_USER:-1} exec=${CAP_PM_LEARNED_DISABLE_EXEC:-direct} token=${CAP_PM_LEARNED_DISABLE_USER_TOKEN:-numeric} verified=${CAP_PM_LEARNED_DISABLE_VERIFIED:-0})"
@@ -151,6 +159,17 @@ echo "  VOL+ within 5s = SETTINGS"
 echo "  VOL- / no key  = RESCAN"
 CONFIGURE=0
 if action_volume_select no 5; then CONFIGURE=1; fi
+
+ACTIVE_SURFACE_PID=$(action_running_surface_pid 2>/dev/null)
+if [ -n "$ACTIVE_SURFACE_PID" ]; then
+    _act_surface_state=$(sed -n 's/^state=//p' "$AD_SURFACE_STATUS_FILE" 2>/dev/null | head -n 1)
+    _act_surface_processed=$(sed -n 's/^processed=//p' "$AD_SURFACE_STATUS_FILE" 2>/dev/null | head -n 1)
+    _act_surface_total=$(sed -n 's/^total=//p' "$AD_SURFACE_STATUS_FILE" 2>/dev/null | head -n 1)
+    echo ""
+    echo "Ad Surface Indexer is already running: pid=$ACTIVE_SURFACE_PID state=${_act_surface_state:-RUNNING} progress=${_act_surface_processed:-0}/${_act_surface_total:-0}."
+    echo "Action stopped safely: deep diagnostics and another full rescan were not started. Try again after this PID exits and the index cooldown is finished."
+    exit 3
+fi
 
 if [ "$CONFIGURE" -eq 1 ]; then
     CFG_ADS=$(read_bool_setting BLOCK_ADS 1)
