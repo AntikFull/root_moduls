@@ -231,12 +231,12 @@ pid_is_test_nfqws() {
 
 cleanup_test() {
   local stale_pid n
-  while "$IPT" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
-  while "$IPT" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
-  while "$IP6T" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
-  while "$IP6T" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
-  while "$IPT" -w 5 -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
-  while "$IPT" -w 5 -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN 2>/dev/null; do :; done
+  delete_test_rule_bounded "$IPT" -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+  delete_test_rule_bounded "$IPT" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
+  delete_test_rule_bounded "$IP6T" -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+  delete_test_rule_bounded "$IP6T" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
+  delete_test_rule_bounded "$IPT" -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+  delete_test_rule_bounded "$IPT" -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN
   stale_pid=$(cat "$TEST_NFQ_PID_FILE" 2>/dev/null)
   [ -n "$TEST_PID" ] && stale_pid=$TEST_PID
   if pid_is_test_nfqws "$stale_pid"; then
@@ -246,6 +246,18 @@ cleanup_test() {
   fi
   rm -f "$TEST_NFQ_PID_FILE" 2>/dev/null
   TEST_PID=""; TEST_RULE_MODE=""
+}
+
+delete_test_rule_bounded() {
+  local command="$1" attempt=0
+  shift
+  [ -x "$command" ] || return 0
+  while [ "$attempt" -lt 8 ]; do
+    "$command" -w 1 -t mangle -D OUTPUT "$@" >/dev/null 2>&1 || return 0
+    attempt=$((attempt + 1))
+  done
+  log "AUTO cleanup ограничен восемью повторами: $*"
+  return 0
 }
 
 install_direct_rule() {

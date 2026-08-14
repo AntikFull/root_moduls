@@ -22,8 +22,6 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] VPN Hotspot: $*" >> "$LOG_FILE"; }
 IP_BIN=$(command -v ip 2>/dev/null); [ -n "$IP_BIN" ] || IP_BIN=/system/bin/ip
 IPT=$(command -v iptables 2>/dev/null); [ -n "$IPT" ] || IPT=/system/bin/iptables
 IP6T=$(command -v ip6tables 2>/dev/null); [ -n "$IP6T" ] || IP6T=/system/bin/ip6tables
-IPT_SAVE=$(command -v iptables-save 2>/dev/null)
-IP6T_SAVE=$(command -v ip6tables-save 2>/dev/null)
 valid_number() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 normalize_fallback_mode() {
@@ -85,22 +83,29 @@ cleanup_private_tables() {
   "$IP_BIN" -6 route flush table "$VPN_ROUTE_TABLE" 2>/dev/null || true
 }
 cleanup_iptables() {
-  local clean4=1 clean6=1
-  [ -n "$IPT_SAVE" ] && ! "$IPT_SAVE" 2>/dev/null | grep -q 'ZAPRET2_VPN_' && clean4=0
-  [ -n "$IP6T_SAVE" ] && ! "$IP6T_SAVE" 2>/dev/null | grep -q 'ZAPRET2_VPN_' && clean6=0
-  [ -x "$IPT" ] && [ "$clean4" = 1 ] && {
-    while "$IPT" -w 5 -t nat -D POSTROUTING -j ZAPRET2_VPN_NAT >/dev/null 2>&1; do :; done
-    "$IPT" -w 5 -t nat -F ZAPRET2_VPN_NAT >/dev/null 2>&1 || true
-    "$IPT" -w 5 -t nat -X ZAPRET2_VPN_NAT >/dev/null 2>&1 || true
-    while "$IPT" -w 5 -t filter -D FORWARD -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1; do :; done
-    "$IPT" -w 5 -t filter -F ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
-    "$IPT" -w 5 -t filter -X ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
+  [ -x "$IPT" ] && {
+    delete_jump_bounded "$IPT" nat POSTROUTING ZAPRET2_VPN_NAT
+    "$IPT" -w 1 -t nat -F ZAPRET2_VPN_NAT >/dev/null 2>&1 || true
+    "$IPT" -w 1 -t nat -X ZAPRET2_VPN_NAT >/dev/null 2>&1 || true
+    delete_jump_bounded "$IPT" filter FORWARD ZAPRET2_VPN_FORWARD
+    "$IPT" -w 1 -t filter -F ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
+    "$IPT" -w 1 -t filter -X ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
   }
-  [ -x "$IP6T" ] && [ "$clean6" = 1 ] && {
-    while "$IP6T" -w 5 -t filter -D FORWARD -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1; do :; done
-    "$IP6T" -w 5 -t filter -F ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
-    "$IP6T" -w 5 -t filter -X ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && {
+    delete_jump_bounded "$IP6T" filter FORWARD ZAPRET2_VPN_FORWARD
+    "$IP6T" -w 1 -t filter -F ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
+    "$IP6T" -w 1 -t filter -X ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
   }
+}
+
+delete_jump_bounded() {
+  local command="$1" table="$2" chain="$3" target="$4" attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    "$command" -w 1 -t "$table" -D "$chain" -j "$target" >/dev/null 2>&1 || return 0
+    attempt=$((attempt + 1))
+  done
+  log "Очистка $table/$chain->$target ограничена восемью повторами"
+  return 0
 }
 cleanup_rules() {
   cleanup_state_rules

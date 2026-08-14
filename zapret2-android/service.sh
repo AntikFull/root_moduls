@@ -244,8 +244,6 @@ command_path() {
 
 IPT="$(command_path iptables)"
 IP6T="$(command_path ip6tables)"
-IPT_SAVE="$(command_path iptables-save)"
-IP6T_SAVE="$(command_path ip6tables-save)"
 
 cmd_capture() {
   local label="$1" out rc
@@ -261,38 +259,47 @@ cmd_capture() {
 
 ipt4() { cmd_capture "iptables" "$IPT" -w 5 "$@"; }
 ipt6() { [ -n "$IP6T" ] || return 1; cmd_capture "ip6tables" "$IP6T" -w 5 "$@"; }
-ipt4_quiet() { [ -n "$IPT" ] && "$IPT" -w 5 "$@" >/dev/null 2>&1; }
-ipt6_quiet() { [ -n "$IP6T" ] && "$IP6T" -w 5 "$@" >/dev/null 2>&1; }
+ipt4_quiet() { [ -n "$IPT" ] && "$IPT" -w 1 "$@" >/dev/null 2>&1; }
+ipt6_quiet() { [ -n "$IP6T" ] && "$IP6T" -w 1 "$@" >/dev/null 2>&1; }
+
+delete_jump_bounded() {
+  local family="$1" table="$2" chain="$3" target="$4" attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    if [ "$family" = 4 ]; then
+      ipt4_quiet -t "$table" -D "$chain" -j "$target" || return 0
+    else
+      ipt6_quiet -t "$table" -D "$chain" -j "$target" || return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  health_warn "Очистка $family/$table/$chain->$target ограничена восемью повторами"
+  return 0
+}
 
 cleanup_iptables() {
-  local clean4=1 clean6=1
-  # После новой загрузки netfilter пуст: один снимок дешевле десятков неуспешных
-  # операций удаления, особенно пока другие boot-скрипты удерживают xtables lock.
-  [ -n "$IPT_SAVE" ] && ! "$IPT_SAVE" 2>/dev/null | grep -q 'ZAPRET2_' && clean4=0
-  [ -n "$IP6T_SAVE" ] && ! "$IP6T_SAVE" 2>/dev/null | grep -q 'ZAPRET2_' && clean6=0
-  [ -n "$IPT" ] && [ "$clean4" = 1 ] && {
-    while ipt4_quiet -t mangle -D OUTPUT -j ZAPRET2_MANGLE; do :; done
-    while ipt4_quiet -t mangle -D INPUT -j ZAPRET2_MANGLE_IN; do :; done
-    while ipt4_quiet -t mangle -D FORWARD -j ZAPRET2_MANGLE_FORWARD; do :; done
+  [ -n "$IPT" ] && {
+    delete_jump_bounded 4 mangle OUTPUT ZAPRET2_MANGLE
+    delete_jump_bounded 4 mangle INPUT ZAPRET2_MANGLE_IN
+    delete_jump_bounded 4 mangle FORWARD ZAPRET2_MANGLE_FORWARD
     ipt4_quiet -t mangle -F ZAPRET2_MANGLE; ipt4_quiet -t mangle -X ZAPRET2_MANGLE
     ipt4_quiet -t mangle -F ZAPRET2_MANGLE_IN; ipt4_quiet -t mangle -X ZAPRET2_MANGLE_IN
     ipt4_quiet -t mangle -F ZAPRET2_MANGLE_FORWARD; ipt4_quiet -t mangle -X ZAPRET2_MANGLE_FORWARD
-    while ipt4_quiet -t filter -D OUTPUT -j ZAPRET2_FILTER; do :; done
-    while ipt4_quiet -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD; do :; done
+    delete_jump_bounded 4 filter OUTPUT ZAPRET2_FILTER
+    delete_jump_bounded 4 filter FORWARD ZAPRET2_FILTER_FORWARD
     ipt4_quiet -t filter -F ZAPRET2_FILTER; ipt4_quiet -t filter -X ZAPRET2_FILTER
     ipt4_quiet -t filter -F ZAPRET2_FILTER_FORWARD; ipt4_quiet -t filter -X ZAPRET2_FILTER_FORWARD
-    while ipt4_quiet -t nat -D PREROUTING -j ZAPRET2_NAT_PREROUTING; do :; done
+    delete_jump_bounded 4 nat PREROUTING ZAPRET2_NAT_PREROUTING
     ipt4_quiet -t nat -F ZAPRET2_NAT_PREROUTING; ipt4_quiet -t nat -X ZAPRET2_NAT_PREROUTING
   }
-  [ -n "$IP6T" ] && [ "$clean6" = 1 ] && {
-    while ipt6_quiet -t mangle -D OUTPUT -j ZAPRET2_MANGLE; do :; done
-    while ipt6_quiet -t mangle -D INPUT -j ZAPRET2_MANGLE_IN; do :; done
-    while ipt6_quiet -t mangle -D FORWARD -j ZAPRET2_MANGLE_FORWARD; do :; done
+  [ -n "$IP6T" ] && {
+    delete_jump_bounded 6 mangle OUTPUT ZAPRET2_MANGLE
+    delete_jump_bounded 6 mangle INPUT ZAPRET2_MANGLE_IN
+    delete_jump_bounded 6 mangle FORWARD ZAPRET2_MANGLE_FORWARD
     ipt6_quiet -t mangle -F ZAPRET2_MANGLE; ipt6_quiet -t mangle -X ZAPRET2_MANGLE
     ipt6_quiet -t mangle -F ZAPRET2_MANGLE_IN; ipt6_quiet -t mangle -X ZAPRET2_MANGLE_IN
     ipt6_quiet -t mangle -F ZAPRET2_MANGLE_FORWARD; ipt6_quiet -t mangle -X ZAPRET2_MANGLE_FORWARD
-    while ipt6_quiet -t filter -D OUTPUT -j ZAPRET2_FILTER; do :; done
-    while ipt6_quiet -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD; do :; done
+    delete_jump_bounded 6 filter OUTPUT ZAPRET2_FILTER
+    delete_jump_bounded 6 filter FORWARD ZAPRET2_FILTER_FORWARD
     ipt6_quiet -t filter -F ZAPRET2_FILTER; ipt6_quiet -t filter -X ZAPRET2_FILTER
     ipt6_quiet -t filter -F ZAPRET2_FILTER_FORWARD; ipt6_quiet -t filter -X ZAPRET2_FILTER_FORWARD
   }
@@ -634,7 +641,7 @@ ensure_conntrack_accounting() {
   cur=$(cat "$f" 2>/dev/null)
   if [ "$cur" != "1" ]; then
     echo 1 > "$f" 2>/dev/null || { log_w "Не удалось включить nf_conntrack_acct; SMART_NATIVE недоступен"; return 1; }
-    log_i "SMART: включн net.netfilter.nf_conntrack_acct=1 для bounded reply-feed"
+    log_i "SMART: включён net.netfilter.nf_conntrack_acct=1 для bounded reply-feed"
   fi
   [ "$(cat "$f" 2>/dev/null)" = "1" ] && CONNTRACK_ACCT=1
   [ "$CONNTRACK_ACCT" = "1" ]
@@ -686,12 +693,33 @@ if [ "$SERVICE_ACTION" = "reload-apps" ]; then
 fi
 
 acquire_lock() {
-  local lock_attempt=0 lock_pid
+  local lock_attempt=0 lock_pid lock_started now lock_age n
   while ! mkdir "$SERVICE_LOCK" 2>/dev/null; do
     lock_pid=$(cat "$SERVICE_LOCK/pid" 2>/dev/null)
     case "$lock_pid" in
       ''|0|*[!0-9]*) rm -rf "$SERVICE_LOCK" 2>/dev/null ;;
-      *) ! kill -0 "$lock_pid" 2>/dev/null && rm -rf "$SERVICE_LOCK" 2>/dev/null ;;
+      *)
+        if ! kill -0 "$lock_pid" 2>/dev/null || ! pid_is_owned "$lock_pid" service; then
+          rm -rf "$SERVICE_LOCK" 2>/dev/null
+        else
+          lock_started=$(cat "$SERVICE_LOCK/started" 2>/dev/null)
+          now=$(date +%s 2>/dev/null)
+          case "$lock_started:$now" in
+            *[!0-9:]*|:*) ;;
+            *)
+              lock_age=$((now - lock_started))
+              if [ "$lock_age" -ge 120 ] 2>/dev/null; then
+                log_w "Прерывается зависший reload PID=$lock_pid age=${lock_age}s"
+                kill -TERM "$lock_pid" 2>/dev/null
+                n=0
+                while pid_is_owned "$lock_pid" service && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
+                pid_is_owned "$lock_pid" service && kill -KILL "$lock_pid" 2>/dev/null
+                rm -rf "$SERVICE_LOCK" 2>/dev/null
+              fi
+              ;;
+          esac
+        fi
+        ;;
     esac
     lock_attempt=$((lock_attempt + 1))
     if [ "$lock_attempt" -ge 10 ]; then
@@ -701,6 +729,7 @@ acquire_lock() {
     sleep 1
   done
   echo $$ > "$SERVICE_LOCK/pid"
+  date +%s > "$SERVICE_LOCK/started" 2>/dev/null
 }
 release_service_lock() {
   [ "$(cat "$SERVICE_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$SERVICE_LOCK" 2>/dev/null
@@ -716,7 +745,7 @@ reload_active_profile() {
   local profile profile_name profile_signature youtube_args special host debug_arg launcher pid tmp
   [ -f "$AUTO_RESULT_FILE" ] && . "$AUTO_RESULT_FILE"
   profile=${AUTO_PROFILE:-$AUTO_PROFILE_DEFAULT}
-  strategy_read "$profile" || { log_w "Быстрый reload отклонн: невалидный AUTO_PROFILE=$profile"; return 1; }
+  strategy_read "$profile" || { log_w "Быстрый reload отклонён: невалидный AUTO_PROFILE=$profile"; return 1; }
   profile_name=$STRATEGY_FILE_NAME
   profile_signature=$(strategy_catalog_signature)
   # Переход в DIRECT или из него меняет сам состав netfilter-правил, а быстрый
@@ -766,7 +795,7 @@ reload_active_profile() {
       END {if(!seen_p)print "AUTO_PROFILE=" p; if(!seen_pn)print "AUTO_PROFILE_NAME=" pn; if(!seen_ps)print "AUTO_STRATEGY_SIGNATURE=" ps; if(!seen_s)print "AUTO_STATUS=" s; if(!seen_k)print "AUTO_NETWORK_KEY=" k; if(!seen_i)print "AUTO_NETWORK_IFACE=" i; if(!seen_u)print "AUTO_UPDATED=" u; if(!seen_n)print "COMPAT_NOTES=" note}
     ' "$HEALTH_FILE" > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
   fi
-  log_i "AUTO-профиль переключн без пересборки firewall/UID: profile=$profile name=$profile_name pid=$pid"
+  log_i "AUTO-профиль переключён без пересборки firewall/UID: profile=$profile name=$profile_name pid=$pid"
   return 0
 }
 
@@ -792,7 +821,10 @@ stop_pid "$NFQWS_PID_FILE" "nfqws2" nfqws2
 stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
 stop_pid "$HEALTH_WATCHER_PID_FILE" "health watcher" health-watch
 stop_owned_nfqws
+write_start_state "STARTING" "Очистка предыдущих netfilter-правил" 30
+boot_trace "firewall cleanup start"
 cleanup_iptables
+boot_trace "firewall cleanup complete"
 "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
 
 write_start_state "STARTING" "Проверка netfilter и возможностей ядра" 38
@@ -866,7 +898,7 @@ fi
 if [ "$SMART_DIRECT" = "1" ]; then
   AUTO_STATUS="DIRECT"
   COMPAT_STATUS="DIRECT"
-  COMPAT_NOTES="DIRECT: сеть ${AUTO_NETWORK_IFACE:-?} не фильтруется, обход отключн"
+  COMPAT_NOTES="DIRECT: сеть ${AUTO_NETWORK_IFACE:-?} не фильтруется, обход отключён"
   log_i "SMART_ACTIVE DIRECT: правила и nfqws2 не устанавливаются (профиль $AUTO_PROFILE / $AUTO_PROFILE_NAME)"
 fi
 log_i "SMART capabilities: acct=$CONNTRACK_ACCT connmark=$CONNMARK4 connbytes=$CONNBYTES4; requested=$STRATEGY_MODE engine=$STRATEGY_EFFECTIVE compat=$COMPAT_STATUS"
@@ -931,7 +963,7 @@ case "$MODE" in
       if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 EXCLUDE CONNMARK rule failed"; fi
       ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 EXCLUDE NFQUEUE"
     else
-      health_error "EXCLUDE не применн: owner match недоступен, иначе исключнные приложения попали бы в NFQUEUE"
+      health_error "EXCLUDE не применён: owner match недоступен, иначе исключённые приложения попали бы в NFQUEUE"
     fi
     if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
       for uid in $EXCLUDE_UIDS; do ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || true; done
@@ -1044,7 +1076,7 @@ SPECIAL_ARGS=""
 if [ "$STRATEGY_MODE" = "SMART" ] && [ -n "${SMART_AUTO_ARGS:-}" ]; then
   # Профиль, прошедший активный probe, обслуживает весь TLS/443, а не только
   SPECIAL_ARGS="$HOST_ARGS $SMART_AUTO_ARGS --new"
-  log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применн ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
+  log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
 elif [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
   SPECIAL_ARGS="--hostlist=$SMART_YOUTUBE_FILE $HOST_ARGS $SMART_YOUTUBE_ARGS --new"
   log_i "SMART profile: YouTube=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"

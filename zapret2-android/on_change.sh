@@ -37,12 +37,12 @@ echo $$ > "$LOCKDIR/pid" 2>/dev/null
 trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT HUP INT TERM
 case "$1" in
   *apps.list|*auto_apps.list|*exclude.list)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: Изменен конфигурационный файл приложений ($1), запуск sync через 1с" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: Изменён конфигурационный файл приложений ($1), запуск sync через 1с" >> "$LOG_FILE"
     sleep 1
     sh "$MODDIR/app-sync.sh" apply >/dev/null 2>&1 || sh "$MODDIR/service.sh" reload
     ;;
   *)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: Изменен конфигурационный файл ($1 $2), запуск перезагрузки через 2с" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] inotify: Изменён конфигурационный файл ($1 $2), запуск перезагрузки через 2с" >> "$LOG_FILE"
     sleep 2
     sh "$MODDIR/service.sh" reload
     ;;

@@ -1,0 +1,15 @@
+# Declare files that will always have LF line endings on checkout.
+* text eol=lf
+*.sh text eol=lf
+*.prop text eol=lf
+*.conf text eol=lf
+*.list text eol=lf
+*.lua text eol=lf
+*.md text eol=lf
+*.xml text eol=lf
+META-INF/** text eol=lf
+binaries/** binary
+*.zip binary
+
+# Denote all files that are truly binary and should not be modified.
+common/addon/**/tools/** binary
