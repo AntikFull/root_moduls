@@ -6,17 +6,17 @@ RUN_DIR="$MODDIR/run"
 TRIGGER_FILE="$RUN_DIR/network-event.flag"
 NETLINK_FIFO="$RUN_DIR/netlink-events.fifo"
 [ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
-: "${VPN_WATCH_INTERVAL:=20}" "${VPN_RETRY_INTERVAL:=2}" "${VPN_ROLE_RECHECK:=120}" "${VPN_VERIFY_INTERVAL:=300}" "${VPN_EVENT_DEBOUNCE:=2}" "${VPN_NETLINK_MONITOR:=1}"
+: "${VPN_WATCH_INTERVAL:=20}" "${VPN_RETRY_INTERVAL:=2}" "${VPN_ROLE_RECHECK:=120}" "${VPN_VERIFY_INTERVAL:=300}" "${VPN_EVENT_DEBOUNCE:=3}" "${VPN_NETLINK_MONITOR:=1}"
 : "${AUTO_SELECT_ENABLED:=1}" "${AUTO_PERIODIC_RECHECK:=1800}"
 for v in VPN_WATCH_INTERVAL VPN_RETRY_INTERVAL VPN_ROLE_RECHECK VPN_VERIFY_INTERVAL VPN_EVENT_DEBOUNCE; do
   eval val=\$$v
-  case "$val" in ''|*[!0-9]*) case "$v" in VPN_WATCH_INTERVAL) val=20 ;; VPN_RETRY_INTERVAL) val=2 ;; VPN_ROLE_RECHECK) val=120 ;; VPN_VERIFY_INTERVAL) val=300 ;; VPN_EVENT_DEBOUNCE) val=2 ;; esac; eval "$v=$val" ;; esac
+  case "$val" in ''|*[!0-9]*) case "$v" in VPN_WATCH_INTERVAL) val=20 ;; VPN_RETRY_INTERVAL) val=2 ;; VPN_ROLE_RECHECK) val=120 ;; VPN_VERIFY_INTERVAL) val=300 ;; VPN_EVENT_DEBOUNCE) val=3 ;; esac; eval "$v=$val" ;; esac
 done
 [ "$VPN_WATCH_INTERVAL" -ge 1 ] 2>/dev/null || VPN_WATCH_INTERVAL=20
 [ "$VPN_RETRY_INTERVAL" -ge 1 ] 2>/dev/null || VPN_RETRY_INTERVAL=2
 [ "$VPN_ROLE_RECHECK" -ge 15 ] 2>/dev/null || VPN_ROLE_RECHECK=120
 [ "$VPN_VERIFY_INTERVAL" -ge 30 ] 2>/dev/null || VPN_VERIFY_INTERVAL=300
-[ "$VPN_EVENT_DEBOUNCE" -ge 1 ] 2>/dev/null || VPN_EVENT_DEBOUNCE=2
+[ "$VPN_EVENT_DEBOUNCE" -ge 1 ] 2>/dev/null || VPN_EVENT_DEBOUNCE=3
 mkdir -p "$RUN_DIR" 2>/dev/null; chmod 0700 "$RUN_DIR" 2>/dev/null || true
 rm -f "$TRIGGER_FILE" "$NETLINK_FIFO" 2>/dev/null
 

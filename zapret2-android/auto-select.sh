@@ -48,15 +48,22 @@ active_network_snapshot() {
   dumpsys connectivity > "$snapshot" 2>/dev/null || { rm -f "$snapshot" 2>/dev/null; return 1; }
   chmod 0600 "$snapshot" 2>/dev/null || true
   net=$(sed -n 's/^Active default network: \([0-9][0-9]*\).*$/\1/p' "$snapshot" | head -n1)
-  [ -n "$net" ] || { rm -f "$snapshot" 2>/dev/null; return 1; }
-  line=$(grep -F "NetworkAgentInfo{network{$net}" "$snapshot" | head -n1)
+  if [ -n "$net" ]; then
+    line=$(grep -F "NetworkAgentInfo{network{$net}" "$snapshot" | head -n1)
+  else
+    line=$(grep -F "Capabilities:" "$snapshot" | grep -F "INTERNET" | grep -F "InterfaceName:" | head -n1)
+    [ -n "$line" ] || line=$(grep -F "InterfaceName:" "$snapshot" | grep -v "InterfaceName: null" | head -n1)
+  fi
   rm -f "$snapshot" 2>/dev/null
   [ -n "$line" ] || return 1
   iface=$(printf '%s\n' "$line" | sed -n 's/^.*InterfaceName: \([^ ]*\).*$/\1/p')
   subid=$(printf '%s\n' "$line" | sed -n 's/^.*SubscriptionIds: {\([^}]*\)}.*$/\1/p' | tr -d ' ' | cut -d, -f1)
   dns=$(printf '%s\n' "$line" | sed -n 's/^.*DnsAddresses: \[ \([^]]*\) \].*$/\1/p' | tr -d '/ ')
+  if [ -z "$iface" ] || [ "$iface" = "null" ]; then
+    iface=$(ip route show 2>/dev/null | sed -n 's/^.*dev \([^ ]*\).*$/\1/p' | head -n1)
+  fi
   [ -n "$iface" ] || return 1
-  printf '%s|%s|%s|%s\n' "$iface" "$subid" "$dns" "$net"
+  printf '%s|%s|%s|%s\n' "$iface" "$subid" "$dns" "${net:-1}"
 }
 
 snapshot_field() {
@@ -471,6 +478,31 @@ save_cache() {
   write_result "$profile" "$key" "$iface" "$status" "$now"
 }
 
+prune_stale_caches() {
+  local now cache updated age
+  now=$(now_epoch)
+  for cache in "$STATE_DIR"/auto-*.env "$RUN_DIR"/auto-*.env; do
+    [ -f "$cache" ] || continue
+    updated=$(sed -n 's/^UPDATED=//p' "$cache" 2>/dev/null | head -n1)
+    case "$updated" in ''|*[!0-9]*) continue ;; esac
+    age=$((now - updated))
+    if [ "$age" -ge 2592000 ] 2>/dev/null; then
+      rm -f "$cache" 2>/dev/null
+      log "AUTO: удалён устаревший кэш (>30 дн.): $(basename "$cache")"
+    fi
+  done
+}
+
+verify_cached_strategy() {
+  local iface="$1" profile="$2" host="www.youtube.com" code
+  [ "$profile" = "strategy_1" ] && return 0
+  code=$(curl -4 -sS -o /dev/null --interface "$iface" --connect-timeout 3 --max-time 5 -w '%{http_code}' "https://$host/" 2>/dev/null)
+  case "$code" in
+    200|301|302|204|404|403) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 run_probe() {
   local force="$1" snapshot iface identity key cache previous previous_updated now age profile selected="" service_pid ttl packets catalog number path \
     direct_profile baseline_fail best best_fixed tried fixed broken log_before
@@ -479,6 +511,7 @@ run_probe() {
   [ "$AUTO_SELECT_ENABLED" = 1 ] || { resolve_current >/dev/null; return 0; }
   [ "$AUTO_TEST_QNUM" = "${QNUM:-200}" ] && AUTO_TEST_QNUM=$((AUTO_TEST_QNUM + 1))
   cleanup_test
+  prune_stale_caches
   service_pid=$(cat "$RUN_DIR/service.lock/pid" 2>/dev/null)
   case "$service_pid" in
     ''|0|*[!0-9]*) ;;
@@ -504,7 +537,19 @@ run_probe() {
     write_result "$previous" "$key" "$iface" CACHED "$previous_updated"
     log "AUTO cache hit: key=$key iface=$iface profile=$previous age=$age"
     request_profile_reload "$previous" || true
-    return 0
+    if [ "$previous" != "strategy_1" ]; then
+      sleep 2
+      if verify_cached_strategy "$iface" "$previous"; then
+        log "AUTO verification OK: кэшированный профиль $previous активен и работает на $iface"
+        save_cache "$key" "$previous" "$iface" CACHED
+        return 0
+      else
+        log "AUTO verification FAILED: кэшированный профиль $previous заблокирован на $iface; запускается полный повторный подбор"
+        rm -f "$cache" 2>/dev/null
+      fi
+    else
+      return 0
+    fi
   fi
 
   if ! prepare_probe_dns "$iface" "$snapshot"; then
@@ -515,18 +560,6 @@ run_probe() {
 
   log "AUTO probe start: key=$key iface=$iface previous=${previous:-none} catalog=$catalog"
 
-  cur_mode=""
-  [ -f "$RESULT_FILE" ] && cur_mode=$(sed -n 's/^MODE=//p' "$RESULT_FILE" | head -n1 | tr -d '"')
-  if [ "$cur_mode" = "DIRECT" ]; then
-    fallback_prof=${AUTO_PROFILE_DEFAULT:-strategy_2}
-    valid_profile "$fallback_prof" || fallback_prof=$(strategy_first_valid)
-    if [ -n "$fallback_prof" ]; then
-      log "AUTO probe transition: сброс DIRECT -> $fallback_prof (PROBING) на время тестирования $iface"
-      write_result "$fallback_prof" "$key" "$iface" PROBING "$now"
-      request_profile_reload "$fallback_prof" || true
-    fi
-  fi
-
   direct_profile=""
   strategy_list > "$RUN_DIR/auto-strategies.$$"
   while IFS='|' read -r number profile path; do
@@ -534,79 +567,63 @@ run_probe() {
     [ "$STRATEGY_FILE_MODE" = DIRECT ] && { direct_profile=$profile; break; }
   done < "$RUN_DIR/auto-strategies.$$"
 
-  case "$iface" in
-    wlan*|wifi*|swlan*)
-      ssid=$(echo "$identity" | cut -d'|' -f3 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
-      wifi_ssid_file="$MODDIR/wifi_direct_ssids.list"
-      if [ -n "$ssid" ] && [ -f "$wifi_ssid_file" ] && grep -qv '^[[:space:]]*#' "$wifi_ssid_file" 2>/dev/null; then
-        while IFS= read -r line || [ -n "$line" ]; do
-          line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
-          case "$line" in ''|\#*) continue ;; esac
-          if [ "$line" = "$ssid" ]; then
-            log "AUTO wifi_direct_ssids match: '$ssid' -> forcing DIRECT (${direct_profile:-strategy_1})"
-            [ -n "$direct_profile" ] || direct_profile="strategy_1"
-            save_cache "$key" "$direct_profile" "$iface" DIRECT_SSID
-            request_profile_reload "$direct_profile" || true
-            return 0
-          fi
-        done < "$wifi_ssid_file"
-      fi
-      ;;
-  esac
-
-  install_direct_rule
-  probe_run_all "$iface" "$BASELINE_FILE" || { log "AUTO: не удалось снять базовую линию"; return 1; }
-  baseline_fail=$PROBE_FAIL
-  log "AUTO baseline (без обхода): ok=$PROBE_PASS fail=$baseline_fail${PROBE_FAILED_ON:+ failed=$PROBE_FAILED_ON}"
-
-  if [ "$baseline_fail" = 0 ]; then
-    cleanup_test
-    rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" "$BASELINE_FILE" "$CANDIDATE_FILE" 2>/dev/null
-    if [ -n "$direct_profile" ] && [ "$AUTO_ALLOW_DIRECT" = 1 ]; then
-      log "AUTO: сеть не фильтруется, выбираем DIRECT ($direct_profile)"
-      save_cache "$key" "$direct_profile" "$iface"
-      request_profile_reload "$direct_profile" || true
-      return 0
-    fi
-    selected=${previous:-$AUTO_PROFILE_DEFAULT}
-    valid_profile "$selected" || selected=$(strategy_first_valid)
-    [ -n "$selected" ] || return 1
-    log "AUTO: сеть не фильтруется, но DIRECT запрещен; выбираем профиль=$selected"
-    save_cache "$key" "$selected" "$iface"
-    request_profile_reload "$selected" || true
-    return 0
+  if [ "${AUTO_ALLOW_DIRECT:-1}" = 1 ] && [ -n "$direct_profile" ]; then
+    case "$iface" in
+      wlan*|wifi*|swlan*)
+        ssid=$(cmd wifi status 2>/dev/null | sed -n 's/^Wifi is connected to[[:space:]]*//p' | head -n1)
+        [ -n "$ssid" ] || ssid=$(cmd wifi status 2>/dev/null | sed -n 's/^[[:space:]]*WifiInfo:.*SSID: \([^,}]*\).*$/\1/p' | head -n1)
+        ssid=$(printf '%s' "$ssid" | tr -d '\r\n"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        if [ -n "$ssid" ] && [ -f "$MODDIR/wifi_direct_ssids.list" ] && grep -Fxq "$ssid" "$MODDIR/wifi_direct_ssids.list" 2>/dev/null; then
+          save_cache "$key" "$direct_profile" "$iface" DIRECT
+          log "AUTO wifi_direct_ssids match: '$ssid' -> forcing DIRECT ($direct_profile)"
+          request_profile_reload "$direct_profile" || true
+          rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" 2>/dev/null
+          return 0
+        fi
+        ;;
+    esac
   fi
 
-  best=""; best_fixed=0; tried=0
-  while IFS='|' read -r number profile path; do
-    if ! strategy_read "$profile"; then
-      log "AUTO candidate=$profile result=INVALID_FILE"
-      continue
+  probe_run_all "$iface" "$BASELINE_FILE"
+  baseline_fail=$PROBE_FAIL
+  log "AUTO baseline (без обхода): ok=$PROBE_PASS fail=$PROBE_FAIL failed=$PROBE_FAILED_ON"
+  if [ "$baseline_fail" -eq 0 ]; then
+    if [ "${AUTO_ALLOW_DIRECT:-1}" = 1 ] && [ -n "$direct_profile" ]; then
+      save_cache "$key" "$direct_profile" "$iface" DIRECT
+      log "AUTO selected: key=$key iface=$iface profile=$direct_profile (DIRECT, сеть не фильтруется)"
+      request_profile_reload "$direct_profile" || true
+      rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" "$BASELINE_FILE" 2>/dev/null
+      return 0
     fi
+  fi
+
+  best=""
+  best_fixed=0
+  while IFS='|' read -r number profile path; do
+    strategy_read "$profile" || continue
     [ "$STRATEGY_FILE_MODE" = DIRECT ] && continue
-    case "$AUTO_PROBE_MAX_CANDIDATES" in
-      ''|0|*[!0-9]*) ;;
-      *) [ "$tried" -ge "$AUTO_PROBE_MAX_CANDIDATES" ] 2>/dev/null && break ;;
-    esac
-    tried=$((tried + 1))
     log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME position=$number start"
     log_before=$(log_size)
-    install_candidate_rule "$profile" || continue
-    probe_run_all "$iface" "$CANDIDATE_FILE" || continue
-    packets=$(test_queue_packets)
-    case "$packets" in ''|*[!0-9]*) packets=0 ;; esac
-    if ! pid_is_test_nfqws "$TEST_PID" || [ "$packets" -le 0 ] 2>/dev/null; then
-      log "AUTO candidate=$profile result=INVALID queue_packets=$packets"
+    if ! start_test_candidate "$profile"; then
+      log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=START_FAILED"
+      cleanup_test
+      continue
+    fi
+    sleep "$AUTO_TEST_WARMUP"
+    probe_run_all "$iface" "$CANDIDATE_FILE"
+    score_against_baseline "$CANDIDATE_FILE" | read -r fixed broken
+    packets=$(count_test_packets "$AUTO_TEST_QNUM")
+    cleanup_test
+    if [ "$packets" -le 0 ] 2>/dev/null; then
+      log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=NO_PACKETS (packets=$packets)"
       continue
     fi
     if candidate_had_lua_error "$log_before"; then
-      log "AUTO candidate=$profile result=INVALID_ARGS (nfqws2 отверг desync-аргументы)"
+      log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=LUA_ERROR (отклонён)"
       continue
     fi
-    set -- $(score_against_baseline "$CANDIDATE_FILE")
-    fixed=${1:-0}; broken=${2:-0}
     if [ "$broken" -gt 0 ] 2>/dev/null; then
-      log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=REGRESSION fixed=$fixed broken=$broken"
+      log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=REGRESSION (broken=$broken, отклонён)"
       continue
     fi
     log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=SCORE fixed=$fixed/$baseline_fail"
@@ -617,13 +634,13 @@ run_probe() {
   cleanup_test
 
   if [ -z "$best" ]; then
-    selected=${previous:-$AUTO_PROFILE_DEFAULT}
+    selected=${AUTO_PROFILE_DEFAULT:-strategy_2}
     valid_profile "$selected" || selected=$(strategy_first_valid)
     [ -n "$selected" ] || { log "AUTO: нет валидных файлов стратегий"; return 1; }
-    log "AUTO: ни один кандидат не помог, сохраняем профиль=$selected"
-    write_result "$selected" "$key" "$iface" FAILED "$previous_updated"
+    log "AUTO: кандидаты не дали преимуществ, устанавливаем безопасный профиль по умолчанию $selected ($(profile_name "$selected"))"
+    save_cache "$key" "$selected" "$iface" FALLBACK_DEFAULT
     request_profile_reload "$selected" || true
-    return 1
+    return 0
   fi
   if [ "$best_fixed" -ge "$baseline_fail" ] 2>/dev/null; then
     save_cache "$key" "$best" "$iface" SELECTED

@@ -694,8 +694,10 @@ fi
 
 acquire_lock() {
   local lock_attempt=0 lock_pid lock_started now lock_age n
+  [ "$(cat "$SERVICE_LOCK/pid" 2>/dev/null)" = "$$" ] && return 0
   while ! mkdir "$SERVICE_LOCK" 2>/dev/null; do
     lock_pid=$(cat "$SERVICE_LOCK/pid" 2>/dev/null)
+    [ "$lock_pid" = "$$" ] && return 0
     case "$lock_pid" in
       ''|0|*[!0-9]*) rm -rf "$SERVICE_LOCK" 2>/dev/null ;;
       *)
