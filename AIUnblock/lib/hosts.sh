@@ -36,7 +36,7 @@ verify_hosts_overlay() {
     hosts_status_write "$moddir" "active"
   else
     hosts_status_write "$moddir" "not-mounted"
-    hosts_log "hosts: overlay РР СРРРСРСРРРР ССРР РСРСРРРРР/РРРРРРРСРР root; per-app routing РСРРРРРРРС СРРРСРСС"
+    hosts_log "hosts: overlay не смонтирован из-за прошивки/особенностей root; per-app routing продолжает работать"
   fi
 }
 
@@ -61,7 +61,7 @@ prepare_hosts_tree() {
     if [ -n "$conflict_id" ]; then
       rm -rf "$moddir/system" 2>/dev/null
       hosts_status_write "$moddir" "conflict:$conflict_id"
-      hosts_log "hosts: РСРРСССР optional overlay РР-РР РРРСРРРСР С '$conflict_id'; per-app routing РСРРРРРРРС СРРРСРСС"
+      hosts_log "hosts: отмена optional overlay из-за конфликта с '$conflict_id'; per-app routing продолжает работать"
       return 0
     fi
   fi
@@ -69,13 +69,13 @@ prepare_hosts_tree() {
   [ "$ENABLE_HOSTS_ROUTING" -eq 0 ] || [ -s "$ai_hosts" ] || {
     rm -rf "$moddir/system" 2>/dev/null
     hosts_status_write "$moddir" "missing:hosts.ai"
-    hosts_log "hosts: РССССССРСРС etc/hosts.ai; optional overlay РСРРСССР"
+    hosts_log "hosts: отсутствует etc/hosts.ai; optional overlay отменен"
     return 0
   }
   [ "$ENABLE_ADBLOCK" -eq 0 ] || [ -s "$adblock_hosts" ] || {
     rm -rf "$moddir/system" 2>/dev/null
     hosts_status_write "$moddir" "missing:hosts.adblock"
-    hosts_log "hosts: РССССССРСРС etc/hosts.adblock; optional overlay РСРРСССР"
+    hosts_log "hosts: отсутствует etc/hosts.adblock; optional overlay отменен"
     return 0
   }
 

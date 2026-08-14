@@ -1,6 +1,7 @@
 id=alice-bt-launcher
 name=Alice AI Bluetooth Auto-Launcher
-version=v1.0.0
-versionCode=101
+version=v1.1.0
+versionCode=110
 author=eCubz (https://t.me/eCubz)
-description=Автоматический запуск Яндекс Алисы при подключении к Bluetooth-устройствам. Поддержка: https://t.me/module_ecubz
+description=Автоматический запуск Яндекс Алисы при подключении к Bluetooth-устройствам. Группа: https://t.me/module_ecubz
+updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/alice-bt-launcher/update.json

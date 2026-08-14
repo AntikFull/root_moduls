@@ -6,10 +6,10 @@ OLD_MODPATH="/data/adb/modules/AIUnblock"
 [ -f "$MODPATH/lib/module_meta.sh" ] && . "$MODPATH/lib/module_meta.sh"
 load_module_metadata "$MODPATH/module.prop"
 
-ui_print "- РССРРРРРР AI Unblock RU $MODULE_VERSION_LABEL (versionCode=$MODULE_VERSION_CODE)"
-ui_print "- РРРРР СРСР: СРРСРР РСРРРРРРРС РР apps.list/apps.user.list"
-ui_print "- РРССРРРСР DNS Android РР РРРСРССС"
-ui_print "- Hosts/AdBlock в РРРРРРСРРСР optional-РРРРРРРРС Р РР СРРРСРРРС РСРРССРР"
+ui_print "- Установка AI Unblock RU $MODULE_VERSION_LABEL (versionCode=$MODULE_VERSION_CODE)"
+ui_print "- Умная маршрутизация приложений из apps.list/apps.user.list"
+ui_print "- Системный DNS Android не меняется"
+ui_print "- Hosts/AdBlock в режиме optional-перехвата без глобальной подмены"
 
 detected_arch="${ARCH:-$(getprop ro.product.cpu.abi 2>/dev/null)}"
 case "$detected_arch" in
@@ -17,9 +17,9 @@ case "$detected_arch" in
   arm|armeabi-v7a|armeabi|armv7l) native_abi="armeabi-v7a" ;;
   x64|x86_64|amd64) native_abi="x86_64" ;;
   x86|i386|i486|i586|i686) native_abi="x86" ;;
-  *) abort "AIUnblock $MODULE_VERSION_LABEL: РРРРРРРСРРРРРРРС РССРСРРСССР: ${detected_arch:-unknown}." ;;
+  *) abort "AIUnblock $MODULE_VERSION_LABEL: Неподдерживаемая архитектура: ${detected_arch:-unknown}." ;;
 esac
-ui_print "- РССРСРРСССР: $native_abi"
+ui_print "- Архитектура CPU: $native_abi"
 
 native_checksum_ok() {
   file="$1"
@@ -48,7 +48,7 @@ for native_src in $NATIVE_CANDIDATES; do
   fi
   rm -f "$MODPATH/bin/aiunblock-native"
 done
-[ -n "$native_selected" ] || abort "Native core РР РРРССРРРССС РР ССРР ССССРРССРР ($native_abi). РССРРРРРР РССРРРРРРРР РРРРРРСРР."
+[ -n "$native_selected" ] || abort "Native core не прошел проверки на этой системе ($native_abi). Проверьте системные бинарники."
 ui_print "- Native core: $native_selected / self-test OK"
 printf '%s\n' "$native_abi/$native_selected" > "$MODPATH/.native_abi" 2>/dev/null
 if command -v sha256sum >/dev/null 2>&1; then
@@ -89,14 +89,14 @@ rm -f "$MODPATH/skip_mount" "$MODPATH/.force_refresh" "$MODPATH/.reload"
 AIUNBLOCK_CONFIG_FILE="$MODPATH/install.conf"
 . "$MODPATH/lib/config.sh"
 config_load "$AIUNBLOCK_CONFIG_FILE"
-config_write "$AIUNBLOCK_CONFIG_FILE" || abort "РР СРРРРСС РРРРСРСС install.conf"
+config_write "$AIUNBLOCK_CONFIG_FILE" || abort "Не удалось записать install.conf"
 
-ui_print "- РРРСРРССРСРС: hosts=$ENABLE_HOSTS_ROUTING, adblock=$ENABLE_ADBLOCK, locale=$ENABLE_APP_LOCALE, fail=$FAIL_MODE"
+ui_print "- Конфигурация: hosts=$ENABLE_HOSTS_ROUTING, adblock=$ENABLE_ADBLOCK, locale=$ENABLE_APP_LOCALE, fail=$FAIL_MODE"
 
 . "$MODPATH/lib/hosts.sh"
 prepare_hosts_tree "$MODPATH" || {
   rm -rf "$MODPATH/system" 2>/dev/null
-  ui_print "! Optional hosts РР РРРРРСРРРРР. Per-app routing РСС СРРРР РСРРС СРРРСРСС."
+  ui_print "! Optional hosts не монтируется. Per-app routing все равно будет работать."
 }
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
@@ -117,6 +117,6 @@ for script in "$MODPATH"/lib/*.sh; do
 [ -f "$MODPATH/smartdns.user.conf" ] && set_perm "$MODPATH/smartdns.user.conf" 0 0 0600
 [ -d "$MODPATH/gateways" ] && set_perm_recursive "$MODPATH/gateways" 0 0 0700 0600
 
-ui_print "- РРСРРР. AI Unblock РРРССРРРССС РРСРРРСРСРСРР РРСРР РРСРРРРССРРР."
-ui_print "- РРРР: /sdcard/eCubz/AIUnblock/logs"
-ui_print "- РСР РСРРРРРР РРРРРСР Action С РРРСРС в РРРРРРССРРР СРССРРРССС ССРР РР."
+ui_print "- Готово. AI Unblock запустится автоматически после перезагрузки."
+ui_print "- Логи: /sdcard/eCubz/AIUnblock/logs"
+ui_print "- Для проверки нажмите Action или запуск в графическом интерфейсе прямо сейчас."

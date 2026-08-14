@@ -3,9 +3,9 @@ MODDIR=${0%/*}
 CTL="$MODDIR/bin/aiunblockctl"
 PUBLIC_LOG_DIR="/sdcard/eCubz/AIUnblock/logs"
 
-echo "AI Unblock: РСРРРССС СРССРСРРР..."
+echo "AI Unblock: Обновление конфигурации..."
 if [ ! -x "$CTL" ]; then
-  echo "РСРРРР: РРРРРРРРС РРРРРРССРРР РССССССРСРС."
+  echo "Ошибка: Бинарный файл управления отсутствует."
   exit 1
 fi
 
@@ -13,6 +13,6 @@ fi
 "$CTL" diag manual
 
 echo "-----------------------------------"
-echo "РРСРРР."
-echo "РСРСРРССР Р РРРРРСРРС РРРРС:"
+echo "Готово."
+echo "Диагностика и логи сохранены в:"
 echo "$PUBLIC_LOG_DIR"

@@ -700,14 +700,12 @@ apply_uid_rules() {
     echo "-A AIUNBLOCK_SNI -p tcp --dport 443 -j REDIRECT --to-ports $ROUTER_PORT"
     echo "-A AIUNBLOCK_SNI -j RETURN"
     echo "-F AIUNBLOCK_OUT"
-    if [ -n "$CURRENT_GEMINI" ]; then
-      if [ "$router_ok" -eq 1 ]; then
-        for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
-      fi
-      for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j GEMINI_DNAT"; done
-    fi
-    if [ -n "$CURRENT_NOTEBOOK" ] && [ "$router_ok" -eq 1 ]; then
+    if [ "$router_ok" -eq 1 ]; then
+      for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
       for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
+    fi
+    if [ -n "$CURRENT_GEMINI" ]; then
+      for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j GEMINI_DNAT"; done
     fi
     if [ -n "$CURRENT_CHATGPT" ]; then for uid in $CHATGPT_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j CHATGPT_DNAT"; done; fi
     if [ -n "$CURRENT_CLAUDE" ]; then for uid in $CLAUDE_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j CLAUDE_DNAT"; done; fi
@@ -982,22 +980,27 @@ refresh_proxy_rules() {
 
   if [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ]; then
     old="$CURRENT_GEMINI"; selected=$(cat "$dir/gemini" 2>/dev/null)
+    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules GEMINI_DNAT "$selected" && publish_gateway gemini "$selected"; then CURRENT_GEMINI="$selected"; [ "$old" = "$selected" ] || log "Gateway Gemini: $selected"; else CURRENT_GEMINI=""; RETRY_SOON=1; log "Gateway Gemini не найден"; fi
   fi
   if [ -n "$NOTEBOOK_UIDS" ]; then
     old="$CURRENT_NOTEBOOK"; selected=$(cat "$dir/notebook" 2>/dev/null)
+    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && publish_gateway notebook "$selected"; then CURRENT_NOTEBOOK="$selected"; [ "$old" = "$selected" ] || log "Gateway NotebookLM: $selected"; else CURRENT_NOTEBOOK=""; RETRY_SOON=1; log "Gateway NotebookLM не найден"; fi
   fi
   if [ -n "$CHATGPT_UIDS" ]; then
     old="$CURRENT_CHATGPT"; selected=$(cat "$dir/chatgpt" 2>/dev/null)
+    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules CHATGPT_DNAT "$selected" && publish_gateway chatgpt "$selected"; then CURRENT_CHATGPT="$selected"; [ "$old" = "$selected" ] || log "Gateway ChatGPT: $selected"; else CURRENT_CHATGPT=""; RETRY_SOON=1; log "Gateway ChatGPT не найден"; fi
   fi
   if [ -n "$CLAUDE_UIDS" ]; then
     old="$CURRENT_CLAUDE"; selected=$(cat "$dir/claude" 2>/dev/null)
+    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules CLAUDE_DNAT "$selected" && publish_gateway claude "$selected"; then CURRENT_CLAUDE="$selected"; [ "$old" = "$selected" ] || log "Gateway Claude: $selected"; else CURRENT_CLAUDE=""; RETRY_SOON=1; log "Gateway Claude не найден"; fi
   fi
   if [ -n "$GROK_UIDS" ]; then
     old="$CURRENT_GROK"; selected=$(cat "$dir/grok" 2>/dev/null)
+    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules GROK_DNAT "$selected" && publish_gateway grok "$selected"; then CURRENT_GROK="$selected"; [ "$old" = "$selected" ] || log "Gateway Grok: $selected"; else CURRENT_GROK=""; RETRY_SOON=1; log "Gateway Grok не найден"; fi
   fi
   rm -rf "$dir"

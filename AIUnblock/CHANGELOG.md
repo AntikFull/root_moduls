@@ -1,4 +1,15 @@
+# Версия v2.3.1
 
+- **Улучшение маршрутизации доменов Google в SNI Router**:
+  - Добавлены системные домены Google (`www.gstatic.com`, `www.google.com`, `ssl.gstatic.com`, `lh3.googleusercontent.com`, `play.googleapis.com`, `apis.google.com`, `accounts.google.com`, `ogp.me`) в таблицу роутера `sni_routes.conf`.
+  - Исправлены падения по `i/o timeout` при вызовах системных ресурсов Google в приложении `com.google.android.googlequicksearchbox`.
+- **Защита правил роутинга в `service.sh`**:
+  - Перенаправление в `AIUNBLOCK_SNI` больше не сбрасывается при задержках/сбоях определения `$CURRENT_GEMINI`.
+  - Добавлена сохраняемость валидных шлюзов при временной сетевой нестабильности.
+- **Поддержка спецификации `updateJson`**:
+  - Добавлена прямая ссылка `updateJson` в `module.prop` и актуализирован манифест `update.json`.
+
+# Версия v2.3.0
 
 Главное: gateway больше не признатся рабочим только по коду ответа.
 

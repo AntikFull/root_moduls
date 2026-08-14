@@ -1,0 +1,451 @@
+#!/system/bin/sh
+umask 077
+
+SELF_DIR="${0%/*}"
+case "$SELF_DIR" in /*) ;; *) SELF_DIR="$(pwd)/$SELF_DIR" ;; esac
+MODDIR="${SELF_DIR%/bin}"
+[ -f "$MODDIR/module.prop" ] || MODDIR="/data/adb/modules/zapret2-android"
+CONF_FILE="$MODDIR/zapret2.conf"
+APPS_LIST="$MODDIR/apps.list"
+AUTO_APPS_LIST="$MODDIR/auto_apps.list"
+EXCLUDE_LIST="$MODDIR/exclude.list"
+SMART_YOUTUBE_FILE="$MODDIR/smart_youtube.list"
+AUTO_DOMAINS_FILE="$MODDIR/auto_domains.list"
+EXCLUDE_DOMAINS_FILE="$MODDIR/exclude_domains.list"
+LOG_DIR="$MODDIR/logs"
+LOG_FILE="$LOG_DIR/zapret2_debug.log"
+NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
+EXPORT_LOG_DIR="/sdcard/eCubz"
+RUN_DIR="$MODDIR/run"
+HEALTH_FILE="$RUN_DIR/health.env"
+START_STATE_FILE="$RUN_DIR/startup.env"
+AUTO_RESULT_FILE="$RUN_DIR/auto-current.env"
+STRATEGY_DIR="$MODDIR/strategies"
+STRATEGY_LIB="$MODDIR/strategy-lib.sh"
+[ -f "$STRATEGY_LIB" ] && . "$STRATEGY_LIB"
+PACKAGE_UID_CACHE="$RUN_DIR/package_uids.cache"
+CONTROL_WRITE_MARK="$RUN_DIR/control-write.ts"
+LATE_START_PID_FILE="$RUN_DIR/late-start.pid"
+mkdir -p "$RUN_DIR" "$LOG_DIR" 2>/dev/null
+chmod 0700 "$RUN_DIR" "$LOG_DIR" 2>/dev/null || true
+
+load_conf() { [ -f "$CONF_FILE" ] && . "$CONF_FILE"; }
+reload_service() { sh "$MODDIR/service.sh" reload; }
+sync_apps() { sh "$MODDIR/app-sync.sh" apply || reload_service; }
+
+validate_pkg() { case "$1" in *[!A-Za-z0-9_.]*|'') return 1 ;; *) return 0 ;; esac; }
+validate_switch() { [ "$1" = 0 ] || [ "$1" = 1 ]; }
+validate_vpn_fallback() { [ "$1" = ANTIDPI ] || [ "$1" = BLOCK ]; }
+validate_tun_name() { case "$1" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; *) return 0 ;; esac; }
+validate_ipv4() {
+  local ip="$1" a b c d extra o
+  IFS=. read -r a b c d extra <<EOV
+$ip
+EOV
+  [ -z "$extra" ] || return 1
+  for o in "$a" "$b" "$c" "$d"; do
+    case "$o" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$o" -ge 0 ] 2>/dev/null && [ "$o" -le 255 ] 2>/dev/null || return 1
+  done
+}
+validate_dns_servers() {
+  [ -n "$1" ] || return 1
+  for dns_server in $1; do validate_ipv4 "$dns_server" || return 1; done
+}
+validate_strategy_args() {
+  [ -n "$1" ] && [ "${#1}" -le 4096 ] || return 1
+  printf '%s' "$1" | LC_ALL=C grep -Eq '^[-A-Za-z0-9_.,:=/@+% /]+$'
+}
+pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+pid_is_nfqws() {
+  local pid="$1" cwd comm
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
+  [ "$comm" = nfqws2 ] && [ "$cwd" = "$MODDIR/bin" ]
+}
+pid_is_script() {
+  local pid="$1" script="$2" cmd
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd=$(pid_cmdline "$pid")
+  printf '%s' "$cmd" | grep -Fq "$MODDIR/$script"
+}
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g'; }
+
+mark_control_write() { mkdir -p "$RUN_DIR" 2>/dev/null; date +%s > "$CONTROL_WRITE_MARK" 2>/dev/null; }
+set_conf() {
+  local key="$1" value="$2"
+  mark_control_write
+  grep -q "^$key=" "$CONF_FILE" 2>/dev/null && sed -i "s|^$key=.*|$key=\"$value\"|" "$CONF_FILE" || echo "$key=\"$value\"" >> "$CONF_FILE"
+}
+
+list_file() {
+  case "$1" in
+    apps) echo "$APPS_LIST" ;;
+    exclude) echo "$EXCLUDE_LIST" ;;
+    auto-domains) echo "$AUTO_DOMAINS_FILE" ;;
+    exclude-domains) echo "$EXCLUDE_DOMAINS_FILE" ;;
+    *) return 1 ;;
+  esac
+}
+
+health_value() { sed -n "s/^$1=//p" "$HEALTH_FILE" 2>/dev/null | head -n1; }
+startup_value() { sed -n "s/^$1=//p" "$START_STATE_FILE" 2>/dev/null | head -n1; }
+
+cmd_status() {
+  load_conf
+  local pid=0 state="РРРРРРРРРР" health source warnings effective
+  [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
+  if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid"; then state="РРРРРРРР"; else pid=0; fi
+  health=$(health_value HEALTH); source=$(health_value PACKAGE_SOURCE); warnings=$(health_value WARNINGS); effective=$(health_value STRATEGY_EFFECTIVE)
+  echo "Zapret2: $state (PID: ${pid:-0}) health=${health:-UNKNOWN}"
+  echo "MODE=${MODE:-INCLUDE}, STRATEGY=${STRATEGY_MODE:-SMART}->${effective:-${STRATEGY_MODE:-SMART}}, FORCE_TCP=${FORCE_TCP:-1}, QUIC_MODE=${QUIC_MODE:-SELECTED}, package_source=${source:-unknown}"
+  [ -n "$warnings" ] && echo "WARNINGS: $warnings"
+}
+
+cmd_json_status() {
+  load_conf
+  local pid=0 running=false direct=false manual_apps=0 auto_apps=0 excluded=0 scope health warnings source compat compat_notes effective acct connbytes4 connmark4 nfq4 owner4 startup_state startup_phase startup_progress startup_updated now age late_start_pid late_start_waiting=false downstream vpn_iface vpn_meta vpn_mode vpn_watcher_pid health_watcher_pid vpn_watcher_alive=false health_watcher_alive=false youtube_count auto_profile auto_status auto_network_iface auto_network_key auto_updated
+  [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
+  [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid" && running=true || pid=0
+  direct=false
+  if [ -f "$RUN_DIR/direct.flag" ]; then direct=true; running=true; pid=0; fi
+  [ -f "$APPS_LIST" ] && manual_apps=$(grep -cvE '^[[:space:]]*(#|$)' "$APPS_LIST")
+  [ -f "$AUTO_APPS_LIST" ] && auto_apps=$(grep -cvE '^[[:space:]]*(#|$)' "$AUTO_APPS_LIST")
+  [ -f "$EXCLUDE_LIST" ] && excluded=$(grep -cvE '^[[:space:]]*(#|$)' "$EXCLUDE_LIST")
+  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)
+  scope=${SCOPE_PRESET:-}
+  case "$scope" in SAFE|SELECTED|ALL|CUSTOM) ;; *) case "${MODE:-INCLUDE}:${QUIC_MODE:-SELECTED}" in EXCLUDE:SELECTED) scope=SAFE ;; INCLUDE:SELECTED) scope=SELECTED ;; GLOBAL:GLOBAL) scope=ALL ;; *) scope=CUSTOM ;; esac ;; esac
+  health=$(health_value HEALTH); [ -n "$health" ] || health=UNKNOWN
+  warnings=$(health_value WARNINGS); source=$(health_value PACKAGE_SOURCE); effective=$(health_value STRATEGY_EFFECTIVE)
+  compat=$(health_value COMPAT_STATUS); compat_notes=$(health_value COMPAT_NOTES)
+  auto_profile=$(health_value AUTO_PROFILE); auto_status=$(health_value AUTO_STATUS); auto_network_key=$(health_value AUTO_NETWORK_KEY); auto_network_iface=$(health_value AUTO_NETWORK_IFACE); auto_updated=$(health_value AUTO_UPDATED)
+  acct=$(health_value CONNTRACK_ACCT); connbytes4=$(health_value CONNBYTES4); connmark4=$(health_value CONNMARK4); nfq4=$(health_value NFQUEUE4); owner4=$(health_value OWNER4)
+  [ -n "$effective" ] || effective=${STRATEGY_MODE:-SMART}
+  [ -n "$compat" ] || compat=NATIVE
+  startup_state=$(startup_value STATE); startup_phase=$(startup_value PHASE); startup_progress=$(startup_value PROGRESS); startup_updated=$(startup_value UPDATED)
+  [ -n "$startup_state" ] || startup_state=IDLE
+  [ -n "$startup_progress" ] || startup_progress=0
+  [ -n "$startup_updated" ] || startup_updated=0
+  now=$(date +%s 2>/dev/null); case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  case "$startup_updated" in ''|*[!0-9]*) startup_updated=0 ;; esac
+  age=$((now-startup_updated))
+  late_start_pid=$(cat "$LATE_START_PID_FILE" 2>/dev/null)
+  case "$late_start_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$late_start_pid" service.sh && late_start_waiting=true ;; esac
+  downstream=$(cat "$RUN_DIR/tether-downstreams.state" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  vpn_meta=$(cat "$RUN_DIR/vpn-routing.meta" 2>/dev/null)
+  vpn_iface=$(printf '%s' "$vpn_meta" | sed -n 's/^.*|vpn=\([^|]*\).*/\1/p')
+  if [ -z "$downstream" ]; then vpn_mode=IDLE; else case "$vpn_meta" in disabled) vpn_mode=OFF ;; *'|vpn=|'*) [ "${VPN_FALLBACK_MODE:-ANTIDPI}" = BLOCK ] && vpn_mode=BLOCK || vpn_mode=ANTIDPI ;; *'|vpn='*) vpn_mode=VPN ;; *) vpn_mode=IDLE ;; esac; fi
+  vpn_watcher_pid=$(cat "$RUN_DIR/vpn-watcher.pid" 2>/dev/null); case "$vpn_watcher_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$vpn_watcher_pid" vpn-watch.sh && vpn_watcher_alive=true ;; esac
+  health_watcher_pid=$(cat "$RUN_DIR/health-watcher.pid" 2>/dev/null); case "$health_watcher_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$health_watcher_pid" service-watch.sh && health_watcher_alive=true ;; esac
+  if [ "$running" = true ]; then startup_state=READY; startup_phase="РРСРРР СРРРСРРС"; startup_progress=100
+  elif [ "$startup_state" = WAITING ] && [ "$late_start_waiting" = true ]; then startup_phase="РРРРРРРР РРРРССРРРС РРРССРРР Android"
+  elif { [ "$startup_state" = STARTING ] || [ "$startup_state" = WAITING ]; } && [ "$age" -gt 390 ] 2>/dev/null; then startup_state=STALE; startup_phase="РРСРРРРССР РР РРРРССРРСС РР 6 РРРСС"; fi
+  printf '{"running":%s,"direct":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"manual_apps_count":%s,"auto_apps_count":%s,"auto_apps_enabled":"%s","exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","smart_youtube_count":%s,"compat_status":"%s","compat_notes":"%s","auto_profile":"%s","auto_status":"%s","auto_network_key":"%s","auto_network_iface":"%s","auto_updated":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s,"tether_downstream":"%s","vpn_iface":"%s","vpn_mode":"%s","vpn_watcher_alive":%s,"health_watcher_alive":%s}\n' \
+    "$running" "$direct" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$((manual_apps+auto_apps))" "$manual_apps" "$auto_apps" "${AUTO_APPS_ENABLED:-1}" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-SMART}")" "$(json_escape "$effective")" "$youtube_count" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_network_key:-none}")" "$(json_escape "${auto_network_iface:-none}")" "${auto_updated:-0}" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}" "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated" "$(json_escape "$downstream")" "$(json_escape "$vpn_iface")" "$(json_escape "$vpn_mode")" "$vpn_watcher_alive" "$health_watcher_alive"
+}
+
+cmd_scope_preset() {
+  case "$2" in
+    safe) set_conf MODE EXCLUDE; set_conf QUIC_MODE SELECTED; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE SMART; set_conf SCOPE_PRESET SAFE ;;
+    selected) set_conf MODE INCLUDE; set_conf QUIC_MODE SELECTED; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE SMART; set_conf AUTO_APPS_ENABLED 1; set_conf SCOPE_PRESET SELECTED ;;
+    all) set_conf MODE GLOBAL; set_conf QUIC_MODE GLOBAL; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE SMART; set_conf SCOPE_PRESET ALL ;;
+    *) return 1 ;;
+  esac
+  reload_service
+}
+
+cmd_json_hotspot_settings() {
+  load_conf
+  printf '{"enable_hotspot":"%s","enable_vpn_hotspot":"%s","vpn_tun_name":"%s","vpn_fallback_mode":"%s","force_tcp_hotspot":"%s","dns_forward_hotspot":"%s","dns_forward_servers":"%s"}\n' \
+    "${ENABLE_HOTSPOT:-1}" "${ENABLE_VPN_HOTSPOT:-0}" "${VPN_TUN_NAME:-AUTO}" "${VPN_FALLBACK_MODE:-ANTIDPI}" "${FORCE_TCP_HOTSPOT:-1}" "${DNS_FORWARD_HOTSPOT:-0}" "${DNS_FORWARD_SERVERS:-${DNS_FORWARD_SERVER:-1.1.1.1}}"
+}
+
+cmd_json_strategies() {
+  load_conf
+  local effective compat youtube_count auto_profile auto_profile_name auto_status auto_iface auto_updated strategy_count strategy_order number id path
+  effective=$(health_value STRATEGY_EFFECTIVE); [ -n "$effective" ] || effective=${STRATEGY_MODE:-SMART}
+  compat=$(health_value COMPAT_STATUS); [ -n "$compat" ] || compat=NATIVE
+  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)
+  auto_profile=$(health_value AUTO_PROFILE); auto_profile_name=$(health_value AUTO_PROFILE_NAME); auto_status=$(health_value AUTO_STATUS); auto_iface=$(health_value AUTO_NETWORK_IFACE); auto_updated=$(health_value AUTO_UPDATED)
+  strategy_list | while IFS='|' read -r number id path; do
+    strategy_read "$id" || continue
+    printf '%s|%s\n' "$id" "$STRATEGY_FILE_NAME"
+  done > "$RUN_DIR/strategy-order.$$"
+  strategy_count=$(wc -l < "$RUN_DIR/strategy-order.$$" 2>/dev/null); strategy_count=${strategy_count:-0}
+  strategy_order=$(awk -F'|' 'BEGIN{s=""} {s=s (s?" > ":"") $1 "/" $2} END{print s}' "$RUN_DIR/strategy-order.$$" 2>/dev/null)
+  rm -f "$RUN_DIR/strategy-order.$$" 2>/dev/null
+  printf '{"active":"%s","engine":"%s","auto_apps_enabled":"%s","compat_status":"%s","youtube_domains":%s,"auto_profile":"%s","auto_profile_name":"%s","auto_status":"%s","auto_iface":"%s","auto_updated":"%s","strategy_count":%s,"strategy_order":"%s","compat_general":"%s","compat_youtube":"%s","native_general":"%s","native_youtube":"%s","custom":"%s"}\n' \
+    "${STRATEGY_MODE:-SMART}" "$(json_escape "$effective")" "${AUTO_APPS_ENABLED:-1}" "$(json_escape "$compat")" "$youtube_count" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_profile_name:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_iface:-none}")" "${auto_updated:-0}" "$strategy_count" "$(json_escape "$strategy_order")" \
+    "$(json_escape "${DESYNC_ARGS_SMART_COMPAT_GENERAL:-}")" "$(json_escape "${DESYNC_ARGS_SMART_COMPAT_YOUTUBE:-}")" \
+    "$(json_escape "${DESYNC_ARGS_SMART_NATIVE_GENERAL:-}")" "$(json_escape "${DESYNC_ARGS_SMART_NATIVE_YOUTUBE:-}")" "$(json_escape "${DESYNC_ARGS_CUSTOM:-}")"
+}
+
+cmd_save_smart() {
+  local auto_apps="$2" mode="$3" custom="$4"
+  validate_switch "$auto_apps" || return 1
+  case "$mode" in SMART|CUSTOM) ;; *) return 1 ;; esac
+  [ "$mode" != CUSTOM ] || validate_strategy_args "$custom" || return 1
+  set_conf AUTO_APPS_ENABLED "$auto_apps"
+  set_conf STRATEGY_MODE "$mode"
+  [ "$mode" != CUSTOM ] || set_conf DESYNC_ARGS_CUSTOM "$custom"
+  reload_service
+}
+
+cmd_save_strategies() {
+  local mode="$2"
+  case "$mode" in SIMPLE|AUTO|SMART) mode=SMART ;; CUSTOM) mode=CUSTOM ;; *) return 1 ;; esac
+  [ -z "$5" ] || validate_strategy_args "$5" || return 1
+  set_conf STRATEGY_MODE "$mode"
+  [ "$mode" != CUSTOM ] || set_conf DESYNC_ARGS_CUSTOM "$5"
+  reload_service
+}
+
+cmd_hotspot_settings() {
+  validate_switch "$2" && validate_switch "$3" && validate_tun_name "$4" && validate_vpn_fallback "$5" && validate_switch "$6" && validate_switch "$7" || return 1
+  dns_value="$8"
+  if [ "$7" = 1 ]; then
+    validate_dns_servers "$dns_value" || return 1
+  elif [ -z "$dns_value" ]; then
+    load_conf
+    dns_value=${DNS_FORWARD_SERVERS:-${DNS_FORWARD_SERVER:-1.1.1.1}}
+  else
+    validate_dns_servers "$dns_value" || return 1
+  fi
+  set_conf ENABLE_HOTSPOT "$2"; set_conf ENABLE_VPN_HOTSPOT "$3"; set_conf VPN_TUN_NAME "$4"; set_conf VPN_FALLBACK_MODE "$5"; set_conf VPN_HOTSPOT_KILLSWITCH 0; set_conf FORCE_TCP_HOTSPOT "$6"; set_conf DNS_FORWARD_HOTSPOT "$7"; set_conf DNS_FORWARD_SERVERS "$dns_value"
+  reload_service
+}
+
+package_list_raw() {
+  local out="$1" tmp="$RUN_DIR/.pkg-src.$$" got=0
+  : > "$out"
+  for mode in pm_uid cmd_uid pm_plain cmd_plain; do
+    : > "$tmp"
+    case "$mode" in
+      pm_uid) pm list packages -U --user 0 > "$tmp" 2>/dev/null ;;
+      cmd_uid) cmd package list packages -U --user 0 > "$tmp" 2>/dev/null ;;
+      pm_plain) pm list packages --user 0 > "$tmp" 2>/dev/null ;;
+      cmd_plain) cmd package list packages --user 0 > "$tmp" 2>/dev/null ;;
+    esac
+    if grep -q '^package:' "$tmp" 2>/dev/null; then cat "$tmp" >> "$out"; got=1; fi
+  done
+  rm -f "$tmp"
+  if [ -r /data/system/packages.list ]; then
+    awk 'NF>=1 {print "package:"$1}' /data/system/packages.list >> "$out" 2>/dev/null
+    got=1
+  fi
+  if [ -r "$PACKAGE_UID_CACHE" ]; then
+    awk 'NF>=1 {print "package:"$1}' "$PACKAGE_UID_CACHE" >> "$out" 2>/dev/null
+    got=1
+  fi
+  [ "$got" = 1 ] || return 1
+  awk '/^package:/ {line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
+  mv -f "$out.norm" "$out"
+  [ -s "$out" ]
+}
+
+system_package_list_raw() {
+  local out="$1" tmp="$RUN_DIR/.sys-pkg.$$" got=0
+  : > "$out"
+  : > "$tmp"; pm list packages -s --user 0 > "$tmp" 2>/dev/null; grep -q '^package:' "$tmp" && { cat "$tmp" >> "$out"; got=1; }
+  : > "$tmp"; cmd package list packages -s --user 0 > "$tmp" 2>/dev/null; grep -q '^package:' "$tmp" && { cat "$tmp" >> "$out"; got=1; }
+  rm -f "$tmp"
+  if [ "$got" = 1 ]; then
+    awk '/^package:/ {line=$0; sub(/^package:/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
+    mv -f "$out.norm" "$out"
+  fi
+  return 0
+}
+
+json_pkg_array_from_file() {
+  local file="$1" first=1 line
+  printf '['
+  [ -f "$file" ] && while IFS= read -r line || [ -n "$line" ]; do
+    line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    case "$line" in \#*|'') continue ;; esac
+    validate_pkg "$line" || continue
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '"%s"' "$line"
+  done < "$file"
+  printf ']'
+}
+
+cmd_json_app_lists() {
+  load_conf
+  printf '{"include":'
+  json_pkg_array_from_file "$APPS_LIST"
+  printf ',"manual":'
+  json_pkg_array_from_file "$APPS_LIST"
+  printf ',"auto":'
+  json_pkg_array_from_file "$AUTO_APPS_LIST"
+  printf ',"exclude":'
+  json_pkg_array_from_file "$EXCLUDE_LIST"
+  printf ',"auto_enabled":"%s"}\n' "${AUTO_APPS_ENABLED:-1}"
+}
+cmd_json_apps() {
+  mkdir -p "$RUN_DIR" 2>/dev/null
+  local raw="$RUN_DIR/.packages.$$" sys_tmp="$RUN_DIR/.system-packages.$$" rc=0
+  package_list_raw "$raw" || rc=1
+  system_package_list_raw "$sys_tmp"
+  if [ "$rc" -ne 0 ]; then rm -f "$raw" "$sys_tmp"; echo '[]'; return 1; fi
+  load_conf
+  awk -v inc="$APPS_LIST" -v aut="$AUTO_APPS_LIST" -v autoen="${AUTO_APPS_ENABLED:-1}" -v exc="$EXCLUDE_LIST" -v sys="$sys_tmp" '
+    BEGIN {
+      while ((getline l < inc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") a[l]=1} close(inc)
+      while ((getline l < aut)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") u[l]=1} close(aut)
+      while ((getline l < exc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") e[l]=1} close(exc)
+      while ((getline l < sys)>0) {sub(/^package:/,"",l); sub(/[[:space:]].*/,"",l); if(l!="") s[l]=1} close(sys)
+      print "["; first=1
+    }
+    /^package:/ {
+      line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,parts,"="); pkg=parts[n]; sub(/[[:space:]].*/,"",pkg)
+      if(pkg!="") {
+        if(!first) printf ","; first=0
+        printf "{\"pkg\":\"%s\",\"manual\":%s,\"auto\":%s,\"include\":%s,\"exclude\":%s,\"isSystem\":%s}", pkg, (pkg in a)?"true":"false", (pkg in u)?"true":"false", (((pkg in a)||(autoen=="1" && (pkg in u))) && !(pkg in e))?"true":"false", (pkg in e)?"true":"false", (pkg in s)?"true":"false"
+      }
+    }
+    END { print "]" }' "$raw"
+  rc=$?
+  rm -f "$raw" "$sys_tmp"
+  return "$rc"
+}
+
+cmd_add_del() {
+  local list="$1" op="$2" pkg="$3" file other tmp
+  validate_pkg "$pkg" || { echo "РРРРРСССРРРР РРС РРРРСР"; return 1; }
+  file=$(list_file "$list") || return 1
+  mark_control_write
+  if [ "$op" = add ]; then
+    [ "$list" = apps ] && other="$EXCLUDE_LIST" || other="$APPS_LIST"
+    remove_pkg_exact "$other" "$pkg" || return 1
+    grep -qxF "$pkg" "$file" 2>/dev/null || echo "$pkg" >> "$file"
+  else
+    tmp="$file.tmp.$$"
+    awk -v p="$pkg" '$0 != p { print }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+  fi
+  chmod 0600 "$APPS_LIST" "$EXCLUDE_LIST" 2>/dev/null || true
+  sync_apps
+}
+
+remove_pkg_exact() {
+  local file="$1" pkg="$2" tmp="$file.tmp.$$"
+  [ -f "$file" ] || : > "$file"
+  awk -v p="$pkg" '{ raw=$0; t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if (t != p) print raw }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+}
+
+set_app_state_only() {
+  local pkg="$1" state="$2"
+  validate_pkg "$pkg" || { echo "РРРРРСССРРРР РРС РРРРСР"; return 1; }
+  case "$state" in include|exclude|none) ;; *) echo "РРРРРСССРРРР СРССРСРРР РСРРРРРРРС"; return 1 ;; esac
+  mark_control_write
+  remove_pkg_exact "$APPS_LIST" "$pkg" || return 1
+  remove_pkg_exact "$EXCLUDE_LIST" "$pkg" || return 1
+  case "$state" in
+    include) echo "$pkg" >> "$APPS_LIST" || return 1 ;;
+    exclude) echo "$pkg" >> "$EXCLUDE_LIST" || return 1 ;;
+  esac
+  chmod 0600 "$APPS_LIST" "$EXCLUDE_LIST" 2>/dev/null || true
+}
+cmd_app_state() {
+  local pkg="$2" state="$3"
+  set_app_state_only "$pkg" "$state" || return 1
+  sync_apps || return 1
+  echo "OK $pkg $state"
+}
+cmd_app_state_set() {
+  local pkg="$2" state="$3"
+  set_app_state_only "$pkg" "$state" || return 1
+  echo "OK $pkg $state pending"
+}
+cmd_sync_apps() { sync_apps; }
+
+cmd_replace_list() {
+  local list="$1" input="$2" file tmp line
+  file=$(list_file "$list") || return 1
+  tmp="$file.tmp.$$"; : > "$tmp" || return 1
+  printf '%s\n' "$input" | while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[!A-Za-z0-9._#\ -]* ) exit 1 ;; esac
+    echo "$line"
+  done > "$tmp" || { rm -f "$tmp"; echo "РРРРРСССРРСР СРРРРРС Р СРРСРР"; return 1; }
+  mark_control_write
+  mv -f "$tmp" "$file"
+  chmod 0600 "$file" 2>/dev/null || true
+  case "$list" in
+    apps)
+      if [ -f "$EXCLUDE_LIST" ]; then
+        awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) x[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in x)) print $0}' "$EXCLUDE_LIST" "$APPS_LIST" > "$APPS_LIST.norm.$$" && mv -f "$APPS_LIST.norm.$$" "$APPS_LIST"
+      fi
+      sync_apps ;;
+    exclude)
+      if [ -f "$APPS_LIST" ]; then
+        awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) x[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in x)) print $0}' "$EXCLUDE_LIST" "$APPS_LIST" > "$APPS_LIST.norm.$$" && mv -f "$APPS_LIST.norm.$$" "$APPS_LIST"
+      fi
+      sync_apps ;;
+    auto-domains)
+      echo "SAVED legacy auto-domains (SMART ignores this list)" ;;
+    *) reload_service ;;
+  esac
+}
+
+cmd_json_diagnostics() {
+  load_conf
+  printf '{"nfqws_debug":"%s","service_log":"%s","nfqws_log":"%s","diag_file":"%s","export_dir":"%s"}\n' "${NFQWS_DEBUG:-0}" "$LOG_FILE" "$NFQWS_LOG" "$LOG_DIR/zapret2_diagnostics_latest.txt" "$EXPORT_LOG_DIR"
+}
+cmd_nfqws_debug() {
+  validate_switch "$2" || return 1
+  if [ "$2" = 1 ]; then
+    [ -f "$NFQWS_LOG" ] && mv -f "$NFQWS_LOG" "$NFQWS_LOG.previous" 2>/dev/null
+    : > "$NFQWS_LOG" 2>/dev/null
+  fi
+  set_conf NFQWS_DEBUG "$2"
+  reload_service
+  [ "$2" = 1 ] && echo "nfqws debug РРРСССР: $NFQWS_LOG" || echo "nfqws debug РСРРССРР"
+}
+cmd_diag() { sh "$MODDIR/diagnostics.sh"; }
+cmd_export_logs() { sh "$MODDIR/log-export.sh" now; }
+cmd_module_version() { sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | head -n1; }
+cmd_auto_status() { sh "$MODDIR/auto-select.sh" status; }
+cmd_auto_run() { sh "$MODDIR/auto-select.sh" force; }
+cmd_auto_clear() { sh "$MODDIR/auto-select.sh" clear; sh "$MODDIR/service.sh" reload; }
+cmd_webui() { echo "WebUI РСРРРССРРРСРССС РРРРРРРСРР KernelSU СРСРР webroot/index.html"; }
+
+case "$1" in
+  status) cmd_status ;;
+  json-status) cmd_json_status ;;
+  json-hotspot-settings) cmd_json_hotspot_settings ;;
+  json-strategies) cmd_json_strategies ;;
+  json-apps) cmd_json_apps ;;
+  json-app-lists) cmd_json_app_lists ;;
+  json-diagnostics) cmd_json_diagnostics ;;
+  mode) case "$2" in include|exclude|global) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
+  forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; set_conf SCOPE_PRESET CUSTOM; reload_service ;;
+  quicmode) case "$2" in off|selected|global) set_conf QUIC_MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
+  settings) case "$2:$3:$4" in include:off:0|include:off:1|include:selected:0|include:selected:1|include:global:0|include:global:1|exclude:off:0|exclude:off:1|exclude:selected:0|exclude:selected:1|exclude:global:0|exclude:global:1|global:off:0|global:off:1|global:selected:0|global:selected:1|global:global:0|global:global:1) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf QUIC_MODE "$(echo "$3" | tr '[:lower:]' '[:upper:]')"; set_conf FORCE_TCP "$4"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
+  scope) cmd_scope_preset "$@" ;;
+  hotspot-settings) cmd_hotspot_settings "$@" ;;
+  save-smart) cmd_save_smart "$@" ;;
+  save-strategies) cmd_save_strategies "$@" ;;
+  app-state) cmd_app_state "$@" ;;
+  app-state-set) cmd_app_state_set "$@" ;;
+  sync-apps) cmd_sync_apps ;;
+  add) cmd_add_del apps add "$2" ;;
+  del) cmd_add_del apps del "$2" ;;
+  add-exclude) cmd_add_del exclude add "$2" ;;
+  del-exclude) cmd_add_del exclude del "$2" ;;
+  replace-list) cmd_replace_list "$2" "$3" ;;
+  nfqws-debug) cmd_nfqws_debug "$@" ;;
+  diag) cmd_diag ;;
+  export-logs) cmd_export_logs ;;
+  module-version) cmd_module_version ;;
+  auto-status) cmd_auto_status ;;
+  auto-run) cmd_auto_run ;;
+  auto-clear) cmd_auto_clear ;;
+  restart) reload_service ;;
+  webui) cmd_webui ;;
+  log) tail -n "${2:-150}" "$LOG_FILE" 2>/dev/null ;;
+  nfqws-log) tail -n "${2:-150}" "$NFQWS_LOG" 2>/dev/null ;;
+  *) echo "РРРРРРС: status, json-status, json-apps, json-app-lists, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
+esac
