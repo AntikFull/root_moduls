@@ -6,12 +6,14 @@ case "$SELF_DIR" in /*) ;; *) SELF_DIR="$(pwd)/$SELF_DIR" ;; esac
 MODDIR="${SELF_DIR%/bin}"
 [ -f "$MODDIR/module.prop" ] || MODDIR="/data/adb/modules/zapret2-android"
 CONF_FILE="$MODDIR/zapret2.conf"
-APPS_LIST="$MODDIR/apps.list"
-AUTO_APPS_LIST="$MODDIR/auto_apps.list"
-EXCLUDE_LIST="$MODDIR/exclude.list"
-SMART_YOUTUBE_FILE="$MODDIR/smart_youtube.list"
-AUTO_DOMAINS_FILE="$MODDIR/auto_domains.list"
-EXCLUDE_DOMAINS_FILE="$MODDIR/exclude_domains.list"
+LISTS_DIR="$MODDIR/lists"
+[ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
+APPS_LIST="$LISTS_DIR/apps.list"
+AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
+EXCLUDE_LIST="$LISTS_DIR/exclude.list"
+SMART_YOUTUBE_FILE="$LISTS_DIR/smart_youtube.list"
+AUTO_DOMAINS_FILE="$LISTS_DIR/auto_domains.list"
+EXCLUDE_DOMAINS_FILE="$LISTS_DIR/exclude_domains.list"
 LOG_DIR="$MODDIR/logs"
 LOG_FILE="$LOG_DIR/zapret2_debug.log"
 NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
@@ -419,6 +421,83 @@ cmd_auto_run() { sh "$MODDIR/auto-select.sh" force; }
 cmd_auto_clear() { sh "$MODDIR/auto-select.sh" clear; sh "$MODDIR/service.sh" reload; }
 cmd_webui() { echo "WebUI открывается менеджером root из webroot/index.html"; }
 
+cmd_json_warp_status() {
+  load_conf
+  local dev="${WARP_DEV:-awg99}" enabled="${ENABLE_WARP:-0}" running=false endpoint="" rx_bytes=0 tx_bytes=0 last_handshake=0 apps_count=0 ai_apps_count=0 active_dns=""
+  local warp_apps_file="$LISTS_DIR/warp_apps.list"
+  [ -f "$warp_apps_file" ] || warp_apps_file="$MODDIR/warp_apps.list"
+  if [ -f "$warp_apps_file" ]; then
+    apps_count=$(grep -cvE '^[[:space:]]*(#|$)' "$warp_apps_file" 2>/dev/null || echo 0)
+  fi
+  local ai_apps_file="$LISTS_DIR/ai_apps.list"
+  [ -f "$ai_apps_file" ] || ai_apps_file="$MODDIR/ai_apps.list"
+  if [ -f "$ai_apps_file" ]; then
+    ai_apps_count=$(grep -cvE '^[[:space:]]*(#|$)' "$ai_apps_file" 2>/dev/null || echo 0)
+  fi
+  local dns_file="$LISTS_DIR/dns.list"
+  [ -f "$dns_file" ] || dns_file="$MODDIR/dns.list"
+  if [ -f "$dns_file" ]; then
+    active_dns=$(grep -vE '^[[:space:]]*(#|$)' "$dns_file" 2>/dev/null | tr '\r\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//')
+  fi
+  [ -n "$active_dns" ] || active_dns="${WARP_DNS:-1.1.1.1 1.0.0.1}"
+  if ip link show dev "$dev" >/dev/null 2>&1; then
+    running=true
+    if [ -x "$MODDIR/bin/awg" ]; then
+      local awg_out
+      awg_out=$("$MODDIR/bin/awg" show "$dev" 2>/dev/null)
+      endpoint=$(echo "$awg_out" | sed -n 's/^endpoint=//p' | head -n1)
+      rx_bytes=$(echo "$awg_out" | sed -n 's/^rx_bytes=//p' | head -n1)
+      tx_bytes=$(echo "$awg_out" | sed -n 's/^tx_bytes=//p' | head -n1)
+      last_handshake=$(echo "$awg_out" | sed -n 's/^last_handshake_time_sec=//p' | head -n1)
+    fi
+  fi
+  [ -n "$endpoint" ] || endpoint="${WARP_ENDPOINT:-162.159.192.1}:${WARP_PORT:-500}"
+  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"endpoint":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"jc":"%s","jmin":"%s","jmax":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","apps_count":%s,"ai_apps_count":%s,"dns":"%s","dns_force":"%s"}\n' \
+    "$enabled" "$dev" "$running" "$(json_escape "$endpoint")" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "${WARP_JC:-10}" "${WARP_JMIN:-800}" "${WARP_JMAX:-1400}" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$apps_count" "$ai_apps_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
+}
+
+cmd_warp_toggle() {
+  validate_switch "$2" || return 1
+  set_conf ENABLE_WARP "$2"
+  if [ "$2" = "1" ]; then
+    sh "$MODDIR/warp-tunnel.sh" start
+  else
+    sh "$MODDIR/warp-tunnel.sh" stop
+  fi
+}
+
+cmd_warp_rekey() {
+  sh "$MODDIR/warp-tunnel.sh" rekey
+}
+
+cmd_warp_save() {
+  local enabled="$2" endpoint="$3" port="$4" jc="$5" jmin="$6" jmax="$7" s1="$8" s2="$9" dns="${10}"
+  validate_switch "$enabled" || return 1
+  set_conf ENABLE_WARP "$enabled"
+  [ -n "$endpoint" ] && set_conf WARP_ENDPOINT "$endpoint"
+  [ -n "$port" ] && set_conf WARP_PORT "$port"
+  [ -n "$jc" ] && set_conf WARP_JC "$jc"
+  [ -n "$jmin" ] && set_conf WARP_JMIN "$jmin"
+  [ -n "$jmax" ] && set_conf WARP_JMAX "$jmax"
+  [ -n "$s1" ] && set_conf WARP_S1 "$s1"
+  [ -n "$s2" ] && set_conf WARP_S2 "$s2"
+  if [ -n "$dns" ]; then
+    set_conf WARP_DNS "$dns"
+    local dns_target="$LISTS_DIR/dns.list"
+    mkdir -p "$LISTS_DIR" 2>/dev/null
+    printf "# dns.list — Список DNS серверов для туннеля WARP\n" > "$dns_target.tmp.$$"
+    for d in $dns; do
+      printf "%s\n" "$d" >> "$dns_target.tmp.$$"
+    done
+    mv -f "$dns_target.tmp.$$" "$dns_target" 2>/dev/null
+  fi
+  if [ "$enabled" = "1" ]; then
+    sh "$MODDIR/warp-tunnel.sh" restart
+  else
+    sh "$MODDIR/warp-tunnel.sh" stop
+  fi
+}
+
 case "$1" in
   status) cmd_status ;;
   json-status) cmd_json_status ;;
@@ -427,6 +506,10 @@ case "$1" in
   json-apps) cmd_json_apps ;;
   json-app-lists) cmd_json_app_lists ;;
   json-diagnostics) cmd_json_diagnostics ;;
+  json-warp-status) cmd_json_warp_status ;;
+  warp-toggle) cmd_warp_toggle "$@" ;;
+  warp-rekey) cmd_warp_rekey ;;
+  warp-save) cmd_warp_save "$@" ;;
   mode) case "$2" in include|exclude|global) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
   forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; set_conf SCOPE_PRESET CUSTOM; reload_service ;;
   quicmode) case "$2" in off|selected|global) set_conf QUIC_MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
@@ -454,5 +537,5 @@ case "$1" in
   webui) cmd_webui ;;
   log) tail -n "${2:-150}" "$LOG_FILE" 2>/dev/null ;;
   nfqws-log) tail -n "${2:-150}" "$NFQWS_LOG" 2>/dev/null ;;
-  *) echo "Команды: status, json-status, json-apps, json-app-lists, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
+  *) echo "Команды: status, json-status, json-apps, json-app-lists, json-warp-status, warp-toggle 0|1, warp-rekey, warp-save, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
 esac

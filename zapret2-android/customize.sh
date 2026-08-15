@@ -39,7 +39,11 @@ set_permissions() {
     "$MODPATH/bin/nfqws2" \
     "$MODPATH/bin/ip2net" \
     "$MODPATH/bin/mdig" \
+    "$MODPATH/bin/awg" \
+    "$MODPATH/bin/amneziawg-go" \
     "$MODPATH/bin/zapret2-control" \
+    "$MODPATH/bin/ai-router" \
+    "$MODPATH/warp-tunnel.sh" \
     "$MODPATH/service.sh" \
     "$MODPATH/boot-completed.sh" \
     "$MODPATH/action.sh" \
@@ -90,9 +94,14 @@ ACTIVE_MODDIR="/data/adb/modules/zapret2-android"
 UPGRADE_BACKUP="/data/local/tmp/zapret2-upgrade.$$"
 UPGRADE_FROM=""
 if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
-  mkdir -p "$UPGRADE_BACKUP" 2>/dev/null || fail_install "Не удалось создать временный архив резервных копий"
-  for keep in zapret2.conf apps.list exclude.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list; do
-    [ -f "$ACTIVE_MODDIR/$keep" ] && cp -f "$ACTIVE_MODDIR/$keep" "$UPGRADE_BACKUP/$keep" 2>/dev/null
+  mkdir -p "$UPGRADE_BACKUP/lists" 2>/dev/null || fail_install "Не удалось создать временный архив резервных копий"
+  [ -f "$ACTIVE_MODDIR/zapret2.conf" ] && cp -f "$ACTIVE_MODDIR/zapret2.conf" "$UPGRADE_BACKUP/zapret2.conf" 2>/dev/null
+  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list ai_apps.list ai_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
+    if [ -f "$ACTIVE_MODDIR/lists/$keep" ]; then
+      cp -f "$ACTIVE_MODDIR/lists/$keep" "$UPGRADE_BACKUP/lists/$keep" 2>/dev/null
+    elif [ -f "$ACTIVE_MODDIR/$keep" ]; then
+      cp -f "$ACTIVE_MODDIR/$keep" "$UPGRADE_BACKUP/lists/$keep" 2>/dev/null
+    fi
   done
   if [ -d "$ACTIVE_MODDIR/strategies" ]; then
     mkdir -p "$UPGRADE_BACKUP/strategies" 2>/dev/null
@@ -102,6 +111,7 @@ if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
   fi
   if [ -d "$ACTIVE_MODDIR/state" ]; then
     mkdir -p "$UPGRADE_BACKUP/state" 2>/dev/null
+    [ -f "$ACTIVE_MODDIR/state/warp.conf" ] && cp -f "$ACTIVE_MODDIR/state/warp.conf" "$UPGRADE_BACKUP/state/warp.conf" 2>/dev/null
     for cache in "$ACTIVE_MODDIR"/state/auto-*.env; do
       [ -f "$cache" ] && cp -f "$cache" "$UPGRADE_BACKUP/state/" 2>/dev/null
     done
@@ -129,8 +139,11 @@ merge_previous_config() {
 restore_upgrade_data() {
   [ -n "$UPGRADE_FROM" ] || return 0
   merge_previous_config "$UPGRADE_BACKUP/zapret2.conf" "$MODPATH/zapret2.conf"
-  for keep in apps.list exclude.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list; do
-    [ -f "$UPGRADE_BACKUP/$keep" ] && cp -f "$UPGRADE_BACKUP/$keep" "$MODPATH/$keep" 2>/dev/null
+  mkdir -p "$MODPATH/lists" 2>/dev/null
+  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list ai_apps.list ai_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
+    if [ -f "$UPGRADE_BACKUP/lists/$keep" ]; then
+      cp -f "$UPGRADE_BACKUP/lists/$keep" "$MODPATH/lists/$keep" 2>/dev/null
+    fi
   done
   if [ -d "$UPGRADE_BACKUP/strategies" ]; then
     rm -f "$MODPATH"/strategies/strategy_* 2>/dev/null
@@ -141,11 +154,12 @@ restore_upgrade_data() {
   fi
   if [ -d "$UPGRADE_BACKUP/state" ]; then
     mkdir -p "$MODPATH/state" 2>/dev/null
+    [ -f "$UPGRADE_BACKUP/state/warp.conf" ] && cp -f "$UPGRADE_BACKUP/state/warp.conf" "$MODPATH/state/warp.conf" 2>/dev/null
     for cache in "$UPGRADE_BACKUP"/state/auto-*.env; do
       [ -f "$cache" ] && cp -f "$cache" "$MODPATH/state/" 2>/dev/null
     done
   fi
-  ilog "upgrade_preserved=config,apps,exclude,auto_domains,exclude_domains,probe_hosts,wifi_direct_ssids,strategies,auto_cache"
+  ilog "upgrade_preserved=config,apps,exclude,warp_apps,warp_conf,auto_domains,exclude_domains,probe_hosts,wifi_direct_ssids,strategies,auto_cache"
 }
 
 [ -n "$MODPATH" ] || fail_install "MODPATH не задан окружением"
@@ -203,8 +217,8 @@ if [ -n "$UPGRADE_FROM" ] && [ -f "$MODPATH/zapret2.conf" ]; then
          -e 's/^VPN_VERIFY_INTERVAL="[0-9]*"/VPN_VERIFY_INTERVAL="300"/' \
          -e 's/^HEALTH_WATCH_INTERVAL="[0-9]*"/HEALTH_WATCH_INTERVAL="60"/' "$MODPATH/zapret2.conf"
   rm -f "$MODPATH"/state/auto-*.env 2>/dev/null
-  if [ -f "$MODPATH/apps.list" ] && [ -f "$MODPATH/auto_apps.list" ]; then
-    awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) auto[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in auto)) print $0}' "$MODPATH/auto_apps.list" "$MODPATH/apps.list" > "$MODPATH/apps.list.smart.$$" && mv -f "$MODPATH/apps.list.smart.$$" "$MODPATH/apps.list"
+  if [ -f "$MODPATH/lists/apps.list" ] && [ -f "$MODPATH/lists/auto_apps.list" ]; then
+    awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) auto[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in auto)) print $0}' "$MODPATH/lists/auto_apps.list" "$MODPATH/lists/apps.list" > "$MODPATH/lists/apps.list.smart.$$" && mv -f "$MODPATH/lists/apps.list.smart.$$" "$MODPATH/lists/apps.list"
   fi
   ilog "upgrade_migration=smart old_strategy=${old_strategy:-unset} auto_apps=enabled manual_catalog_duplicates=removed"
 fi
@@ -234,11 +248,12 @@ rm -rf "$MODPATH/binaries" 2>/dev/null
 
 for f in \
   "$MODPATH/bin/nfqws2" "$MODPATH/bin/ip2net" "$MODPATH/bin/mdig" "$MODPATH/bin/zapret2-control" \
+  "$MODPATH/bin/amneziawg-go" "$MODPATH/bin/awg" "$MODPATH/bin/ai-router" "$MODPATH/warp-tunnel.sh" \
   "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
   "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh"
 do
-  set_exec "$f" || fail_install "Не удалось установить права +x: $f"
+  [ -f "$f" ] && { set_exec "$f" || fail_install "Не удалось установить права +x: $f"; }
 done
 
 volume_select() {
@@ -308,8 +323,8 @@ else
   sed -i "s|^FORCE_TCP_HOTSPOT=.*|FORCE_TCP_HOTSPOT=\"$FORCE_TCP_HOTSPOT_VAL\"|" "$CONF_TARGET"
   sed -i "s|^DNS_FORWARD_HOTSPOT=.*|DNS_FORWARD_HOTSPOT=\"$DNS_FORWARD_HOTSPOT_VAL\"|" "$CONF_TARGET"
 fi
-chmod 0600 "$CONF_TARGET" "$MODPATH/apps.list" "$MODPATH/auto_apps.list" "$MODPATH/exclude.list" "$MODPATH/auto_domains.list" "$MODPATH/smart_youtube.list" "$MODPATH/exclude_domains.list" "$MODPATH/probe_hosts.list" "$MODPATH/wifi_direct_ssids.list" "$MODPATH"/strategies/strategy_* 2>/dev/null || true
-chmod 0700 "$MODPATH/strategies" 2>/dev/null || true
+chmod 0644 "$CONF_TARGET" "$MODPATH/lists"/* "$MODPATH"/strategies/strategy_* 2>/dev/null || true
+chmod 0755 "$MODPATH/lists" "$MODPATH/strategies" 2>/dev/null || true
 
 VPN_FALLBACK_LOG=$(sed -n 's/^VPN_FALLBACK_MODE=//p' "$CONF_TARGET" | head -n1 | tr -d '"')
 [ -n "$VPN_FALLBACK_LOG" ] || VPN_FALLBACK_LOG=ANTIDPI

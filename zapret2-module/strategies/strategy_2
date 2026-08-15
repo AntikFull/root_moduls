@@ -1,3 +1,0 @@
-# NAME=COMPAT_FAKE
---lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=11:tls_mod=rnd,dupsid,sni=www.google.com
---lua-desync=multidisorder:pos=1,midsld

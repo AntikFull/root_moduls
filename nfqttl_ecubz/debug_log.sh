@@ -100,7 +100,7 @@ if [ "$NFQ_COUNT" -gt 12 ]; then
 fi
 
 echo "[IPv4 Mangle NFQTTL CHAINS]"
-for _ch in nfqttlp nfqttlo nfqttlb nfqttlc nfqttlm; do
+for _ch in nfqttlp nfqttlo nfqttlb nfqttlc nfqttlm nfqttlq; do
     echo "-- $_ch --"
     iptables -t mangle -L "$_ch" -n -v 2>/dev/null
 done
@@ -123,7 +123,7 @@ if [ "$IP6_NFQ_COUNT" -gt 12 ]; then
 fi
 
 echo "[IPv6 Mangle NFQTTL CHAINS]"
-for _ch in nfqttlp nfqttlo nfqttlb nfqttlc nfqttlm; do
+for _ch in nfqttlp nfqttlo nfqttlb nfqttlc nfqttlm nfqttlq; do
     echo "-- $_ch --"
     ip6tables -t mangle -L "$_ch" -n -v 2>/dev/null
 done

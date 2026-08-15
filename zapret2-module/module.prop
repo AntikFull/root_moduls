@@ -1,6 +1,0 @@
-id=zapret2-android
-name=Zapret2 eCubz
-version=v2.9.1
-versionCode=2909
-author=eCubz (https://t.me/eCubz)
-description=Zapret2 eCubz v2.9.1: подобранная стратегия применяется ко всему TLS-трафику (не только YouTube), probe проверяет сайты и Google, режим DIRECT отключает обход на нефильтрованной сети, событийный watcher без лишнего опроса. Группа: https://t.me/module_ecubz

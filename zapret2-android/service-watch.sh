@@ -30,7 +30,19 @@ while :; do
   if [ "$ok" = 1 ] && [ -r /proc/net/netfilter/nfnetlink_queue ]; then
     awk -v q="$QNUM" '$1==q {found=1} END{exit !found}' /proc/net/netfilter/nfnetlink_queue 2>/dev/null || ok=0
   fi
-  if [ "$ok" = 1 ]; then failures=0; continue; fi
+  if [ "$ok" = 1 ]; then
+    failures=0
+    if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+      dev="${WARP_DEV:-awg99}"
+      if ! ip link show dev "$dev" >/dev/null 2>&1; then
+        log "WARP interface $dev is down; reviving tunnel"
+        sh "$MODDIR/warp-tunnel.sh" start >/dev/null 2>&1 || true
+      fi
+      # Автоматический контроль доступности европейского SNI-прокси для ИИ
+      sh "$MODDIR/warp-tunnel.sh" healthcheck-ai >/dev/null 2>&1 || true
+    fi
+    continue
+  fi
   failures=$((failures + 1))
   [ "$failures" -ge 2 ] || continue
   log "nfqws2/NFQUEUE failed twice; handing this watcher process to one service reload"

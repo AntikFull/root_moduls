@@ -281,7 +281,7 @@ install_candidate_rule() {
   [ "$STRATEGY_FILE_MODE" = NFQWS ] || return 1
   args=$STRATEGY_FILE_ARGS
   cd "$BIN_DIR" || return 1
-  ./nfqws2 --user=root --qnum="$AUTO_TEST_QNUM" --bind-fix4 --bind-fix6 \
+  "$BIN_DIR/nfqws2" --user=root --qnum="$AUTO_TEST_QNUM" --bind-fix4 --bind-fix6 \
     --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
     $args >> "$LOG_FILE" 2>&1 &
   TEST_PID=$!
@@ -363,7 +363,8 @@ parse_probe_entry() {
 }
 
 prepare_probe_dns() {
-  local iface="$1" snapshot="$2" dns_servers group entries entry ip ip6 total=0 n4=0 n6=0 probe_file="$MODDIR/probe_hosts.list"
+  local iface="$1" snapshot="$2" dns_servers group entries entry ip ip6 total=0 n4=0 n6=0 probe_file="$MODDIR/lists/probe_hosts.list"
+  [ -f "$probe_file" ] || probe_file="$MODDIR/probe_hosts.list"
   dns_servers=$(snapshot_field "$snapshot" 3)
   : > "$PROBE_SPEC_FILE" 2>/dev/null || return 1
   chmod 0600 "$PROBE_SPEC_FILE" 2>/dev/null || true
@@ -573,7 +574,9 @@ run_probe() {
         ssid=$(cmd wifi status 2>/dev/null | sed -n 's/^Wifi is connected to[[:space:]]*//p' | head -n1)
         [ -n "$ssid" ] || ssid=$(cmd wifi status 2>/dev/null | sed -n 's/^[[:space:]]*WifiInfo:.*SSID: \([^,}]*\).*$/\1/p' | head -n1)
         ssid=$(printf '%s' "$ssid" | tr -d '\r\n"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        if [ -n "$ssid" ] && [ -f "$MODDIR/wifi_direct_ssids.list" ] && grep -Fxq "$ssid" "$MODDIR/wifi_direct_ssids.list" 2>/dev/null; then
+        local wifi_list="$MODDIR/lists/wifi_direct_ssids.list"
+        [ -f "$wifi_list" ] || wifi_list="$MODDIR/wifi_direct_ssids.list"
+        if [ -n "$ssid" ] && [ -f "$wifi_list" ] && grep -Fxq "$ssid" "$wifi_list" 2>/dev/null; then
           save_cache "$key" "$direct_profile" "$iface" DIRECT
           log "AUTO wifi_direct_ssids match: '$ssid' -> forcing DIRECT ($direct_profile)"
           request_profile_reload "$direct_profile" || true
@@ -604,15 +607,17 @@ run_probe() {
     [ "$STRATEGY_FILE_MODE" = DIRECT ] && continue
     log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME position=$number start"
     log_before=$(log_size)
-    if ! start_test_candidate "$profile"; then
+    if ! install_candidate_rule "$profile"; then
       log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=START_FAILED"
       cleanup_test
       continue
     fi
-    sleep "$AUTO_TEST_WARMUP"
+    sleep "${AUTO_TEST_WARMUP:-1}"
     probe_run_all "$iface" "$CANDIDATE_FILE"
-    score_against_baseline "$CANDIDATE_FILE" | read -r fixed broken
-    packets=$(count_test_packets "$AUTO_TEST_QNUM")
+    set -- $(score_against_baseline "$CANDIDATE_FILE")
+    fixed=${1:-0}
+    broken=${2:-0}
+    packets=$(test_queue_packets)
     cleanup_test
     if [ "$packets" -le 0 ] 2>/dev/null; then
       log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=NO_PACKETS (packets=$packets)"

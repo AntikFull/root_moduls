@@ -32,6 +32,7 @@ for proc in /proc/[0-9]*; do
   [ "$(readlink "$proc/cwd" 2>/dev/null)" = "$MODDIR/bin" ] || continue
   kill -TERM "${proc##*/}" 2>/dev/null
 done
+[ -f "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" stop 2>/dev/null
 sh "$MODDIR/vpn-routing.sh" cleanup 2>/dev/null
 
 IPT="iptables -w 5"

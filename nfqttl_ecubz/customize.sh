@@ -1,9 +1,12 @@
 SKIPUNZIP=0
 
+MOD_VER=$(grep '^version=' "$MODPATH/module.prop" 2>/dev/null | cut -d= -f2)
+[ -z "$MOD_VER" ] && MOD_VER="v15.0.2"
+
 ui_print " "
 ui_print " ******************************* "
 ui_print " *  Magisk Module Nfqttl eCubz   * "
-ui_print " *        Version v15.0.1       * "
+ui_print " *        Version $MOD_VER       * "
 ui_print " ******************************* "
 ui_print " "
 
@@ -69,6 +72,27 @@ if ! check_elf "$MODPATH/nfqttl"; then
     ui_print "- Контрольные суммы лежат в BINARY_SHA256.txt внутри архива."
     abort "- Установка отменена."
 fi
+
+# Проверка SHA-256 контрольной суммы бинарника
+if [ -f "$MODPATH/BINARY_SHA256.txt" ]; then
+    _expected_sum=$(grep "libs/$ARCH_DIR/nfqttl" "$MODPATH/BINARY_SHA256.txt" 2>/dev/null | awk '{print $1}' | tr -d ' \r\n')
+    if [ -n "$_expected_sum" ]; then
+        _actual_sum=""
+        if command -v sha256sum >/dev/null 2>&1; then
+            _actual_sum=$(sha256sum "$MODPATH/nfqttl" 2>/dev/null | awk '{print $1}')
+        elif command -v sha256 >/dev/null 2>&1; then
+            _actual_sum=$(sha256 "$MODPATH/nfqttl" 2>/dev/null | awk '{print $1}')
+        fi
+
+        if [ -n "$_actual_sum" ] && [ "$_actual_sum" != "$_expected_sum" ]; then
+            ui_print "- [ОШИБКА] Не совпала контрольная сумма SHA-256 для $ARCH_DIR!"
+            ui_print "  Ожидалось: $_expected_sum"
+            ui_print "  Получено:  $_actual_sum"
+            abort "- Установка отменена из-за повреждения бинарника."
+        fi
+    fi
+fi
+
 ui_print "- Бинарник проверен: ELF $ARCH_DIR, $(wc -c < "$MODPATH/nfqttl") байт"
 
 set_perm $MODPATH/nfqttl 0 0 0755

@@ -1,0 +1,30 @@
+# ==============================================================================
+# warp_apps.list — Список приложений для Cloudflare WARP Anycast
+# ==============================================================================
+# ДЛЯ ЧЕГО ОН НУЖЕН: Приложения из этого списка автоматически туннелируются
+# через быстрый Cloudflare WARP с защитой от блокировок AmneziaWG v3 (AWG).
+#
+# ВНИМАНИЕ: Для нейросетей (ChatGPT, Claude, Grok, Gemini) используйте
+# файл ai_apps.list, чтобы они не палили регион через WARP.
+#
+# КАК ДОБАВИТЬ СВОЁ ПРИЛОЖЕНИЕ:
+# Впишите имя пакета (package name) с новой строки ниже (или в warp_apps.user.list).
+# Изменения подхватываются автоматически без перезагрузки устройства.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Клиенты Telegram (официальные и все популярные форки)
+# ------------------------------------------------------------------------------
+org.telegram.messenger
+com.telegram.messenger
+org.telegram.messenger.web
+org.telegram.messenger.beta
+org.thunderdog.challegram
+org.telegram.plus
+com.exteragram.messenger
+com.ayugram.messenger
+com.ayugram.messenger.beta
+com.radolyn.ayugram
+nekox.messenger
+org.forkclient.messenger
+org.forkclient.messenger.beta

@@ -5,12 +5,15 @@ MODDIR="${0%/*}"
 case "$MODDIR" in /*) ;; *) MODDIR="$(cd "$MODDIR" 2>/dev/null && pwd)" ;; esac
 SERVICE_ACTION="$1"
 CONF_FILE="$MODDIR/zapret2.conf"
-APPS_LIST="$MODDIR/apps.list"
-AUTO_APPS_LIST="$MODDIR/auto_apps.list"
-EXCLUDE_LIST="$MODDIR/exclude.list"
-SMART_YOUTUBE_FILE="$MODDIR/smart_youtube.list"
-AUTO_DOMAINS_FILE="$MODDIR/auto_domains.list" # legacy/user compatibility; SMART uses built-in service profiles
-EXCLUDE_DOMAINS_FILE="$MODDIR/exclude_domains.list"
+LISTS_DIR="$MODDIR/lists"
+[ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
+APPS_LIST="$LISTS_DIR/apps.list"
+APPS_USER_LIST="$LISTS_DIR/apps.user.list"
+AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
+EXCLUDE_LIST="$LISTS_DIR/exclude.list"
+SMART_YOUTUBE_FILE="$LISTS_DIR/smart_youtube.list"
+AUTO_DOMAINS_FILE="$LISTS_DIR/auto_domains.list" # legacy/user compatibility; SMART uses built-in service profiles
+EXCLUDE_DOMAINS_FILE="$LISTS_DIR/exclude_domains.list"
 LOG_DIR="$MODDIR/logs"
 LOG_FILE="$LOG_DIR/zapret2_debug.log"
 NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
@@ -35,6 +38,7 @@ STRATEGY_LIB="$MODDIR/strategy-lib.sh"
 
 mkdir -p "$LOG_DIR" "$RUN_DIR" 2>/dev/null
 chmod 0700 "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
+[ -d "$LISTS_DIR" ] && { chmod 0755 "$LISTS_DIR" 2>/dev/null || true; chmod 0644 "$LISTS_DIR"/* 2>/dev/null || true; }
 if ! : >> "$LOG_FILE" 2>/dev/null; then
   printf '[%s] pid=%s fatal: internal log is not writable: %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$$" "$LOG_FILE" >> "$RUN_DIR/boot-trace.log" 2>/dev/null
   exit 1
@@ -762,15 +766,15 @@ reload_active_profile() {
   stop_pid "$NFQWS_PID_FILE" "nfqws2 для смены AUTO-профиля" nfqws2
   cd "$BIN_DIR" || return 1
   if command -v setsid >/dev/null 2>&1; then
-    setsid ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
+    setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
       --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
       $special $host $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
   elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
-    busybox setsid ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
+    busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
       --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
       $special $host $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
   else
-    nohup ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
+    nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
       --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
       $special $host $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
   fi
@@ -823,6 +827,7 @@ stop_pid "$NFQWS_PID_FILE" "nfqws2" nfqws2
 stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
 stop_pid "$HEALTH_WATCHER_PID_FILE" "health watcher" health-watch
 stop_owned_nfqws
+[ -x "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" stop >/dev/null 2>&1 || true
 write_start_state "STARTING" "Очистка предыдущих netfilter-правил" 30
 boot_trace "firewall cleanup start"
 cleanup_iptables
@@ -922,7 +927,7 @@ mv -f "$RUN_DIR/tether-runtime.conf.tmp.$$" "$RUN_DIR/tether-runtime.conf" 2>/de
 chmod 0600 "$RUN_DIR/tether-runtime.conf" 2>/dev/null || true
 
 write_start_state "STARTING" "Подготовка правил приложений" 50
-MANUAL_APP_UIDS=$(get_app_uids "$APPS_LIST" 1)
+MANUAL_APP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$APPS_LIST" 1)" "$(get_app_uids "$APPS_USER_LIST" 1)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
 AUTO_APP_UIDS=""
 [ "$AUTO_APPS_ENABLED" = "1" ] && AUTO_APP_UIDS=$(get_app_uids "$AUTO_APPS_LIST" 1)
 APP_UIDS=$(printf '%s\n%s\n' "$AUTO_APP_UIDS" "$MANUAL_APP_UIDS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
@@ -1108,26 +1113,26 @@ fi
 log_i "nfqws2 command: qnum=$QNUM debug=$NFQWS_DEBUG smart_engine=$STRATEGY_EFFECTIVE youtube_profile=$([ -n "$SPECIAL_ARGS" ] && echo yes || echo no) exclude-hostlist=$([ -s "$EXCLUDE_DOMAINS_FILE" ] && echo yes || echo no)"
 nfqws_launcher_pid=""
 if command -v setsid >/dev/null 2>&1; then
-  setsid ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+  setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
     --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
     $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
   nfqws_launcher_pid=$!
   boot_trace "nfqws2 launch method=setsid launcher_pid=$nfqws_launcher_pid"
 elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
-  busybox setsid ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+  busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
     --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
     $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
   nfqws_launcher_pid=$!
   boot_trace "nfqws2 launch method=busybox-setsid launcher_pid=$nfqws_launcher_pid"
 elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; then
-  toybox setsid ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+  toybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
     --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
     $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
   nfqws_launcher_pid=$!
   boot_trace "nfqws2 launch method=toybox-setsid launcher_pid=$nfqws_launcher_pid"
 else
   health_warn "setsid недоступен: nfqws2 запущен через nohup compatibility fallback"
-  nohup ./nfqws2 --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+  nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
     --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
     $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
   nfqws_launcher_pid=$!
@@ -1171,7 +1176,7 @@ write_health
 watch_pid=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
 if [ -z "$watch_pid" ] || ! pid_is_owned "$watch_pid" config-watch; then
   rm -f "$WATCHER_PID_FILE" 2>/dev/null
-  WATCH_TARGETS="$CONF_FILE:w $APPS_LIST:w $AUTO_APPS_LIST:w $EXCLUDE_LIST:w $SMART_YOUTUBE_FILE:w $EXCLUDE_DOMAINS_FILE:w"
+  WATCH_TARGETS="$CONF_FILE:w $APPS_LIST:w $AUTO_APPS_LIST:w $LISTS_DIR/warp_apps.list:w $LISTS_DIR/warp_apps.user.list:w $LISTS_DIR/ai_apps.list:w $LISTS_DIR/ai_apps.user.list:w $LISTS_DIR/dns.list:w $LISTS_DIR/dns.user.list:w $EXCLUDE_LIST:w $SMART_YOUTUBE_FILE:w $EXCLUDE_DOMAINS_FILE:w"
   if command -v inotifyd >/dev/null 2>&1; then
     inotifyd "$MODDIR/on_change.sh" $WATCH_TARGETS 2>/dev/null &
     echo $! > "$WATCHER_PID_FILE"
@@ -1211,6 +1216,13 @@ fi
 write_start_state "READY" "Служба работает" 100
 boot_trace "service READY nfqws2_pid=$nfqws_pid health=$HEALTH"
 log_i "Служба запущена: nfqws2 PID=$nfqws_pid health=$HEALTH"
+
+# Запуск AmneziaWG v3 Cloudflare WARP туннеля для списка приложений
+if [ "${ENABLE_WARP:-1}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+  log_i "Запуск точечного туннеля AmneziaWG v3 (WARP)..."
+  sh "$MODDIR/warp-tunnel.sh" start >> "$LOG_FILE" 2>&1 &
+fi
+
 # Активный подбор не блокирует загрузку. Сначала всегда работает кэшированный
 # профиль, затем фоновый probe меняет его только после полного успешного набора.
 if [ "$STRATEGY_EFFECTIVE" = "SMART_ACTIVE" ] && [ "${AUTO_SELECT_ENABLED:-1}" = 1 ] && [ -x "$MODDIR/auto-select.sh" ]; then

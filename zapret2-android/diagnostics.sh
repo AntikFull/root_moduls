@@ -85,11 +85,11 @@ pid_owned() {
   echo "package_source=$(cat "$RUN_DIR/package_source" 2>/dev/null)"
   section "SMART STRATEGY RESOLUTION"
   if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
-  strategy_effective=$(sed -n 's/^STRATEGY_EFFECTIVE=//p' "$RUN_DIR/health.env" 2>/dev/null | head -n1)
-  [ -n "$strategy_effective" ] || strategy_effective=${STRATEGY_MODE:-SMART}
-  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/smart_youtube.list" 2>/dev/null || echo 0)
-  auto_count=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/auto_apps.list" 2>/dev/null || echo 0)
-  manual_count=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/apps.list" 2>/dev/null || echo 0)
+  local lists_dir="$MODDIR/lists"
+  [ -d "$lists_dir" ] || lists_dir="$MODDIR"
+  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/smart_youtube.list" 2>/dev/null || echo 0)
+  auto_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/auto_apps.list" 2>/dev/null || echo 0)
+  manual_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/apps.list" 2>/dev/null || echo 0)
   echo "STRATEGY_MODE=${STRATEGY_MODE:-SMART}"
   echo "STRATEGY_EFFECTIVE=$strategy_effective"
   echo "AUTO_APPS_ENABLED=${AUTO_APPS_ENABLED:-1}"
@@ -165,24 +165,36 @@ pid_owned() {
   awk '{c[$3]++} END{for(u in c) print u,c[u]}' "$RUN_DIR/package_uids.cache" 2>/dev/null | sort -n | awk '{print "user"$1"="$2}'
   echo "cache_lines=$(wc -l < "$RUN_DIR/package_uids.cache" 2>/dev/null | tr -d ' ')"
   echo "-- AUTO catalog apps that are installed/resolved --"
-  while IFS= read -r pkg || [ -n "$pkg" ]; do
-    case "$pkg" in ''|\#*) continue ;; esac
-    uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
-    [ -n "$uids" ] && echo "$pkg -> $uids"
-  done < "$MODDIR/auto_apps.list"
+  local auto_file="$lists_dir/auto_apps.list"
+  [ -f "$auto_file" ] || auto_file="$MODDIR/auto_apps.list"
+  if [ -f "$auto_file" ]; then
+    while IFS= read -r pkg || [ -n "$pkg" ]; do
+      case "$pkg" in ''|\#*) continue ;; esac
+      uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
+      [ -n "$uids" ] && echo "$pkg -> $uids"
+    done < "$auto_file"
+  fi
   echo "-- manual apps.list additions --"
-  while IFS= read -r pkg || [ -n "$pkg" ]; do
-    case "$pkg" in ''|\#*) continue ;; esac
-    printf '%s -> ' "$pkg"
-    awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null
-    echo
-  done < "$MODDIR/apps.list"
+  local apps_file="$lists_dir/apps.list"
+  [ -f "$apps_file" ] || apps_file="$MODDIR/apps.list"
+  if [ -f "$apps_file" ]; then
+    while IFS= read -r pkg || [ -n "$pkg" ]; do
+      case "$pkg" in ''|\#*) continue ;; esac
+      printf '%s -> ' "$pkg"
+      awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null
+      echo
+    done < "$apps_file"
+  fi
   echo "-- excludes that are installed/resolved (highest priority) --"
-  while IFS= read -r pkg || [ -n "$pkg" ]; do
-    case "$pkg" in ''|\#*) continue ;; esac
-    uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
-    [ -n "$uids" ] && echo "$pkg -> $uids"
-  done < "$MODDIR/exclude.list"
+  local excl_file="$lists_dir/exclude.list"
+  [ -f "$excl_file" ] || excl_file="$MODDIR/exclude.list"
+  if [ -f "$excl_file" ]; then
+    while IFS= read -r pkg || [ -n "$pkg" ]; do
+      case "$pkg" in ''|\#*) continue ;; esac
+      uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
+      [ -n "$uids" ] && echo "$pkg -> $uids"
+    done < "$excl_file"
+  fi
   run pm list packages -U --user 0
   run cmd package list packages -U --user 0
 

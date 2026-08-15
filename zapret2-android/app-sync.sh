@@ -4,9 +4,12 @@ umask 077
 MODDIR=${0%/*}
 RUN_DIR="$MODDIR/run"
 CONF_FILE="$MODDIR/zapret2.conf"
-APPS_LIST="$MODDIR/apps.list"
-AUTO_APPS_LIST="$MODDIR/auto_apps.list"
-EXCLUDE_LIST="$MODDIR/exclude.list"
+LISTS_DIR="$MODDIR/lists"
+[ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
+APPS_LIST="$LISTS_DIR/apps.list"
+APPS_USER_LIST="$LISTS_DIR/apps.user.list"
+AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
+EXCLUDE_LIST="$LISTS_DIR/exclude.list"
 RUNTIME_FILE="$RUN_DIR/tether-runtime.conf"
 CACHE="$RUN_DIR/package_uids.cache"
 LOCK="$RUN_DIR/app-sync.lock"
@@ -84,7 +87,7 @@ if [ "$MODE" != GLOBAL ] && [ ! -s "$CACHE" ]; then
   log "UID cache unavailable for MODE=$MODE; refusing unsafe app-only rewrite"
   exit 1
 fi
-MANUAL_APP_UIDS=$(get_uids "$APPS_LIST" 1)
+MANUAL_APP_UIDS=$(printf '%s\n%s\n' "$(get_uids "$APPS_LIST" 1)" "$(get_uids "$APPS_USER_LIST" 1)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
 AUTO_APP_UIDS=""
 [ "$AUTO_APPS_ENABLED" = 1 ] && AUTO_APP_UIDS=$(get_uids "$AUTO_APPS_LIST" 1)
 APP_UIDS=$(printf '%s\n%s\n' "$AUTO_APP_UIDS" "$MANUAL_APP_UIDS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')

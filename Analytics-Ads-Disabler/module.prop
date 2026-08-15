@@ -1,7 +1,0 @@
-id=analytics_ads_disabler
-name=Analytics & Ads Disabler
-version=v4.9.1
-versionCode=901
-author=eCubz (https://t.me/eCubz)
-description=[v4.9.1: Network Killer 17 SDK, init-провайдеры, Xposed bridge] Адаптивное отключение аналитики и рекламы: SAFE/BALANCED/AGGRESSIVE, AXML Full Activity Scanner + Ad Surface Indexer, Network Killer, точный PM rollback и HYBRID IFW+PM. Логи: /data/adb/analytics_ads_disabler/logs • Группа: https://t.me/module_ecubz
-minMagisk=20400

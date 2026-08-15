@@ -2,9 +2,9 @@
 MODDIR=${0%/*}
 
 VERSION=$(grep '^version=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2)
-[ -z "$VERSION" ] && VERSION="v13.0"
+[ -z "$VERSION" ] && VERSION="v15.0.2"
 VERSION_CODE=$(grep '^versionCode=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2)
-[ -z "$VERSION_CODE" ] && VERSION_CODE="1300"
+[ -z "$VERSION_CODE" ] && VERSION_CODE="1502"
 
 echo "$VERSION ($VERSION_CODE)" > "$MODDIR/.applied_version" 2>/dev/null || true
 
@@ -28,7 +28,7 @@ NO6=0
 [ -f "$MODDIR/no6" ] && NO6=1
 
 CELL_IFS="rmnet+ rmnet_data+ r_rmnet_data+ rmnet_mhi+ rmnet_ipa+ ccmni+ pdp+ v4-rmnet+ v4-rmnet_data+ tun+"
-CLIENT_IFS="wlan1 wlan2 ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+"
+CLIENT_IFS="wlan0 wlan1 wlan2 wlan+ ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+"
 
 IPT_W=""
 if iptables -w 2 -t mangle -L -n >/dev/null 2>&1; then
@@ -235,7 +235,7 @@ for _c in $CELL_IFS; do
     IPT6 -t filter -D OUTPUT -o "$_c" -p icmpv6 --icmpv6-type time-exceeded -j DROP
 done
 
-for _i in wlan+ ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+ wlan1 wlan2; do
+for _i in wlan+ wlan0 ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+ wlan1 wlan2; do
     IPT4 -t mangle -D POSTROUTING -o "$_i" -j TTL --ttl-set 64
     IPT4 -t mangle -D POSTROUTING -o "$_i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
     for _p in "udp --dport 123" "tcp --dport 853" "udp --dport 5353" "udp --dport 5355" "udp --dport 1900" "udp --dport 137:138"; do
@@ -418,6 +418,19 @@ for _cmd in IPT4 IPT6; do
     "$_cmd" -t mangle -F nfqttlq
 done
 
+apply_nfq_rules() {
+    for _c in $CELL_IFS; do
+        if [ "$HAS_TTL4" -eq 0 ]; then
+            IPT4 -t mangle -C nfqttlq -o "$_c" -m ttl ! --ttl-eq $TTL_VALUE -j NFQUEUE --queue-num $QUEUE_NUM --queue-bypass 2>/dev/null || \
+            IPT4 -t mangle -A nfqttlq -o "$_c" -m ttl ! --ttl-eq $TTL_VALUE -j NFQUEUE --queue-num $QUEUE_NUM --queue-bypass
+        fi
+        if [ "$HAS_HL6" -eq 0 ]; then
+            IPT6 -t mangle -C nfqttlq -o "$_c" -m hl ! --hl-eq $TTL_VALUE -j NFQUEUE --queue-num $QUEUE_NUM --queue-bypass 2>/dev/null || \
+            IPT6 -t mangle -A nfqttlq -o "$_c" -m hl ! --hl-eq $TTL_VALUE -j NFQUEUE --queue-num $QUEUE_NUM --queue-bypass
+        fi
+    done
+}
+
 for _c in $CELL_IFS; do
     if [ "$HAS_TTL4" -eq 1 ]; then
         IPT4 -t mangle -A nfqttlq -o "$_c" -m ttl ! --ttl-eq $TTL_VALUE -j TTL --ttl-set $TTL_VALUE
@@ -471,12 +484,15 @@ watchdog() {
                 IPT4 -t mangle -C PREROUTING -j nfqttlp || IPT4 -t mangle -I PREROUTING 1 -j nfqttlp
                 IPT6 -t mangle -C PREROUTING -j nfqttlp || IPT6 -t mangle -I PREROUTING 1 -j nfqttlp
             fi
+            if [ "$HAS_TTL4" -eq 0 ] || [ "$HAS_HL6" -eq 0 ]; then
+                apply_nfq_rules
+            fi
             requeue_tail
             wd_log "раздача включена — offload и правила переподтверждены"
         fi
         tether_prev=$_tether
 
-        if [ "$USE_NFQ" -eq 1 ]; then
+        if [ "$HAS_TTL4" -eq 0 ] || [ "$HAS_HL6" -eq 0 ]; then
             if nfqueue_bound; then
                 stable=$((stable + 1))
                 if [ "$stable" -ge 60 ] && [ "$restarts" -gt 0 ]; then
@@ -507,7 +523,12 @@ watchdog() {
                 "$MODDIR/nfqttl" -d >> "$NFQTTL_DAEMON_LOG" 2>&1
                 _w=0
                 while [ "$_w" -lt 5 ]; do
-                    nfqueue_bound && { wd_log "очередь $QUEUE_NUM восстановлена"; break; }
+                    if nfqueue_bound; then
+                        apply_nfq_rules
+                        requeue_tail
+                        wd_log "очередь $QUEUE_NUM восстановлена и правила активированы"
+                        break
+                    fi
                     sleep 1
                     _w=$((_w + 1))
                 done
@@ -518,7 +539,7 @@ watchdog() {
     done
 }
 
-if [ "$USE_NFQ" -eq 1 ]; then
+if [ "$HAS_TTL4" -eq 0 ] || [ "$HAS_HL6" -eq 0 ] || [ "$USE_NFQ" -eq 1 ]; then
     watchdog &
 else
     (
@@ -535,6 +556,7 @@ else
                         IPT4 -t mangle -C PREROUTING -j nfqttlp || IPT4 -t mangle -I PREROUTING 1 -j nfqttlp
                         IPT6 -t mangle -C PREROUTING -j nfqttlp || IPT6 -t mangle -I PREROUTING 1 -j nfqttlp
                     fi
+                    requeue_tail
                     wd_log "раздача включена (native TTL/HL) — правила переподтверждены"
                     tether_prev=0
                 fi
