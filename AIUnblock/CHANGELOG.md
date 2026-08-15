@@ -1,3 +1,19 @@
+# Версия v2.4.3
+
+- Gemini в Google App и отдельное приложение Gemini переведены на выборочную SNI-маршрутизацию вместо полного DNAT всего HTTPS-трафика приложения.
+- В SNI-router оставлены только четыре Gemini-домена, для которых TLS через gateway подтверждён непосредственно на целевом телефоне: `gemini.google.com`, `robinfrontend-pa.googleapis.com`, `proactivebackend-pa.googleapis.com`, `generativelanguage.googleapis.com`.
+- Вспомогательные Google-домены, которые gateway сбрасывает или не обслуживает, снова идут напрямую и больше не блокируют выбор рабочего Gemini gateway.
+- Сквозная проверка router-а проверяет все четыре поддерживаемых Gemini SNI.
+- `aiunblockctl status` теперь явно называет сохранённые адреса кешем и не выдаёт их за подтверждение активного firewall-маршрута.
+
+# Версия v2.4.2
+
+- Исправлено повторное использование старого gateway после провала его проверки: нерабочий адрес больше не возвращается в правила только потому, что остался в кеше.
+- Выбор gateway Gemini теперь проверяет также `www.google.com`, `www.gstatic.com` и `accounts.google.com`, которые реально видны в проблемных логах Google App.
+- Добавлена сквозная TLS-проверка пути `Google App -> SNI-router -> gateway`; статус `OK` выставляется только после успешного TLS handshake через локальный router.
+- При недоступном gateway и `FAIL_MODE=0` Google App больше не отправляется в заведомо нерабочий router, а возвращается к прямому соединению.
+- В отчёте разделены Gemini standalone и Gemini внутри Google App.
+
 # Версия v2.3.1
 
 - **Улучшение маршрутизации доменов Google в SNI Router**:

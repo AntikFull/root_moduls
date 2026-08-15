@@ -1,51 +1,50 @@
+# AIUnblock Technical Details
 
-AIUnblock РРРСРРРСРС **СРРСРР РСРСРРРСР Android-РСРРРРРРРС** СРСРР РСРРСР Smart-DNS/SNI/DNAT РРСССССС. РРССРРРСР DNS Android РР РРРСРССС.
+AIUnblock реализует **умную маршрутизацию Android-приложений** через гибрид Smart-DNS/SNI/DNAT механизмов. Системный DNS Android не меняется.
 
-ZIP СССРРРРРРРРРССС СРСРР РСРРРРРРРР Magisk, KernelSU РРР APatch Manager. Legacy `META-INF/update-binary` СРРРСР: РР РСР Magisk-only Р РР РСРРР РСР СССРРРРРР СРСРР СРРСРРРРРСР manager-РСРРРРРРРС. Recovery-flash РРС ССРР СРРРРССРРСРРР СРРСРР РР РРСРРСРССС.
+ZIP устанавливается через менеджеры Magisk, KernelSU или APatch Manager.
 
-РРРРРССРРСРСР ZIP СРРРСРРС РРСРРРРР СРСР РРС:
+Универсальный ZIP содержит сборки ядра для:
 
 - `arm64-v8a`
 - `armeabi-v7a`
 - `x86_64`
 - `x86`
 
-РССРРРРСРР СРР РСРРСРРС РСРРСР РРСРРРС Р РСРРРРСРС `aiunblock-native self-test` РСС РР РРРРССРРРС СССРРРРРР. РР ССССРРССРР РССРСССС СРРСРР РСРСРРРСР РРРРСРРР.
+Установщик сам определяет нужную архитектуру и запускает `aiunblock-native self-test` прямо во время установки. На устройстве остается только рабочий бинарник.
 
-РРСРРРСР РРРРРРРРС РРСРРРССС Р `src/native/main.go` Р РРСРСРРРРРРРРР СРРРСРРССС `tools/build-native.sh` РРР cgo. РРС `arm64-v8a` РСРРРРРР РРСРРРС в Android PIE С `/system/bin/linker64` Р РРССРРСРРР ELF `DT_HASH`; ССРРР РРРРС ССРСРСРСРРР fallback РРР `PT_INTERP`. РРС `armeabi-v7a`, `x86_64` Р `x86` РСРРРСРССССС ССРСРСРСРРР pure-Go ELF РРР РРРРСРРРССР РС bionic. РССРРРРСРР РСРРРССРС SHA-256 Р РРРССРРРС `self-test` РСРСРРРРРР РРРРСРРРР РССРР РР ССССРРССРР. РСРССР РСРРРРРРСР stripped `aiunblock-router` Р bundled curl РРРССР РР РСРРРСРССССС. РРРР native core СРРРРРСРС SNI-router, TLS-РСРРРСРС gateway, DNS Р DoH.
+Исходный код ядра находится в `src/native/main.go` и компилируется через `tools/build-native.sh` без cgo. Для `arm64-v8a` основной вариант — Android PIE с `/system/bin/linker64` и поддержкой ELF `DT_HASH`; также есть статический fallback без `PT_INTERP`. Для `armeabi-v7a`, `x86_64` и `x86` используются статические pure-Go ELF без зависимости от bionic. Установщик проверяет SHA-256 и запускает `self-test` выбранного бинарника прямо на устройстве. Одно native core содержит SNI-router, TLS-проверку gateway, DNS и DoH.
 
-РЁСРСРСР СРРСРР РРСРРРССС Р `apps.list`. РРРСРРРРСРРССРРР РРРРРРРРРС в Р `/data/adb/modules/AIUnblock/apps.user.list`. РСРРРРРР firewall РСРРРРСРССС СРРСРР Р РРРРРРРСР UID ССРС РРРРСРР, РРРССРС secondary/work profile.
+Штатный список находится в `apps.list`. Пользовательские дополнения — в `/data/adb/modules/AIUnblock/apps.user.list`. Правила firewall применяются только к выделенным UID этих пакетов, включая secondary/work profile.
 
-`FAIL_MODE=0` в СРРСРР РСР РРРСРР РРСРРР СРРСРСРСС РССРРР РРРРРССРРРР. Р РРСРРРСРРР СРССРСРРР РСРРРРР AIUnblock РССРСССС РРСРРРСРР.
+`FAIL_MODE=0` — в случае сбоя шлюза трафик идет напрямую. В худшем сценарии сервисы AIUnblock остаются недоступны.
 
-`FAIL_MODE=1` в РСР РРРСРР РРСРРР РРРРРСРРРСС РССРРР РССРР РСРСРРРСС РСРРРРРРРР РР РРСССРРРРРРРРС.
+`FAIL_MODE=1` — при сбое шлюза блокировать трафик, чтобы избежать утечек подключения на заблокированные IP.
 
-РРС Google App РРРРСР fail-block РР РСРРРРСРССС, ССРРС СРРР Gemini-SNI РР РРРРРСРРРР РРСС Google App.
+Для Google App полный fail-block не применяется, чтобы сбой Gemini-SNI не блокировал весь Google App.
 
-Hosts РР СРРСРССС СРСССС СРСРРРРР СРСР Р РР СРРРСРРРС РСРРССРР. РСР РРРСРРРСР С РССРРР hosts-РРРСРРР РСРРССРРССС СРРСРР optional hosts AIUnblock; per-app routing РСРРРРРРРС СРРРСРСС.
+Hosts не является частью базовой схемы и по умолчанию отключен. При конфликте с другим hosts-модулем отменяется только optional hosts AIUnblock; per-app routing продолжает работать.
 
-РРСРРР `system/etc/hosts` РРСРРРССС РР mount stage РР РСРРР РРРРРРРСР root. РРРРСРСРРРРР РРР РСРСРРРР РРР РРС в РСРРРССРССС РРСРР РРРССРРР РР РРСРРСС `# AIUnblock-hosts` Р `/system/etc/hosts`. РСРССС РРРРР Р `aiunblockctl status` Р Р РССССР:
+Файл `system/etc/hosts` создается на mount stage во всех сценариях root. Проверка работы без перезагрузки выполняется через наличие маркера `# AIUnblock-hosts` в `/system/etc/hosts`. Статус виден в `aiunblockctl status`:
 
-| РСРССС | РРРСРРРР |
+| Статус | Значение |
 | --- | --- |
-| `disabled` | РРР hosts-ССРРСРР РСРРССРРС Р `install.conf` |
-| `conflict:<id>` | РРРРРР РССРРР РРСРРРСР hosts-РРРСРС |
-| `prepared` / `prepared:ksu-overlayfs` | РРСРРР РРСРРР, РРСР mount stage |
-| `active` | overlay СРРРСРР РСРРРРРРСС |
-| `not-mounted` | РСРСРРРР/РРРРРРРС root РР СРРРСРСРРРР overlay; per-app РРСРР СРРРСРРС |
+| `disabled` | Опция hosts-маршрутизации отключена в `install.conf` |
+| `conflict:<id>` | Найден сторонний активный hosts-модуль |
+| `prepared` / `prepared:ksu-overlayfs` | Дерево готово, ждет mount stage |
+| `active` | Overlay успешно применился |
+| `not-mounted` | Прошивка/root не смонтировали overlay; per-app все равно работает |
 
-РСРРСРРРРС СРСССРСРР РР РРРРРРРСРРР СРСРР РСРРСРРРРРР Р РСРСРССРР:
+Энергопотребление оптимизировано по событиям и состояниям:
 
-- РСРРСРРРРРР СРР Р 120С Р ССРСРРР СРССРСРРР Р СРР Р 15С СРРСРР РРРР СРССРСРРР РР `ok`/`noapps`;
-- ССРСРРР РСРРСРРРРРР в ССР ~2 РСРСРССР (`ip route get` Р `stat` РР `packages.list`), РСРРРСРР СРССРСР РРСС ССРРССРРРР СРРРР;
-- РРРРРС РРСРРСРРРСРР (DNS-auth, DoH, TLS-РСРРС gateway) в СРР Р 30 РРРСС; РСР РРРСРР РРРСРСС С РСРРСРР 30 в 900С;
-- UID РСРРРРРРРР СРСРСССС РР `/data/system/packages.list`, `pm` РСРСРРРССС СРРСРР РРР РРРРСРРР РССС;
-- РСРРС РРССССС РР `/proc/uptime`, РРССРРС СРСРРСРРРР РР РРРРРССС РСР РРССРРСРР СРСРР.
+- сторожевой сон 120с в штатном состоянии и сон 15с только когда состояние не `ok`/`noapps`;
+- сетевые события — за ~2 миллисекунды (`ip route get` и `stat` по `packages.list`), никакой нагрузки на процессор;
+- таймер самодиагностики (DNS-auth, DoH, TLS-опрос gateway) — раз в 30 минут; при сбое повтор с паузой 30–900с;
+- UID приложений считываются из `/data/system/packages.list`, `pm` вызывается только при нехватке данных;
+- время берется из `/proc/uptime`, системный таймер не сбивается при настройке времени.
 
-РРССРРРС РРРСРРРРСРРС СРСРРРРР РР РСРРР. РРРР РРСРРРРСССССС Р:
+Логирование:
 
 `/sdcard/eCubz/AIUnblock/logs`
 
-РРРРРР Action СРРРСРРС СРССРСРРРСС РРРРРРССРРС ССРР РР. `aiunblockctl status` СРРРР РРРРРСРРРС ABI Р СРРСРССРС native self-test.
-
-РРС `gemini_sni` РРСС TCP/443 РСРСРРРРРР UID РРРРРРРС Р РРРРРСРСР SNI-router. Exact-SNI РР `sni_routes.conf` РСРСРРРССССС СРСРР РСРСРРРСР gateway, РССРРСРСР СРРРРРРРРС РРРРСРСРСССС РР РССРРРСР IPv4 destination, РРРССРРРСР СРСРР `SO_ORIGINAL_DST`. РРСРРРС С rc5 РРРССРРРР original destination РСРРРСРСРС СРССРРРСР Go `getsockopt` wrapper РРС РРРРРР ABI, РРР hard-coded syscall numbers.
+Кнопка Action создает расширенный отчет прямо сейчас. `aiunblockctl status` также отображает ABI и результат native self-test.

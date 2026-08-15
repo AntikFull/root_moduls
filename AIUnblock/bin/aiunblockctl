@@ -76,7 +76,8 @@ status() {
   echo "UID Claude: ${CLAUDE_UIDS:-none}"
   echo "UID Grok: ${GROK_UIDS:-none}"
   [ -n "$alluids" ] || echo "UID warning: ни одно целевое приложение сейчас не найдено"
-  echo "Gateways: Gemini=$(cat "$MODDIR/gateways/gemini.current" 2>/dev/null || echo -) Notebook=$(cat "$MODDIR/gateways/notebook.current" 2>/dev/null || echo -) ChatGPT=$(cat "$MODDIR/gateways/chatgpt.current" 2>/dev/null || echo -) Claude=$(cat "$MODDIR/gateways/claude.current" 2>/dev/null || echo -) Grok=$(cat "$MODDIR/gateways/grok.current" 2>/dev/null || echo -)"
+  echo "Gateway cache: Gemini=$(cat "$MODDIR/gateways/gemini.current" 2>/dev/null || echo -) Notebook=$(cat "$MODDIR/gateways/notebook.current" 2>/dev/null || echo -) ChatGPT=$(cat "$MODDIR/gateways/chatgpt.current" 2>/dev/null || echo -) Claude=$(cat "$MODDIR/gateways/claude.current" 2>/dev/null || echo -) Grok=$(cat "$MODDIR/gateways/grok.current" 2>/dev/null || echo -)"
+  echo "Примечание: cache не подтверждает активное правило; фактическое состояние указано в AIUnblock_report.txt."
   echo "Logs: $PUBLIC_LOG_DIR"
 }
 

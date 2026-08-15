@@ -1,11 +1,12 @@
+# AIUnblock Native Core
 
-РСРССССР РРСРРРСР РРРРРРРРС AIUnblock. РРРР Р СРС РР РССРРРРР СРРРСРРССС РРС:
+Единое нативное ядро AIUnblock. Собирается для платформ:
 
-- arm64-v8a (`android/arm64` primary + `linux/arm64` static fallback)
-- armeabi-v7a (`linux/arm`, GOARM=7)
-- x86_64 (`linux/amd64`)
-- x86 (`linux/386`)
+- `arm64-v8a` (`android/arm64` primary + `linux/arm64` static fallback)
+- `armeabi-v7a` (`linux/arm`, GOARM=7)
+- `x86_64` (`linux/amd64`)
+- `x86` (`linux/386`)
 
-РРРСРР РРРРСРРРР РРР cgo. РРС ARM64 СРРРРСССС РСРРРРРР Android PIE С `/system/bin/linker64` Р РРССРРСРРР `DT_HASH`, Р СРРРР ССРСРСРСРРР fallback РРР `PT_INTERP`. РРС ARMv7/x86_64/x86 РСРРРСРССССС ССРСРСРСРРР pure-Go ELF. РССРРРРСРР РРСРРСРРСРР РСРРРРСРС on-device `self-test`, РРССРРС РРСРРРРССРРСР ELF РР РРРРС РССС РСРРСС РРРСР. РСРССР stripped Android ELF С РСРРРРР `DT_HASH/DT_GNU_HASH` РРРССР РР РСРРРСРСРССС.
+Сборка выполняется без cgo. Для ARM64 создается Android PIE с `/system/bin/linker64` и поддержкой `DT_HASH`, а также статический fallback без `PT_INTERP`. Для ARMv7/x86_64/x86 используются статические pure-Go ELF. Установщик выполняет on-device `self-test` перед запуском.
 
-РРРРРРС: `router`, `tls-probe`, `dns`, `doh`, `self-test`, `version`.
+Команды: `router`, `tls-probe`, `dns`, `doh`, `self-test`, `version`.

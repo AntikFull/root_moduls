@@ -1,7 +1,7 @@
 id=AIUnblock
 name=AI Unblock RU
-version=v2.4.1
-versionCode=241
+version=v2.4.8
+versionCode=248
 author=eCubz (https://t.me/eCubz)
 description=Открывает ChatGPT, Gemini, Claude, Grok и NotebookLM. Работает автоматически для поддерживаемых приложений. Логи: /sdcard/eCubz/AIUnblock/logs • Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/AIUnblock/update.json

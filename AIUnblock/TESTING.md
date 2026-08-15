@@ -1,24 +1,20 @@
+# AIUnblock Testing Protocol
 
-РРСРР СССРРРРРР Р РРСРРРРССРРР РСРРРСССР, ССР РРСРРРРСС РРРРР `/sdcard/eCubz/AIUnblock/logs` Р СРРР `AIUnblock_report.txt`. РРСРРРРР РРССРРРС РРРСРРРРСРРС РР ССРРСРССС.
+После установки и перезагрузки устройства убедитесь, что создана папка `/sdcard/eCubz/AIUnblock/logs` и файл `AIUnblock_report.txt`. Проверка работы проводится по пунктам.
 
-1a. **РСР ABI** в РСРРРСРР РСРРРСРСС arm64-v8a, armeabi-v7a, x86_64 Р x86: СССРРРРСРР РРРРРР РСРСРСС РСРРРРСРСР aiunblock-native Р РСРРСР self-test.
-1. **РСР ABI** в РРРРРСР РРРР runtime-СРСС РРС `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`: СССРРРРСРР РРРРРР РСРСРСС РСРРРРСРСР `aiunblock-native`, self-test РРРРРР РСРРСР.
-3. **Magisk** в Android 14, 15, 16: СССРРРРРР, reboot, ChatGPT/Gemini/Claude/Grok/NotebookLM, Wi-Fi в mobile switch.
-4. **KernelSU / KernelSU Next** в core-only РРР metamodule РРРРРР СРРРСРСС; hosts РРРРРР СРРРСРСС `no-metamodule`. Р mount/metamodule РСРРРСРСС РРРРСР hosts-СРРРР.
-5. **APatch** в СССРРРРРР, reboot, UID rules, router restart, uninstall.
-6. **РССРРР hosts-РРРСРС** в bindhosts/Systemless Hosts/AdAway systemless mode: AIUnblock core РССРСССС РРРСССР, `.hosts_status` РРРРРСРРРС РРРСРРРС, ССРРР `/system/etc/hosts` РР РСРРРСРССРССС РСР uninstall.
-7. **Multi-user / Work Profile** в РРРР target-РСРРРРРРРР Р owner Р/РРР work profile; `status` РРРРРР РРРРРРСС РРР Android UID, Р РСРРРРР в СРРСРР ССР UID.
-8. **РРС target-РСРРРРРРРР** в РРРСРС РР РРРРРР РРРССС РР РРССРСРРРРР HTTPS/QUIC. РРСРР СССРРРРРР ChatGPT РРР reboot UID РРРРРР РРСРРСССС РРРСРРСР РРСРР СРРРСССРР РРСРРРРСРСРРР РРСРРСРРРСРР/СССРРРР `refresh`.
-9. **РРРСРС СРСС** в offline boot, captive portal, РССРРРРРРРРР IPv4, РРСРР РРСССРРРРРРРРР СРСР. Supervisor РР РРРРРР РРРРСРСС.
-10. **Gateway failure** в РСРРРСРСС `fail 0` Р `fail 1`.
-11. **Router crash** в `kill` PID router; watchdog РРРРРР РРРРССС РРР СРРРР РРР РРСРРРРССРРР СРРРСРРР.
-12. **Logs** в РРРРССР router/debug log РР РРРРСР: СРРРРРРРРС РР РРРРРС РРССРРСССС СРРСРР РР-РР СРСРСРР.
-13. **Locale** в default РР РРРСРС СРСР РСРРРРРРРС. `locale on` РСРРРРСРС English СРРСРР Р `locale_apps.list`; `locale off` РРРРСРСРРС СРССРРСРРРР РРРСРРРР, РСРР РРРСРРРРСРРС РР РРРРРРР РРР СРР.
-14. **ANR/РРРРРСРРРР** в РРРРСС Action С РРРСРС Р РСРРРРРСС СРРРСРРРРР `/sdcard/eCubz/AIUnblock/logs`; РСР РРРСРССССРРСС РСРРРР РСРРРСРСС РРСРРРРРР `AIUnblock_auto_diag_*.tar.gz`.
-14. **Uninstall** в РРСРР СРРРРРРС РССССССРССС `AIUNBLOCK_*` hooks/chains; ССРРР firewall/hosts mounts РССРСССС РРССРРСССРР.
+1. **Архитектура CPU:** при установке проверяются `arm64-v8a`, `armeabi-v7a`, `x86_64` и `x86`; установщик выбирает правильный `aiunblock-native`, `self-test` должен проходить успешно.
+2. **Magisk:** Android 14, 15, 16 — установка, reboot, проверка доступа к ChatGPT/Gemini/Claude/Grok/NotebookLM, переключение Wi-Fi/mobile.
+3. **KernelSU / KernelSU Next:** core-only или metamodule должны работать; hosts должен учитывать `no-metamodule`.
+4. **APatch:** установка, reboot, UID-правила, перезапуск роутера, uninstall.
+5. **Сторонние hosts-модули:** в bindhosts/Systemless Hosts/AdAway: AIUnblock core остается рабочим, `.hosts_status` показывает корректный статус, чужой `/system/etc/hosts` не ломается при uninstall.
+6. **Multi-user / Work Profile:** если целевые приложения установлены у другого пользователя, `status` должен подхватывать корректный UID.
+7. **Работа сети:** проверка при старте без сети (offline boot), captive portal, переключение на мобильную сеть. Supervisor не должен падать или вызывать утечек.
+8. **Шлюзы:** проверка режимов `fail 0` и `fail 1`.
+9. **Watchdog роутера:** при принудительном завершении процесса роутер должен автоматически перезапускаться супервизором.
+10. **Логирование:** ротация логов без бесконечного роста файлов.
+11. **Удаление (Uninstall):** при удалении модуля должны корректно очищаться все созданные правила firewall (`AIUNBLOCK_*`).
 
-- РСС РРРРС `/sdcard/eCubz/AIUnblock/logs` (РРРССРС `AIUnblock_report.txt` Р РРРРРРССРСРСРРР РССРР, РСРР РР СРРРРР).
-- РРРРРРРР root manager Р РРР РРССРС.
-- Android/API Р РРРРРС ССССРРССРР.
-- РРРРР РСРРРРРРРР Р РРРРС СРСС (mobile/Wi-Fi) РСРРРСРРРРРРСС.
-- РРСРСРРР РРРСРРРР: ССР РРРРРРРСС Р ССР РСРРРРСРР.
+Отчет об ошибке должен включать:
+- Логи из папки `/sdcard/eCubz/AIUnblock/logs` (`AIUnblock_report.txt` и архивы диагностики при наличии);
+- Название и версию Root-менеджера;
+- Версию Android / API и модель устройства.

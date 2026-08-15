@@ -80,6 +80,8 @@ BACKOFF_INTERVAL=$FAST_RETRY_MIN
 
 CURRENT_GEMINI=""
 CURRENT_NOTEBOOK=""
+GEMINI_ROUTER_READY=0
+NOTEBOOK_ROUTER_READY=0
 CURRENT_CHATGPT=""
 CURRENT_CLAUDE=""
 CURRENT_GROK=""
@@ -247,8 +249,9 @@ write_public_report() {
     echo "Hosts: $hosts_status"
     echo ""
     echo "Сервисы:"
-    [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ] && { [ -n "$CURRENT_GEMINI" ] && echo "- Gemini: OK" || echo "- Gemini: нет рабочего маршрута"; }
-    [ -n "$NOTEBOOK_UIDS" ] && { [ -n "$CURRENT_NOTEBOOK" ] && echo "- NotebookLM: OK" || echo "- NotebookLM: нет рабочего маршрута"; }
+    [ -n "$GEMINI_UIDS" ] && { [ -n "$CURRENT_GEMINI" ] && [ "$GEMINI_ROUTER_READY" -eq 1 ] && echo "- Gemini (приложение): OK, TLS через router проверен" || echo "- Gemini (приложение): router/TLS не прошёл проверку"; }
+    [ -n "$GEMINI_SNI_UIDS" ] && { [ -n "$CURRENT_GEMINI" ] && [ "$GEMINI_ROUTER_READY" -eq 1 ] && echo "- Gemini в Google: OK, TLS через router проверен" || echo "- Gemini в Google: router/TLS не прошёл проверку"; }
+    [ -n "$NOTEBOOK_UIDS" ] && { [ -n "$CURRENT_NOTEBOOK" ] && [ "$NOTEBOOK_ROUTER_READY" -eq 1 ] && echo "- NotebookLM: OK, TLS через router проверен" || echo "- NotebookLM: router/TLS не прошёл проверку"; }
     [ -n "$CHATGPT_UIDS" ] && { [ -n "$CURRENT_CHATGPT" ] && echo "- ChatGPT: OK" || echo "- ChatGPT: нет рабочего маршрута"; }
     [ -n "$CLAUDE_UIDS" ] && { [ -n "$CURRENT_CLAUDE" ] && echo "- Claude: OK" || echo "- Claude: нет рабочего маршрута"; }
     [ -n "$GROK_UIDS" ] && { [ -n "$CURRENT_GROK" ] && echo "- Grok: OK" || echo "- Grok: нет рабочего маршрута"; }
@@ -397,7 +400,7 @@ load_smartdns_resolvers() {
   compose_auth_dns
   if [ -z "$DOH_RESOLVERS" ]; then
     DOH_RESOLVERS="https://dns.malw.link/dns-query https://xbox-dns.ru/dns-query"
-    log "Smart DNS: включн встроенный DoH fallback"
+    log "Smart DNS: включён встроенный DoH fallback"
   fi
   log "Smart DNS: DoH=$(echo $DOH_RESOLVERS | wc -w), DNS-auth=$(echo $AUTH_DNS | wc -w)"
 }
@@ -696,16 +699,18 @@ apply_uid_rules() {
 
   {
     echo "*nat"
+    echo ":AIUNBLOCK_OUT - [0:0]"
+    echo ":AIUNBLOCK_SNI - [0:0]"
     echo "-F AIUNBLOCK_SNI"
     echo "-A AIUNBLOCK_SNI -p tcp --dport 443 -j REDIRECT --to-ports $ROUTER_PORT"
     echo "-A AIUNBLOCK_SNI -j RETURN"
     echo "-F AIUNBLOCK_OUT"
-    if [ "$router_ok" -eq 1 ]; then
+    if [ "$router_ok" -eq 1 ] && [ -n "$CURRENT_GEMINI" ] && [ "$GEMINI_ROUTER_READY" -eq 1 ]; then
       for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
-      for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
+      for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
     fi
-    if [ -n "$CURRENT_GEMINI" ]; then
-      for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j GEMINI_DNAT"; done
+    if [ "$router_ok" -eq 1 ] && [ -n "$CURRENT_NOTEBOOK" ] && [ "$NOTEBOOK_ROUTER_READY" -eq 1 ]; then
+      for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
     fi
     if [ -n "$CURRENT_CHATGPT" ]; then for uid in $CHATGPT_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j CHATGPT_DNAT"; done; fi
     if [ -n "$CURRENT_CLAUDE" ]; then for uid in $CLAUDE_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j CLAUDE_DNAT"; done; fi
@@ -716,14 +721,17 @@ apply_uid_rules() {
 
   {
     echo "*filter"
+    echo ":AIUNBLOCK_QUIC - [0:0]"
+    echo ":AIUNBLOCK_FAIL - [0:0]"
     echo "-F AIUNBLOCK_QUIC"
-    if [ -n "$CURRENT_GEMINI" ]; then
-      if [ "$router_ok" -eq 1 ]; then for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done; fi
+    if [ -n "$CURRENT_GEMINI" ] && [ "$router_ok" -eq 1 ] && [ "$GEMINI_ROUTER_READY" -eq 1 ]; then
+      for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done
       for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done
     elif [ "$FAIL_MODE" = 1 ]; then
+      for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done
       for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done
     fi
-    if [ -n "$CURRENT_NOTEBOOK" ] && [ "$router_ok" -eq 1 ]; then
+    if [ -n "$CURRENT_NOTEBOOK" ] && [ "$router_ok" -eq 1 ] && [ "$NOTEBOOK_ROUTER_READY" -eq 1 ]; then
       for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done
     elif [ "$FAIL_MODE" = 1 ]; then
       for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_QUIC -m owner --uid-owner $uid -j $REJECT4_TARGET"; done
@@ -735,8 +743,10 @@ apply_uid_rules() {
 
     echo "-F AIUNBLOCK_FAIL"
     if [ "$FAIL_MODE" = 1 ]; then
-      [ -n "$CURRENT_GEMINI" ] || for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done
-      if [ -z "$CURRENT_NOTEBOOK" ] || [ "$router_ok" -eq 0 ]; then for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done; fi
+      if [ -z "$CURRENT_GEMINI" ] || [ "$router_ok" -eq 0 ] || [ "$GEMINI_ROUTER_READY" -eq 0 ]; then
+        for uid in $GEMINI_SNI_UIDS $GEMINI_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done
+      fi
+      if [ -z "$CURRENT_NOTEBOOK" ] || [ "$router_ok" -eq 0 ] || [ "$NOTEBOOK_ROUTER_READY" -eq 0 ]; then for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done; fi
       [ -n "$CURRENT_CHATGPT" ] || for uid in $CHATGPT_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done
       [ -n "$CURRENT_CLAUDE" ] || for uid in $CLAUDE_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done
       [ -n "$CURRENT_GROK" ] || for uid in $GROK_UIDS; do echo "-A AIUNBLOCK_FAIL -m owner --uid-owner $uid -j $REJECT4_TCP_TARGET"; done
@@ -748,14 +758,16 @@ apply_uid_rules() {
   if [ "$IPV6_SUPPORTED" -eq 1 ]; then
     {
       echo "*filter"
+      echo ":AIUNBLOCK_V6 - [0:0]"
       echo "-F AIUNBLOCK_V6"
-      if [ -n "$CURRENT_GEMINI" ]; then
-        if [ "$router_ok" -eq 1 ]; then for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done; fi
+      if [ -n "$CURRENT_GEMINI" ] && [ "$router_ok" -eq 1 ] && [ "$GEMINI_ROUTER_READY" -eq 1 ]; then
+        for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done
         for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done
       elif [ "$FAIL_MODE" = 1 ]; then
+        for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done
         for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done
       fi
-      if [ -n "$CURRENT_NOTEBOOK" ] && [ "$router_ok" -eq 1 ]; then
+      if [ -n "$CURRENT_NOTEBOOK" ] && [ "$router_ok" -eq 1 ] && [ "$NOTEBOOK_ROUTER_READY" -eq 1 ]; then
         for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done
       elif [ "$FAIL_MODE" = 1 ]; then
         for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_V6 -m owner --uid-owner $uid -j $REJECT6_TARGET"; done
@@ -946,12 +958,23 @@ cleanup_legacy_owner_rules() {
 }
 
 apply_failure_rules() {
-  local sg="$CURRENT_GEMINI" sn="$CURRENT_NOTEBOOK" sc="$CURRENT_CHATGPT" scl="$CURRENT_CLAUDE" sgr="$CURRENT_GROK"
+  local sg="$CURRENT_GEMINI" sn="$CURRENT_NOTEBOOK" sc="$CURRENT_CHATGPT" scl="$CURRENT_CLAUDE" sgr="$CURRENT_GROK" sgrr="$GEMINI_ROUTER_READY" snrr="$NOTEBOOK_ROUTER_READY"
   CURRENT_GEMINI=""; CURRENT_NOTEBOOK=""; CURRENT_CHATGPT=""; CURRENT_CLAUDE=""; CURRENT_GROK=""
+  GEMINI_ROUTER_READY=0; NOTEBOOK_ROUTER_READY=0
   apply_uid_rules && install_hooks
   local rc=$?
   CURRENT_GEMINI="$sg"; CURRENT_NOTEBOOK="$sn"; CURRENT_CHATGPT="$sc"; CURRENT_CLAUDE="$scl"; CURRENT_GROK="$sgr"
+  GEMINI_ROUTER_READY="$sgrr"; NOTEBOOK_ROUTER_READY="$snrr"
   return "$rc"
+}
+
+router_tls_probe() {
+  local domain
+  router_running || return 1
+  for domain in $1; do
+    run_timeout 7 "$CORE_BIN" tls-probe -ip 127.0.0.1 -port "$ROUTER_PORT" -domain "$domain" -timeout 5 >/dev/null 2>&1 || return 1
+  done
+  return 0
 }
 
 selector_start() {
@@ -966,11 +989,12 @@ selector_start() {
 }
 
 refresh_proxy_rules() {
-  local dir="$GATEWAY_DIR/.select.$$" old selected
+  local dir="$GATEWAY_DIR/.select.$$" old selected gemini_probe_domains
   SELECTOR_PIDS=""
   rm -rf "$dir"; mkdir -p "$dir" || return 1
 
-  [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ] && selector_start gemini "$CURRENT_GEMINI" "gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com" "$PROXIES" gemini.google.com "$dir"
+  gemini_probe_domains="gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com"
+  [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ] && selector_start gemini "$CURRENT_GEMINI" "$gemini_probe_domains" "$PROXIES" gemini.google.com "$dir"
   [ -n "$NOTEBOOK_UIDS" ] && selector_start notebook "$CURRENT_NOTEBOOK" "notebooklm-pa.googleapis.com" "$PROXIES" notebooklm-pa.googleapis.com "$dir"
   [ -n "$CHATGPT_UIDS" ] && selector_start chatgpt "$CURRENT_CHATGPT" "chatgpt.com" "$AI_PROXIES" chatgpt.com "$dir"
   [ -n "$CLAUDE_UIDS" ] && selector_start claude "$CURRENT_CLAUDE" "claude.ai" "$AI_PROXIES" claude.ai "$dir"
@@ -980,27 +1004,35 @@ refresh_proxy_rules() {
 
   if [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ]; then
     old="$CURRENT_GEMINI"; selected=$(cat "$dir/gemini" 2>/dev/null)
-    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
-    if is_ipv4 "$selected" && apply_service_rules GEMINI_DNAT "$selected" && publish_gateway gemini "$selected"; then CURRENT_GEMINI="$selected"; [ "$old" = "$selected" ] || log "Gateway Gemini: $selected"; else CURRENT_GEMINI=""; RETRY_SOON=1; log "Gateway Gemini не найден"; fi
+    if is_ipv4 "$selected" && publish_gateway gemini "$selected"; then
+      CURRENT_GEMINI="$selected"; [ "$old" = "$selected" ] || log "Gateway Gemini: $selected"
+      GEMINI_ROUTER_READY=1
+      if ! router_tls_probe "gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com generativelanguage.googleapis.com"; then
+        GEMINI_ROUTER_READY=0; RETRY_SOON=1; log "Gateway Gemini найден, но сквозная TLS-проверка SNI-router не пройдена"
+      fi
+    else
+      CURRENT_GEMINI=""; GEMINI_ROUTER_READY=0; RETRY_SOON=1; log "Gateway Gemini не найден"
+    fi
   fi
   if [ -n "$NOTEBOOK_UIDS" ]; then
     old="$CURRENT_NOTEBOOK"; selected=$(cat "$dir/notebook" 2>/dev/null)
-    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
-    if is_ipv4 "$selected" && publish_gateway notebook "$selected"; then CURRENT_NOTEBOOK="$selected"; [ "$old" = "$selected" ] || log "Gateway NotebookLM: $selected"; else CURRENT_NOTEBOOK=""; RETRY_SOON=1; log "Gateway NotebookLM не найден"; fi
+    if is_ipv4 "$selected" && publish_gateway notebook "$selected"; then
+      CURRENT_NOTEBOOK="$selected"; [ "$old" = "$selected" ] || log "Gateway NotebookLM: $selected"
+      if router_tls_probe "notebooklm-pa.googleapis.com"; then NOTEBOOK_ROUTER_READY=1; else NOTEBOOK_ROUTER_READY=0; RETRY_SOON=1; log "Gateway NotebookLM найден, но сквозная TLS-проверка SNI-router не пройдена"; fi
+    else
+      CURRENT_NOTEBOOK=""; NOTEBOOK_ROUTER_READY=0; RETRY_SOON=1; log "Gateway NotebookLM не найден"
+    fi
   fi
   if [ -n "$CHATGPT_UIDS" ]; then
     old="$CURRENT_CHATGPT"; selected=$(cat "$dir/chatgpt" 2>/dev/null)
-    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules CHATGPT_DNAT "$selected" && publish_gateway chatgpt "$selected"; then CURRENT_CHATGPT="$selected"; [ "$old" = "$selected" ] || log "Gateway ChatGPT: $selected"; else CURRENT_CHATGPT=""; RETRY_SOON=1; log "Gateway ChatGPT не найден"; fi
   fi
   if [ -n "$CLAUDE_UIDS" ]; then
     old="$CURRENT_CLAUDE"; selected=$(cat "$dir/claude" 2>/dev/null)
-    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules CLAUDE_DNAT "$selected" && publish_gateway claude "$selected"; then CURRENT_CLAUDE="$selected"; [ "$old" = "$selected" ] || log "Gateway Claude: $selected"; else CURRENT_CLAUDE=""; RETRY_SOON=1; log "Gateway Claude не найден"; fi
   fi
   if [ -n "$GROK_UIDS" ]; then
     old="$CURRENT_GROK"; selected=$(cat "$dir/grok" 2>/dev/null)
-    [ -z "$selected" ] && is_ipv4 "$old" && selected="$old"
     if is_ipv4 "$selected" && apply_service_rules GROK_DNAT "$selected" && publish_gateway grok "$selected"; then CURRENT_GROK="$selected"; [ "$old" = "$selected" ] || log "Gateway Grok: $selected"; else CURRENT_GROK=""; RETRY_SOON=1; log "Gateway Grok не найден"; fi
   fi
   rm -rf "$dir"
@@ -1031,7 +1063,7 @@ refresh_all() {
 
   if ! ipv4_network_ready; then
     WAITING_FOR_NETWORK=1; RETRY_SOON=1
-    if [ "$NETWORK_WAIT_LOGGED" -eq 0 ]; then log "IPv4-сеть недоступна; применн fail-mode=$FAIL_MODE"; NETWORK_WAIT_LOGGED=1; fi
+    if [ "$NETWORK_WAIT_LOGGED" -eq 0 ]; then log "IPv4-сеть недоступна; применён fail-mode=$FAIL_MODE"; NETWORK_WAIT_LOGGED=1; fi
     apply_failure_rules || log "ОШИБКА: не удалось применить failure rules"
     LAST_HEALTH="offline"
     return 0
@@ -1042,7 +1074,7 @@ refresh_all() {
 
   if ! authorize_ips_with_retry; then
     RETRY_SOON=1
-    log "DNS-auth не подтверждн; применн fail-mode=$FAIL_MODE"
+    log "DNS-auth не подтверждён; применён fail-mode=$FAIL_MODE"
     apply_failure_rules || log "ОШИБКА: failure rules после DNS-auth"
     LAST_HEALTH="problem"
     return 0
@@ -1050,7 +1082,7 @@ refresh_all() {
 
   refresh_proxy_rules
   if apply_uid_rules && install_hooks; then
-    log "Firewall обновлн: только UID из apps.list/apps.user.list; fail=$FAIL_MODE"
+    log "Firewall обновлён: только UID из apps.list/apps.user.list; fail=$FAIL_MODE"
   else
     RETRY_SOON=1
     log "ОШИБКА: firewall update failed"
@@ -1067,7 +1099,8 @@ refresh_all() {
 
 needs_fast_retry() {
   [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ] && [ -z "$CURRENT_GEMINI" ] && return 0
-  [ -n "$NOTEBOOK_UIDS" ] && [ -z "$CURRENT_NOTEBOOK" ] && return 0
+  [ -n "$GEMINI_SNI_UIDS" ] && [ "$GEMINI_ROUTER_READY" -ne 1 ] && return 0
+  [ -n "$NOTEBOOK_UIDS" ] && { [ -z "$CURRENT_NOTEBOOK" ] || [ "$NOTEBOOK_ROUTER_READY" -ne 1 ]; } && return 0
   [ -n "$CHATGPT_UIDS" ] && [ -z "$CURRENT_CHATGPT" ] && return 0
   [ -n "$CLAUDE_UIDS" ] && [ -z "$CURRENT_CLAUDE" ] && return 0
   [ -n "$GROK_UIDS" ] && [ -z "$CURRENT_GROK" ] && return 0

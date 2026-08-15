@@ -1,8 +1,8 @@
 //go:build linux
 
-// РСРРСРРСРРСРСР pass-through СССРССРСРС СРРСРР РР Linux/Android.
-// РСРРСРРР РёР main.go, ССРРС РССРРСРРР РРР (РРССРСС, РСРРС, DoH) СРРРёСРРСС
-// Рё РСРРРССРСС РР РСРРР РРСРёРР СРРСРРРССРёРР, РРРССРС Windows.
+// Безопасный pass-through поддерживается только на Linux/Android.
+// Вынесено из main.go, чтобы остальные инструменты (роутер, пробы, DoH) собирались
+// и запускались на любой платформе разработки, включая Windows.
 
 package main
 
@@ -16,10 +16,7 @@ import (
 const soOriginalDst = 80
 
 func originalDst(c *net.TCPConn) (*net.TCPAddr, error) {
-	// Use Go's per-OS/per-architecture getsockopt wrapper instead of hard-coded
-	// Linux syscall numbers. IPv6Mreq is simply a >=16-byte buffer here; the
-	// kernel writes a sockaddr_in for SO_ORIGINAL_DST into the supplied memory.
-	// This is the same getsockopt ABI the Android/Linux kernel expects.
+	// Использование getsockopt wrapper для определения оригинального назначения
 	rc, err := c.SyscallConn()
 	if err != nil {
 		return nil, err

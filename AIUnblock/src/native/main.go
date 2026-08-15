@@ -231,6 +231,7 @@ func handleConn(conn net.Conn, routes routeTable, gatewayDir string, helloTimeou
 		return
 	}
 	_ = tc.SetKeepAlive(true)
+	_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	original, origErr := originalDst(tc)
 	_ = conn.SetReadDeadline(time.Now().Add(helloTimeout))
 	hello, sni, err := sniffClientHello(conn)
@@ -272,6 +273,7 @@ func handleConn(conn net.Conn, routes routeTable, gatewayDir string, helloTimeou
 	}
 	if u, ok := upstream.(*net.TCPConn); ok {
 		_ = u.SetKeepAlive(true)
+		_ = u.SetKeepAlivePeriod(30 * time.Second)
 	}
 
 	done := make(chan struct{}, 2)
@@ -515,10 +517,13 @@ func androidRootPool() (*x509.CertPool, error) {
 	return pool, nil
 }
 
-func tlsDialIP(ip, domain string, timeout time.Duration) (*tls.Conn, error) {
+func tlsDialIPv4Port(ip string, port int, domain string, timeout time.Duration) (*tls.Conn, error) {
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.To4() == nil {
 		return nil, errors.New("invalid IPv4")
+	}
+	if port < 1 || port > 65535 {
+		return nil, errors.New("invalid TCP port")
 	}
 	if !validHostname(strings.ToLower(domain)) {
 		return nil, errors.New("invalid domain")
@@ -528,7 +533,7 @@ func tlsDialIP(ip, domain string, timeout time.Duration) (*tls.Conn, error) {
 		return nil, err
 	}
 	d := net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
-	raw, err := d.Dial("tcp4", net.JoinHostPort(parsed.To4().String(), "443"))
+	raw, err := d.Dial("tcp4", net.JoinHostPort(parsed.To4().String(), strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
 	}
@@ -541,9 +546,11 @@ func tlsDialIP(ip, domain string, timeout time.Duration) (*tls.Conn, error) {
 	return tc, nil
 }
 
-// gatewayLoc РРРРСРСРРС СССРРС РССРРР СРРРРёРРРРёС РР РРРРСР Cloudflare
-// (/cdn-cgi/trace). РСССРС СССРРР РРРРСРРС ВРРСРРРРРёСС РР СРРРРССВ в СРР РСРРРС
-// С РР-Cloudflare РРРРРРР (googleapis.com), Рё ССР РР РРРРР РСРСРРРРСРРСС gateway.
+func tlsDialIP(ip, domain string, timeout time.Duration) (*tls.Conn, error) {
+	return tlsDialIPv4Port(ip, 443, domain, timeout)
+}
+
+// gatewayLoc определяет страну шлюза через Cloudflare trace (/cdn-cgi/trace).
 func gatewayLoc(ip, domain string, timeout time.Duration) string {
 	c, err := tlsDialIP(ip, domain, timeout)
 	if err != nil {
@@ -599,10 +606,7 @@ func probeGateway(ip, domain string, timeout time.Duration) (int, error) {
 	return code, nil
 }
 
-// runTrace: РРёРРРРССРёРР ВСРСРР РРРСС СССРРС СРРРСРР РССРРРёС ССРС gatewayВ.
-// Cloudflare РСРРСС ССР Р /cdn-cgi/trace РРССРСР СРРССРР, РРР РРСРё-РРСРРРР ССРРС,
-// РРССРРС РР РРРС РРёРРР СР, СРРР РР РРёРРР РР РРРС РСРРСР: 403 РРРРС РССС Рё
-// РРР-РРРРРР, Рё РСРССР РРСРёСРР РС РРСРР.
+// runTrace: диагностика доступности шлюзов через Cloudflare trace.
 func runTrace(args []string) int {
 	fs := flag.NewFlagSet("trace", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -648,6 +652,7 @@ func runTLSProbe(args []string) int {
 	fs := flag.NewFlagSet("tls-probe", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	ip := fs.String("ip", "", "IPv4 gateway")
+	port := fs.Int("port", 443, "TCP port")
 	domain := fs.String("domain", "", "TLS SNI/Host")
 	secs := fs.Int("timeout", 4, "timeout seconds")
 	if fs.Parse(args) != nil {
@@ -655,6 +660,16 @@ func runTLSProbe(args []string) int {
 	}
 	if *secs < 1 || *secs > 30 {
 		return 2
+	}
+	if *port != 443 {
+		conn, err := tlsDialIPv4Port(*ip, *port, *domain, time.Duration(*secs)*time.Second)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		conn.Close()
+		fmt.Println("TLS_OK")
+		return 0
 	}
 	code, err := probeGateway(*ip, *domain, time.Duration(*secs)*time.Second)
 	if err != nil {
@@ -703,10 +718,7 @@ func runProbe(args []string) int {
 
 	timeout := time.Duration(*secs) * time.Second
 
-	// РРСРС, РРСРССР РСРРСС РРССРСР СРРРРРРС, в ССР СРР РРРРРРРёСРРРРРСР СРСРРС.
-	// РСРРСССРёР РРР, РРРСРС ССРёСРРС ВРРССССС РРРРРРВ, СРСС РРСРРР РРС: РёРРРРР СРР
-	// NotebookLM РРРССРР СРРРСРСР IP Google, Р ChatGPT в СРССРёРСРРёР edge Cloudflare.
-	// РРС РР-Cloudflare СРСРРёСРР ССР РРРёРССРРРРСР РРСССРРСР РСРёРРРР.
+	// Исключаем реальные IP адреса сервисов из списка кандидатов шлюзов
 	realServer := map[string]bool{}
 	if *publicDNS != "" {
 		if answers, err := dnsQueryA(*publicDNS, hosts[0], timeout); err == nil {
@@ -747,9 +759,7 @@ func runProbe(args []string) int {
 					return
 				}
 			}
-			// РСРРС 200..499 СРР РР СРРР РР РРРРСРРС, ССР РРРРРёСРРРР РРРРРРРР:
-			// РРРРРРРёСРРРРРСР edge РСРРСРРС СРРРР СРР РР. РСРРРССРР СССРРС РССРРР
-			// РРРёР СРР РР РРРРРёРРСР, Р РР РР РРРРСР РРРРР.
+			// Фильтрация шлюзов по локации, если задан rejectLoc
 			if *rejectLoc != "" {
 				if loc := gatewayLoc(gateway, hosts[0], timeout); loc != "" && loc == strings.ToUpper(*rejectLoc) {
 					return
@@ -932,7 +942,13 @@ func skipDNSName(b []byte, p int) (int, error) {
 }
 
 func parseDNSA(b []byte, id uint16) ([]string, error) {
-	if len(b) < 12 || binary.BigEndian.Uint16(b[:2]) != id {
+	if len(b) < 12 {
+		return nil, errors.New("short DNS response")
+	}
+	respID := binary.BigEndian.Uint16(b[:2])
+	// Проверка ID: для UDP DNS требуется точное совпадение;
+	// для DoH (RFC 8484) допускается respID == 0 или id == 0.
+	if id != 0 && respID != id && respID != 0 {
 		return nil, errors.New("invalid DNS response ID")
 	}
 	flags := binary.BigEndian.Uint16(b[2:4])
@@ -1001,20 +1017,37 @@ func resolveViaBootstrap(host string, servers []string, timeout time.Duration) (
 	if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
 		return []string{ip.To4().String()}, nil
 	}
+	if len(servers) == 0 {
+		return nil, errors.New("no bootstrap servers")
+	}
+	type res struct {
+		ips []string
+		err error
+	}
+	ch := make(chan res, len(servers))
+	for _, s := range servers {
+		go func(server string) {
+			ips, err := dnsQueryA(server, host, timeout)
+			ch <- res{ips: ips, err: err}
+		}(s)
+	}
 	var last error
 	seen := map[string]bool{}
 	out := []string{}
-	for _, s := range servers {
-		ips, err := dnsQueryA(s, host, timeout)
-		if err != nil {
-			last = err
+	for range servers {
+		r := <-ch
+		if r.err != nil {
+			last = r.err
 			continue
 		}
-		for _, ip := range ips {
+		for _, ip := range r.ips {
 			if !seen[ip] {
 				seen[ip] = true
 				out = append(out, ip)
 			}
+		}
+		if len(out) > 0 {
+			return out, nil
 		}
 	}
 	if len(out) == 0 {
@@ -1026,10 +1059,7 @@ func resolveViaBootstrap(host string, servers []string, timeout time.Duration) (
 	return out, nil
 }
 
-// readHTTPResponse в РРёРРёРРРСРСР СРРРРС РСРРСР HTTP/1.x РРРССР net/http.
-// РСРРР СРРРР РРРёР POST РР DoH-СРРРРРРС, Р РРСС РРРРС net/http ССРРС Р РРёРРСРРёР
-// РРРРР РРРРРРРСР РР РРРРСС ABI. РРРРРСРРёРРСССС Content-Length, chunked Рё
-// ВСРёСРСС РР РРРСССРёСВ (РС РСРРРР СРСР Connection: close).
+// readHTTPResponse парсит ответ HTTP/1.x без зависимости от net/http.
 func readHTTPResponse(r *bufio.Reader, limit int64) (int, []byte, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -1105,7 +1135,7 @@ func readHTTPResponse(r *bufio.Reader, limit int64) (int, []byte, error) {
 				return 0, nil, err
 			}
 			body = append(body, chunk...)
-			// CRLF РРСРР СРРРР
+			// CRLF после чанка
 			if _, err = r.Discard(2); err != nil {
 				return 0, nil, err
 			}
@@ -1161,9 +1191,7 @@ func dohQuery(resolver, domain string, bootstrapServers []string, timeout time.D
 			last = e
 			continue
 		}
-		// РРР ALPN СРСРРС, РСРРРРСРёСРССРёР HTTP/2, РСРРСРРС РР РРС HTTP/1.1-РРРСРС
-		// РРРРР 505. РРРР РРРРРРСРёРРРРСС РР http/1.1 в РёРРСР СРССС ССРСРСС
-		// DoH-СРРРРРРСРР (РРРСРёРРС dns.malw.link) РР СРРРСРРС РРРРСР.
+		// ALPN http/1.1 для гарантированной совместимости с DoH-резолверами
 		tc := tls.Client(raw, &tls.Config{
 			ServerName: u.Hostname(),
 			RootCAs:    roots,

@@ -1,4 +1,6 @@
 gemini_sni com.google.android.googlequicksearchbox
+gemini_sni com.google.android.webview
+gemini_sni com.android.chrome
 gemini     com.google.android.apps.bard
 notebook   com.google.android.apps.labs.language.tailwind
 chatgpt    com.openai.chatgpt
