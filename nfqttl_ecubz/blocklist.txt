@@ -1,12 +1,33 @@
+# Nfqttl eCubz Optimized Blocklist
+# Пользовательский список доменов и сигнатур для предотвращения детекции раздачи.
+# Записи, начинающиеся с #, игнорируются.
 
+# --- 1. Windows NCSI, Android & Apple Captive Portals ---
 msftncsi
 msftconnecttest
 dns.msftncsi.com
 captive.apple.com
-connectivitycheck.gstatic.com
+connectivitycheck
+clients3.google.com
 detectportal.firefox.com
 nmcheck.gnome.org
+connectivity-check.ubuntu.com
+network-test.debian.org
 
+# --- 2. Windows 10/11 Telemetry & Background Updates ---
+windowsupdate.com
+update.microsoft.com
+delivery.mp.microsoft.com
+data.microsoft.com
+telemetry.microsoft
+smartscreen.microsoft
+activity.windows.com
+teredo.ipv6.microsoft.com
+wpad
+Windows-Update-Agent
+Microsoft-Delivery-Optimization
+
+# --- 3. NTP (Сетевое время по HTTP/HTTPS) ---
 time.windows.com
 time.nist.gov
 time.apple.com
@@ -14,19 +35,15 @@ time.google.com
 time.android.com
 time.cloudflare.com
 pool.ntp.org
+ntp.org
 
-windowsupdate.com
-delivery.mp.microsoft.com
-settings-win.data.microsoft.com
-vortex.data.microsoft.com
-teredo.ipv6.microsoft.com
-
-wpad
-Windows-Update-Agent
-Microsoft-Delivery-Optimization
-
+# --- 4. DoH (DNS over HTTPS) ---
 cloudflare-dns.com
 mozilla.cloudflare-dns.com
 dns.google
 dns.quad9.net
 doh.opendns.com
+dns.adguard-dns.com
+dns.nextdns.io
+dns.controld.com
+doh.mullvad.net
