@@ -529,6 +529,7 @@ set_perm "$MODPATH/config_event.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/log_mirror.sh" 0 0 0755
+set_perm "$MODPATH/rule_updater.sh" 0 0 0755
 
 ui_print " "
 ui_print "- Installation complete. Compatibility profile saved."

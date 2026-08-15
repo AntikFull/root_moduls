@@ -245,6 +245,8 @@ for stale_lock in "$DATA_DIR/.operation.lock" "$DATA_DIR/.state_db.lock"        
     fi
 done
 rm -f "$DATA_DIR/.surface_index.rerun" 2>/dev/null
+find "$DATA_DIR" -maxdepth 1 -name ".*.tmp.*" -mtime +1 -delete 2>/dev/null || true
+find "$LOG_DIR" -maxdepth 1 -name ".*.running.*" -mtime +1 -delete 2>/dev/null || true
 
 aad_lower_priority() {
     command -v renice >/dev/null 2>&1 && renice -n 19 -p $$ >/dev/null 2>&1
@@ -253,6 +255,29 @@ aad_lower_priority() {
 }
 aad_lower_priority
 log "PRIORITY lowered for boot reconciliation (nice=19, ionice=idle)"
+
+aad_enforce_zero_ad_id() {
+    [ "$(read_bool_setting ZERO_AD_ID 1)" = "1" ] || return 0
+    if command -v settings >/dev/null 2>&1; then
+        settings put global ad_id_zero 1 2>/dev/null || true
+        settings put global limit_ad_tracking 1 2>/dev/null || true
+        settings put secure limit_ad_tracking 1 2>/dev/null || true
+        log "AD-ID-ZERO applied global limit_ad_tracking=1 ad_id_zero=1"
+    fi
+    return 0
+}
+aad_enforce_zero_ad_id
+
+aad_enforce_webview_flags() {
+    [ "$(read_bool_setting BLOCK_WEBVIEW_ADS 1)" = "1" ] || return 0
+    _wv_cmd="/data/local/tmp/webview-command-line"
+    _wv_flags="_ --host-rules=\"MAP *.doubleclick.net 127.0.0.1, MAP *.an.yandex.ru 127.0.0.1, MAP *.googleads.g.doubleclick.net 127.0.0.1, MAP *.applovin.com 127.0.0.1, MAP *.unityads.unity3d.com 127.0.0.1, MAP *.vungle.com 127.0.0.1, MAP *.inmobi.com 127.0.0.1\""
+    printf '%s\n' "$_wv_flags" > "$_wv_cmd" 2>/dev/null || true
+    chmod 0644 "$_wv_cmd" 2>/dev/null || true
+    log "WEBVIEW-FLAGS applied to $_wv_cmd"
+    return 0
+}
+aad_enforce_webview_flags
 
 trace "BOOT-SCAN begin"
 log "BOOT-SCAN: starting full policy reconciliation. Users: $(list_user_ids | tr '\n' ' ')"
@@ -279,6 +304,7 @@ stop_owned_pidfile "$CONFIG_INOTIFY_PID_FILE" "config_event.sh"
 stop_owned_pidfile "$WATCH_PID_FILE" "config_watch.sh"
 stop_owned_pidfile "$LOG_MIRROR_PID_FILE" "log_mirror.sh"
 stop_owned_pidfile "$AD_SURFACE_PID_FILE" "ad_surface_indexer.sh"
+stop_owned_pidfile "$DATA_DIR/rule_updater.pid" "rule_updater.sh"
 
 start_and_verify_bg() {
     label="$1"; pidfile="$2"; shift 2
@@ -312,7 +338,10 @@ fi
 
 start_and_verify_bg "CONFIG-POLL" "$WATCH_PID_FILE" "$MODDIR/config_watch.sh"
 start_and_verify_bg "LOG-MIRROR" "$LOG_MIRROR_PID_FILE" "$MODDIR/log_mirror.sh"
-log "RUNTIME-READY: app_watch=$([ -f "$INOTIFY_PID_FILE" ] && echo yes || echo no) config_inotify=$([ -f "$CONFIG_INOTIFY_PID_FILE" ] && echo yes || echo no) config_poll=$([ -f "$WATCH_PID_FILE" ] && echo yes || echo no) log_mirror=$([ -f "$LOG_MIRROR_PID_FILE" ] && echo yes || echo no) interval=$(read_poll_interval)s"
+if [ "$(read_bool_setting AUTO_UPDATE_RULES 1)" = "1" ] && [ -f "$MODDIR/rule_updater.sh" ]; then
+    start_and_verify_bg "RULE-UPDATER" "$DATA_DIR/rule_updater.pid" "$MODDIR/rule_updater.sh"
+fi
+log "RUNTIME-READY: app_watch=$([ -f "$INOTIFY_PID_FILE" ] && echo yes || echo no) config_inotify=$([ -f "$CONFIG_INOTIFY_PID_FILE" ] && echo yes || echo no) config_poll=$([ -f "$WATCH_PID_FILE" ] && echo yes || echo no) log_mirror=$([ -f "$LOG_MIRROR_PID_FILE" ] && echo yes || echo no) rule_updater=$([ -f "$DATA_DIR/rule_updater.pid" ] && echo yes || echo no) interval=$(read_poll_interval)s"
 trace "service.sh RUNTIME_READY pid=$$"
 reconcile_ad_surface_killer "boot" >/dev/null 2>&1 || true
 launch_ad_surface_indexer_bg "boot" >/dev/null 2>&1 || true

@@ -25,6 +25,7 @@ stop_owned_pidfile "$DATA_DIR/category_watch.pid" "category_watch.sh"
 stop_owned_pidfile "$AD_SURFACE_PID_FILE" "ad_surface_indexer.sh"
 
 ad_killer_cleanup >/dev/null 2>&1 || true
+rm -f /data/local/tmp/webview-command-line 2>/dev/null || true
 
 if [ -e "$IFW_RULE_FILE" ]; then
     if rm -f "$IFW_RULE_FILE" 2>/dev/null; then

@@ -99,7 +99,14 @@ MANIFEST_CACHE_DIR="$DATA_DIR/manifest_cache/v1"
 IFW_DIR="${IFW_DIR:-/data/system/ifw}"
 IFW_RULE_FILE="$IFW_DIR/analytics_ads_disabler.xml"
 
-AAD_LIB_DIR="${MODDIR:-${0%/*}}"
+AAD_LIB_DIR=""
+for _ald in "${MODDIR:-}" "${0%/*}" /data/adb/modules/analytics_ads_disabler "$DATA_DIR"; do
+    if [ -n "$_ald" ] && [ -f "$_ald/compat.sh" ]; then
+        AAD_LIB_DIR="$_ald"
+        break
+    fi
+done
+[ -n "$AAD_LIB_DIR" ] || AAD_LIB_DIR="/data/adb/modules/analytics_ads_disabler"
 MODULE_PROP="$AAD_LIB_DIR/module.prop"
 module_prop_get() {
     _mp_key="$1"
@@ -442,29 +449,20 @@ read_component_mode() {
 }
 
 read_component_backend() {
-    val=$(read_setting COMPONENT_BACKEND PM | tr '[:lower:]' '[:upper:]')
+    val=$(read_setting COMPONENT_BACKEND HYBRID | tr '[:lower:]' '[:upper:]')
     case "$val" in
         PM|HYBRID) echo "$val" ;;
-        *) echo PM ;;
+        *) echo HYBRID ;;
     esac
 }
 
 read_ifw_activity_limit() {
-    mode_now=$(read_component_mode)
-    if [ "$mode_now" = "AGGRESSIVE" ]; then
-        val=$(read_setting MAX_AGGRESSIVE_IFW_ACTIVITIES_PER_CATEGORY 64)
-        fallback=64
-        ceiling=128
-    else
-        val=$(read_setting MAX_IFW_ACTIVITIES_PER_CATEGORY 5)
-        fallback=5
-        ceiling=25
-    fi
+    val=$(read_setting MAX_IFW_ACTIVITIES_PER_CATEGORY 256)
     case "$val" in
-        ''|*[!0-9]*) echo "$fallback" ;;
+        ''|*[!0-9]*) echo 256 ;;
         *)
             [ "$val" -lt 1 ] 2>/dev/null && val=1
-            [ "$val" -gt "$ceiling" ] 2>/dev/null && val="$ceiling"
+            [ "$val" -gt 512 ] 2>/dev/null && val=512
             echo "$val"
             ;;
     esac
@@ -529,10 +527,8 @@ read_global_list() {
 }
 
 aad_lock_write_owner() {
-    printf '%s
-' "$$" > "$1/pid" 2>/dev/null
-    printf '%s
-' "$(aad_proc_starttime "$$")" > "$1/starttime" 2>/dev/null
+    printf '%s\n' "$$" > "$1/pid" 2>/dev/null
+    printf '%s\n' "$(aad_proc_starttime "$$")" > "$1/starttime" 2>/dev/null
     return 0
 }
 
@@ -661,7 +657,6 @@ launch_ad_surface_indexer_bg() {
 
 ad_killer_enabled() {
     [ "$(read_bool_setting BLOCK_ADS 1)" = "1" ] || return 1
-    [ "$(read_component_mode)" = "AGGRESSIVE" ] || return 1
     [ "$(read_bool_setting AD_SURFACE_KILLER 1)" = "1" ] || return 1
     return 0
 }
@@ -840,6 +835,9 @@ ad_killer_build_targets_from_surface() {
         is_category_whitelisted "$_ak_pkg" ADS && continue
         printf '%s|%s|%s|%s\n' "$_ak_user" "$_ak_pkg" "$_ak_sdk" "$_ak_host" >> "$_ak_tmp"
     done < "$_ak_joined"
+    for _ak_spec_user in $(list_user_ids); do
+        awk -F'|' -v u="$_ak_spec_user" '$1 ~ /RuStore|myTarget/ {print u "|ru.vk.store|" $1 "|" $2}' "$_ak_hostmap" >> "$_ak_tmp" 2>/dev/null || true
+    done
     sort -u "$_ak_tmp" -o "$_ak_tmp" 2>/dev/null || true
     chmod 600 "$_ak_tmp" 2>/dev/null || true
     mv -f "$_ak_tmp" "$AD_KILLER_TARGET_FILE" 2>/dev/null || { rm -f "$_ak_tmp" 2>/dev/null; rm -f "$_ak_hostmap" "$_ak_surfaces" "$_ak_joined" 2>/dev/null; return 1; }
@@ -1030,10 +1028,41 @@ ad_killer_add_tcp_rule() {
 
 ad_killer_add_quic_rule() {
     _akq_bin="$1"; _akq_uid="$2"
+    if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
+        return 0
+    fi
+    if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1; then
+        return 0
+    fi
     if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1; then
         return 0
     fi
     "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j DROP >/dev/null 2>&1
+}
+
+AD_KILLER_DOH_IPV4="8.8.8.8 8.8.4.4 1.1.1.1 1.0.0.1 77.88.8.8 77.88.8.1 77.88.8.88 9.9.9.9 149.112.112.112 94.140.14.14 94.140.15.15"
+AD_KILLER_DOH_IPV6="2001:4860:4860::8888 2001:4860:4860::8844 2606:4700:4700::1111 2606:4700:4700::1001 2a02:6b8::feed:0ff 2a02:6b8:0:1::feed:0ff 2620:fe::fe 2620:fe::9 2a10:50c0::ad1:ff 2a10:50c0::ad2:ff"
+
+ad_killer_add_doh_bypass_rules() {
+    _akd_bin="$1"; _akd_uid="$2"; _akd_family="${3:-4}"
+    if [ "$_akd_family" = "6" ]; then
+        for _akd_ip in $AD_KILLER_DOH_IPV6; do
+            for _akd_port in 443 853; do
+                if ! "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1; then
+                    "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j DROP >/dev/null 2>&1 || true
+                fi
+            done
+        done
+    else
+        for _akd_ip in $AD_KILLER_DOH_IPV4; do
+            for _akd_port in 443 853; do
+                if ! "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
+                    "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j DROP >/dev/null 2>&1 || true
+                fi
+            done
+        done
+    fi
+    return 0
 }
 
 ad_killer_prepare_chain() {
@@ -1263,6 +1292,19 @@ _reconcile_ad_surface_killer_unlocked() {
             _akr_quic=$((_akr_quic + 1))
         done
     fi
+
+    _akr_block_doh=$(read_bool_setting BLOCK_DOH_BYPASS 1)
+    if [ "$_akr_block_doh" = "1" ]; then
+        for _akr_uid in $_akr_quic_uids; do
+            if [ "$_akr4ok" = "1" ] || [ "$_akr_batch4" = "1" ]; then
+                ad_killer_add_doh_bypass_rules "$_akr4" "$_akr_uid" 4
+            fi
+            if [ "$_akr6ok" = "1" ] || [ "$_akr_batch6" = "1" ]; then
+                ad_killer_add_doh_bypass_rules "$_akr6" "$_akr_uid" 6
+            fi
+        done
+        log "AD-KILLER anti-doh rules applied for $(printf '%s\n' "$_akr_quic_uids" | wc -w | tr -d ' ') target UIDs"
+    fi
     _akr_pkgs=$(awk -F'|' '{k=$1 "|" $2; if(!seen[k]++) n++} END{print n+0}' "$_akr_filtered" 2>/dev/null); [ -n "$_akr_pkgs" ] || _akr_pkgs=0
     _akr_status_tmp="$AD_KILLER_STATUS_FILE.tmp.$$"
     {
@@ -1294,8 +1336,7 @@ aad_proc_starttime() {
     [ -n "$_apst_raw" ] || return 1
     _apst_tail=${_apst_raw##*') '}
     [ "$_apst_tail" = "$_apst_raw" ] && return 1
-    printf '%s
-' "$_apst_tail" | awk '{print $20}'
+    printf '%s\n' "$_apst_tail" | awk '{print $20}'
 }
 
 ad_killer_lock() {
@@ -2637,32 +2678,22 @@ get_manifest_activity_candidates() {
             done
             IFS=$old_ifs
         else
-            hit_snapshot=$(manifest_activity_rule_hits "$classes")
-            exact_hits=$(printf '%s\n' "$hit_snapshot" | awk -F'|' '$1=="EXACT"{n++} END{print n+0}')
-            audit_hits=$(printf '%s\n' "$hit_snapshot" | awk -F'|' '$1=="AUDIT"{n++} END{print n+0}')
+            hit_file=$(aad_mktemp_near "$DATA_DIR/.manifest_hits")
+            manifest_activity_rule_hits "$classes" > "$hit_file"
+            exact_hits=$(awk -F'|' '$1=="EXACT"{n++} END{print n+0}' "$hit_file" 2>/dev/null)
+            audit_hits=$(awk -F'|' '$1=="AUDIT"{n++} END{print n+0}' "$hit_file" 2>/dev/null)
             verified=0
             verify_miss=0
             : > "$verified_tmp"
 
-            old_ifs=$IFS
-            IFS='
-'
-            for rec in $hit_snapshot; do
-                [ -n "$rec" ] || continue
-                hit=${rec%%|*}
-                cls=${rec#*|}
+            while IFS='|' read -r hit cls; do
                 [ -n "$cls" ] || continue
                 comp="$pkg/$cls"
-                if cap_activity_component_exists "$user" "$comp"; then
-                    echo "ACTIVITY|$comp"
-                    printf '%s\n' "$cls" >> "$verified_tmp"
-                    verified=$((verified + 1))
-                else
-                    verify_miss=$((verify_miss + 1))
-                    [ "$hit" = "EXACT" ] && log "ACTIVITY-VERIFY-MISS u$user: $comp source=manifest-exact encoding=$encoding"
-                fi
-            done
-            IFS=$old_ifs
+                echo "ACTIVITY|$comp"
+                printf '%s\n' "$cls" >> "$verified_tmp"
+                verified=$((verified + 1))
+            done < "$hit_file"
+            rm -f "$hit_file" 2>/dev/null
 
             if [ "${AAD_MANIFEST_CACHE_ENABLED:-0}" = "1" ] && [ -n "$cache_prefix" ] && [ -n "$apk_sig" ] && [ -f "$cache_prefix.classes" ]; then
                 printf '%s\n' "$rules_hash" > "$cache_prefix.rulesig.tmp.$$" 2>/dev/null
@@ -2766,7 +2797,7 @@ component_matches_rule_section() {
             if (line=="" || line ~ /^#/) next
             if (line ~ /^re:/) {
                 pat=substr(line,4)
-                if (component ~ pat || lcfull ~ tolower(pat)) found=1
+                if (cls ~ pat || lc ~ tolower(pat) || component ~ pat || lcfull ~ tolower(pat)) found=1
             } else if (index(lc,tolower(line))>0) found=1
         }
         END {exit found ? 0 : 1}
@@ -2922,14 +2953,15 @@ record_package_audit() {
             if (substr(cls,1,1)==".") return substr(component,1,slash-1) cls
             return cls
         }
-        function section_match(section, component,    i,rule,pattern,lower_class,lower_component) {
-            lower_class=tolower(match_class(component))
+        function section_match(section, component,    i,rule,pattern,cls,lower_class,lower_component) {
+            cls=match_class(component)
+            lower_class=tolower(cls)
             lower_component=tolower(component)
             for (i=1; i<=rule_count[section]; i++) {
                 rule=rules[section,i]
                 if (substr(rule,1,3)=="re:") {
                     pattern=substr(rule,4)
-                    if (component ~ pattern || lower_component ~ tolower(pattern)) return 1
+                    if (cls ~ pattern || lower_class ~ tolower(pattern) || component ~ pattern || lower_component ~ tolower(pattern)) return 1
                 } else if (index(lower_class,tolower(rule))>0) return 1
             }
             return 0
@@ -2998,25 +3030,14 @@ record_package_audit() {
 ifw_filter_global_candidates() {
     raw="$1"; pair_file="$2"; installed="$3"; out="$4"
     : > "$out"
-    [ -f "$raw" ] && [ -f "$pair_file" ] && [ -f "$installed" ] || return 1
+    [ -f "$raw" ] || return 1
 
     while IFS= read -r comp; do
         [ -n "$comp" ] || continue
         pkg=${comp%%/*}
-        users=$(awk -F'|' -v p="$pkg" '$2==p {print $1}' "$installed" 2>/dev/null | sort -u)
-        [ -n "$users" ] || continue
-        safe=1
-        for user in $users; do
-            if ! grep -Fxq -- "$user|$comp" "$pair_file" 2>/dev/null; then
-                safe=0
-                break
-            fi
-        done
-        if [ "$safe" -eq 1 ]; then
-            printf '%s\n' "$comp" >> "$out"
-        else
-            log "IFW-MULTIUSER-SKIP component=$comp reason=policy_not_unanimous"
-        fi
+        is_globally_whitelisted "$pkg" && continue
+        is_category_whitelisted "$pkg" ADS && continue
+        printf '%s\n' "$comp" >> "$out"
     done < "$raw"
 }
 
@@ -3089,7 +3110,7 @@ reconcile_owned_ifw_rules() {
             for (pair in component) {
                 split(pair,parts,"|")
                 group=parts[1] "|" parts[2]
-                if (count[group] <= limit) print component[pair]
+                if (++taken[group] <= limit) print component[pair]
             }
         }
     ' "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activities_raw"
@@ -3353,6 +3374,7 @@ restore_all_for_package_user() {
     for cat in $CATEGORIES; do
         restore_category_for_package_user "$user" "$pkg" "$cat"
     done
+    aad_restore_appops_overlay_control "$user" "$pkg"
 }
 
 restore_all_for_package() {
@@ -3361,6 +3383,33 @@ restore_all_for_package() {
     for user in $users; do
         restore_all_for_package_user "$user" "$pkg"
     done
+}
+
+aad_restore_appops_overlay_control() {
+    _roc_user="$1"; _roc_pkg="$2"
+    if command -v cmd >/dev/null 2>&1; then
+        cmd appops set --user "$_roc_user" "$_roc_pkg" SYSTEM_ALERT_WINDOW default 2>/dev/null || true
+        cmd appops set --user "$_roc_user" "$_roc_pkg" TOAST_WINDOW default 2>/dev/null || true
+    fi
+    return 0
+}
+
+aad_apply_appops_overlay_control() {
+    [ "$(read_bool_setting BLOCK_OVERLAY_ADS 1)" = "1" ] || return 0
+    _aoc_user="$1"; _aoc_pkg="$2"
+    is_system_protected "$_aoc_pkg" && return 0
+    is_globally_whitelisted "$_aoc_pkg" && return 0
+    if command -v cmd >/dev/null 2>&1; then
+        _aoc_cur=$(cmd appops get --user "$_aoc_user" "$_aoc_pkg" SYSTEM_ALERT_WINDOW 2>/dev/null)
+        case "$_aoc_cur" in
+            *allow*|*default*)
+                cmd appops set --user "$_aoc_user" "$_aoc_pkg" SYSTEM_ALERT_WINDOW ignore 2>/dev/null || true
+                cmd appops set --user "$_aoc_user" "$_aoc_pkg" TOAST_WINDOW ignore 2>/dev/null || true
+                log "APPOPS-OVERLAY-BLOCKED user=$_aoc_user pkg=$_aoc_pkg SYSTEM_ALERT_WINDOW=ignore"
+                ;;
+        esac
+    fi
+    return 0
 }
 
 process_package_user() {
@@ -3445,7 +3494,13 @@ process_package_user() {
         fi
     done < "$desired"
 
-    [ "${AAD_ALREADY_DISABLED_COUNT:-0}" -gt 0 ] &&         log "ALREADY-DISABLED u$user: $pkg components=$AAD_ALREADY_DISABLED_COUNT"
+    [ "${AAD_ALREADY_DISABLED_COUNT:-0}" -gt 0 ] && \
+        log "ALREADY-DISABLED u$user: $pkg components=$AAD_ALREADY_DISABLED_COUNT"
+
+    if [ "$disabled_now" -gt 0 ] || [ -s "$existing" ]; then
+        aad_apply_appops_overlay_control "$user" "$pkg"
+    fi
+
     aad_pkg_snapshot_clear
     rm -f "$desired" "$existing"
     echo "$disabled_now"
@@ -3476,9 +3531,11 @@ process_package_all_users() {
     for user in $users; do
         log "CONFIG-DELTA user=$user package=$pkg begin"
         if package_installed_in_snapshot "$snapshot" "$user" "$pkg"; then
-            process_package_user "$user" "$pkg" >/dev/null
+            n=$(process_package_user "$user" "$pkg")
             rc=$?
-            log "CONFIG-DELTA user=$user package=$pkg end installed=yes rc=$rc"
+            case "$n" in ''|*[!0-9]*) n=0 ;; esac
+            total=$((total + n))
+            log "CONFIG-DELTA user=$user package=$pkg end installed=yes rc=$rc ops=$n"
             [ "$rc" -eq 2 ] && { [ "$own_snapshot" -eq 1 ] && rm -f "$snapshot" 2>/dev/null; return 2; }
         else
             restore_all_for_package_user "$user" "$pkg"
@@ -3871,10 +3928,8 @@ full_rescan_locked() {
         [ -z "$pkg" ] && continue
         processed=$((processed + 1))
         if [ "$aad_fast_path" = "1" ] && aad_package_verified "$user" "$pkg" "$vc"; then
-            printf '|%s|%s|%s|
-' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
-            printf '%s|%s
-' "$user" "$pkg" >> "$AAD_SKIPPED_KEYS"
+            printf '|%s|%s|%s|\n' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
+            printf '%s|%s\n' "$user" "$pkg" >> "$AAD_SKIPPED_KEYS"
             skipped=$((skipped + 1))
             continue
         fi
@@ -3883,8 +3938,7 @@ full_rescan_locked() {
         export AAD_CURRENT_VERSION_CODE
         n=$(process_package_user "$user" "$pkg")
         rc=$?
-        [ "$rc" -eq 0 ] && printf '|%s|%s|%s|
-' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
+        [ "$rc" -eq 0 ] && printf '|%s|%s|%s|\n' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
         case "$n" in ''|*[!0-9]*) n=0 ;; esac
         total=$((total + n))
         if [ "$rc" -eq 2 ] || [ -f "$AAD_FAIL_FAST_ABORT" ]; then
@@ -3911,8 +3965,7 @@ full_rescan_locked() {
     if [ "$aborted" -ne 1 ] && [ -s "$AAD_VERIFIED_NEW" ]; then
         chmod 600 "$AAD_VERIFIED_NEW" 2>/dev/null || true
         if mv -f "$AAD_VERIFIED_NEW" "$PACKAGE_VERIFIED_FILE" 2>/dev/null; then
-            printf '%s
-' "$AAD_POLICY_FINGERPRINT" > "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null
+            printf '%s\n' "$AAD_POLICY_FINGERPRINT" > "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null
             [ "$aad_fast_path" = "1" ] || aad_mark_full_verify
         fi
     fi

@@ -477,8 +477,7 @@ export AD_SURFACE_SCAN_FILE
 _asi_work_surface_file=""
 
 _asi_terminal_state=COMPLETE
-printf '%s
-' "$_asi_fingerprint" > "$AAD_SURFACE_FINGERPRINT_FILE" 2>/dev/null || true
+printf '%s\n' "$_asi_fingerprint" > "$AAD_SURFACE_FINGERPRINT_FILE" 2>/dev/null || true
 surface_status_write COMPLETE 0 normal
 log "AD-SURFACE-SUMMARY $_asi_surface_summary priority_packages/users=$_asi_priority_count index_ms=$_asi_elapsed file=$AD_SURFACE_SCAN_FILE"
 log "AD-SURFACE-INDEX finished packages/users=$_asi_processed elapsed_ms=$_asi_elapsed"
