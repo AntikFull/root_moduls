@@ -16,7 +16,8 @@ else
     if [ -f "$MODDIR/debug_log.sh" ]; then
         sh "$MODDIR/debug_log.sh"
     fi
-    echo "[+] Отчет сохранен в /data/adb/modules/nfqttl_ecubz/nfqttl_debug.log"
+    echo "[+] Отчет сохранен в $MODDIR/logs/nfqttl_debug.log"
+    echo "[+] Копия доступна в /sdcard/eCubz/logs/nfqttl_ecubz/nfqttl_debug.log"
 fi
 
 echo "================================================="

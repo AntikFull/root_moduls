@@ -1,8 +1,7 @@
+c3b7543ced8de567c4f97543b444848cd4b659890948e8c7f0c5b0a35d7dd37b  libs/arm64-v8a/nfqttl  (25336 байт)
+6cff1105013e8392e3f7de71a4398e809814a8cc6279aeec3149141f6666bdb8  libs/armeabi-v7a/nfqttl  (16320 байт)
+936b48106fc44543a57fdf8873e00f7dc77e8de9ceb8c5bcebd88c3f5d7f5e2a  libs/x86/nfqttl  (23000 байт)
+fb0dc80a33c9c1afe263fc29f7a477807c3253b80a88d063ccb9bf462c853cf8  libs/x86_64/nfqttl  (24896 байт)
 
-c3b7543ced8de567c4f97543b444848cd4b659890948e8c7f0c5b0a35d7dd37b  libs/arm64-v8a/nfqttl  (25336 Р±Р°Р№С)
-6cff1105013e8392e3f7de71a4398e809814a8cc6279aeec3149141f6666bdb8  libs/armeabi-v7a/nfqttl  (16320 Р±Р°Р№С)
-936b48106fc44543a57fdf8873e00f7dc77e8de9ceb8c5bcebd88c3f5d7f5e2a  libs/x86/nfqttl  (23000 Р±Р°Р№С)
-fb0dc80a33c9c1afe263fc29f7a477807c3253b80a88d063ccb9bf462c853cf8  libs/x86_64/nfqttl  (24896 Р±Р°Р№С)
-
-Р•СР»Р СР°Р·РРµС РР»Р ССРРР° РРµ СРРРР°Р»Р - Р°СС…РР РРРСРµР¶РС‘Р РСР РРµСРµРР°С‡Рµ.
-РџСРР·РР°Р РРСС‡Р: Р ELF-Р·Р°РРР»РРРРµ РРСРР»ССССС Р±Р°Р№СС‹ EF BF BD (U+FFFD).
+Если размер или сумма не совпали — архив повреждён при передаче.
+Признак порчи: в ELF-заголовке присутствуют байты EF BF BD (U+FFFD).

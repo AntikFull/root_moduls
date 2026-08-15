@@ -1,15 +1,23 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
 
-VERSION="v12"
-VERSION_CODE="120"
+VERSION=$(grep '^version=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2)
+[ -z "$VERSION" ] && VERSION="v13.0"
+VERSION_CODE=$(grep '^versionCode=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2)
+[ -z "$VERSION_CODE" ] && VERSION_CODE="1300"
 
 echo "$VERSION ($VERSION_CODE)" > "$MODDIR/.applied_version" 2>/dev/null || true
 
 QUEUE_NUM=6464
 TTL_VALUE=64
-WD_LOG=/data/local/tmp/nfqttl_watchdog.log
-NFQTTL_DAEMON_LOG=/data/local/tmp/nfqttl_daemon_stdout.log
+
+LOG_DIR="$MODDIR/logs"
+SD_LOG_DIR="/sdcard/eCubz/logs/nfqttl_ecubz"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+mkdir -p "$SD_LOG_DIR" 2>/dev/null || true
+
+WD_LOG="$LOG_DIR/nfqttl_watchdog.log"
+NFQTTL_DAEMON_LOG="$LOG_DIR/nfqttl_daemon_stdout.log"
 
 DEBUG_MODE=0
 NOQUIC=0
@@ -36,6 +44,9 @@ wd_log() {
     fi
     echo "[$(date '+%m-%d %H:%M:%S')] $*" >> "$WD_LOG"
     chmod 600 "$WD_LOG" 2>/dev/null || true
+    if [ -d "$SD_LOG_DIR" ]; then
+        cp -f "$WD_LOG" "$SD_LOG_DIR/nfqttl_watchdog.log" 2>/dev/null || true
+    fi
 }
 
 nfqttl_daemon_log_rotate() {
@@ -43,6 +54,9 @@ nfqttl_daemon_log_rotate() {
         tail -n 200 "$NFQTTL_DAEMON_LOG" > "$NFQTTL_DAEMON_LOG.tmp" 2>/dev/null && mv "$NFQTTL_DAEMON_LOG.tmp" "$NFQTTL_DAEMON_LOG"
     fi
     chmod 600 "$NFQTTL_DAEMON_LOG" 2>/dev/null || true
+    if [ -d "$SD_LOG_DIR" ]; then
+        cp -f "$NFQTTL_DAEMON_LOG" "$SD_LOG_DIR/nfqttl_daemon_stdout.log" 2>/dev/null || true
+    fi
 }
 
 QUEUE_DROPPED=0
@@ -213,7 +227,7 @@ while [ "$_n" -lt 20 ] && IPT6 -t mangle -D FORWARD -j HL --hl-set 64; do _n=$((
 
 for _c in $CELL_IFS; do
     IPT4 -t mangle -D POSTROUTING -o "$_c" -j TTL --ttl-set 64
-    IPT4 -t mangle -D POSTROUTING -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    IPT4 -t mangle -D POSTROUTING -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
     IPT4 -t mangle -D PREROUTING -i "$_c" -m ttl --ttl-eq 1 -j DROP
     IPT4 -t mangle -D FORWARD -i "$_c" -m ttl --ttl-eq 1 -j DROP
     IPT4 -t filter -D OUTPUT -o "$_c" -p icmp --icmp-type time-exceeded -j DROP
@@ -223,7 +237,7 @@ done
 
 for _i in wlan+ ap+ swlan+ softap+ rndis+ usb+ bt-pan+ pan+ wlan1 wlan2; do
     IPT4 -t mangle -D POSTROUTING -o "$_i" -j TTL --ttl-set 64
-    IPT4 -t mangle -D POSTROUTING -o "$_i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    IPT4 -t mangle -D POSTROUTING -o "$_i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
     for _p in "udp --dport 123" "tcp --dport 853" "udp --dport 5353" "udp --dport 5355" "udp --dport 1900" "udp --dport 137:138"; do
         IPT4 -t mangle -D FORWARD -i "$_i" -p $_p -j DROP
         IPT6 -t mangle -D FORWARD -i "$_i" -p $_p -j DROP
@@ -360,14 +374,14 @@ if [ -f "$BLOCKLIST_FILE" ] && [ "$HAS_STR4" -eq 1 ]; then
 
         if [ "$DEBUG_MODE" -eq 1 ]; then
             IPT4 -t mangle -A nfqttlc -p tcp -m multiport --dports 80,443 \
-                 -m length --length 0:1200 -m string --string "$domain" --algo bm \
+                 -m length --length 0:1600 -m string --string "$domain" --algo bm \
                  -j LOG --log-prefix "NFQTTL-BLOCK: "
         fi
         IPT4 -t mangle -A nfqttlc -p tcp -m multiport --dports 80,443 \
-             -m length --length 0:1200 -m string --string "$domain" --algo bm -j DROP
+             -m length --length 0:1600 -m string --string "$domain" --algo bm -j DROP
         if [ "$HAS_STR6" -eq 1 ]; then
             IPT6 -t mangle -A nfqttlc -p tcp -m multiport --dports 80,443 \
-                 -m length --length 0:1200 -m string --string "$domain" --algo bm -j DROP
+                 -m length --length 0:1600 -m string --string "$domain" --algo bm -j DROP
         fi
     done < "$BLOCKLIST_FILE"
 fi
@@ -393,8 +407,8 @@ for _cmd in IPT4 IPT6; do
     "$_cmd" -t mangle -F nfqttlm
 done
 for _c in $CELL_IFS; do
-    IPT4 -t mangle -A nfqttlm -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-    IPT6 -t mangle -A nfqttlm -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    IPT4 -t mangle -A nfqttlm -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
+    IPT6 -t mangle -A nfqttlm -o "$_c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtud
 done
 IPT4 -t mangle -A POSTROUTING -j nfqttlm
 IPT6 -t mangle -A POSTROUTING -j nfqttlm
@@ -466,7 +480,7 @@ watchdog() {
             if nfqueue_bound; then
                 stable=$((stable + 1))
                 if [ "$stable" -ge 60 ] && [ "$restarts" -gt 0 ]; then
-                    wd_log "демон стабилен — сброс счтчика рестартов ($restarts -> 0)"
+                    wd_log "демон стабилен — сброс счётчика рестартов ($restarts -> 0)"
                     restarts=0
                     stable=0
                 fi

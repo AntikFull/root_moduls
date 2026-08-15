@@ -1,7 +1,7 @@
 id=nfqttl_ecubz
 name=Nfqttl eCubz
-version=v13.0
-versionCode=1300
+version=v15.0.1
+versionCode=1501
 author=eCubz (https://t.me/eCubz)
-description=Smart Multi-Engine TTL fix v13.0, Absolute IPv6 Hop Limit Lock & Zero-Leak Forward. Группа: https://t.me/module_ecubz
+description=Smart Multi-Engine TTL fix v15.0.1, Absolute IPv6 Hop Limit Lock & Zero-Leak Forward. Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/nfqttl_ecubz/update.json

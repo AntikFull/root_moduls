@@ -1,7 +1,12 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
 
-LOGFILE="$MODDIR/nfqttl_debug.log"
+LOG_DIR="$MODDIR/logs"
+SD_LOG_DIR="/sdcard/eCubz/logs/nfqttl_ecubz"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+mkdir -p "$SD_LOG_DIR" 2>/dev/null || true
+
+LOGFILE="$LOG_DIR/nfqttl_debug.log"
 exec > "$LOGFILE" 2>&1
 
 echo "=================================================================="
@@ -26,11 +31,11 @@ CURRENT_VER=$(grep '^version=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2)
 
 echo "Applied Active Version: $APPLIED_VER"
 if [ "$APPLIED_VER" != "Неизвестно" ] && [ -n "$CURRENT_VER" ] && ! echo "$APPLIED_VER" | grep -q "$CURRENT_VER"; then
-    echo "⚠️ [ВНИМАНИЕ] Версия на диске ($CURRENT_VER) отличается от активной в памяти ($APPLIED_VER)! ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА УСТРОЙСТВА!"
+    echo "[ВНИМАНИЕ] Версия на диске ($CURRENT_VER) отличается от активной в памяти ($APPLIED_VER)! ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА УСТРОЙСТВА!"
 fi
 
 if iptables -t mangle -L POSTROUTING -n -v 2>/dev/null | grep -q "!lo"; then
-    echo "⚠️ [ВНИМАНИЕ] В iptables висит устаревшее правило !lo — служба v7.5 еще не перезапущена! Сделайте reboot."
+    echo "[ВНИМАНИЕ] В iptables висит устаревшее правило !lo — служба v7.5 еще не перезапущена! Сделайте reboot."
 fi
 
 echo "Device Model: $(getprop ro.product.model)"
@@ -91,7 +96,7 @@ iptables -t mangle -L POSTROUTING -n -v 2>/dev/null
 NFQ_COUNT=$(iptables -t mangle -S 2>/dev/null | grep -c -- "-j nfqttl")
 NFQ_COUNT=${NFQ_COUNT:-0}
 if [ "$NFQ_COUNT" -gt 12 ]; then
-    echo "⚠️ [ВНИМАНИЕ] Обнаружено накопление дубликатов переходов nfqttl* ($NFQ_COUNT шт) в IPv4 mangle!"
+    echo "[ВНИМАНИЕ] Обнаружено накопление дубликатов переходов nfqttl* ($NFQ_COUNT шт) в IPv4 mangle!"
 fi
 
 echo "[IPv4 Mangle NFQTTL CHAINS]"
@@ -114,7 +119,7 @@ ip6tables -t mangle -L POSTROUTING -n -v 2>/dev/null
 IP6_NFQ_COUNT=$(ip6tables -t mangle -S 2>/dev/null | grep -c -- "-j nfqttl")
 IP6_NFQ_COUNT=${IP6_NFQ_COUNT:-0}
 if [ "$IP6_NFQ_COUNT" -gt 12 ]; then
-    echo "⚠️ [ВНИМАНИЕ] Обнаружено накопление дубликатов переходов nfqttl* ($IP6_NFQ_COUNT шт) в IPv6 mangle!"
+    echo "[ВНИМАНИЕ] Обнаружено накопление дубликатов переходов nfqttl* ($IP6_NFQ_COUNT шт) в IPv6 mangle!"
 fi
 
 echo "[IPv6 Mangle NFQTTL CHAINS]"
@@ -140,7 +145,8 @@ fi
 echo ""
 
 echo "--- 10. WATCHDOG & DAEMON ERROR LOGS ---"
-WD_LOG=/data/local/tmp/nfqttl_watchdog.log
+WD_LOG="$LOG_DIR/nfqttl_watchdog.log"
+[ ! -f "$WD_LOG" ] && WD_LOG=/data/local/tmp/nfqttl_watchdog.log
 if [ -f "$WD_LOG" ]; then
     tail -n 20 "$WD_LOG"
 else
@@ -157,3 +163,6 @@ echo " Deep Diagnostic Report Complete: $LOGFILE"
 echo "=================================================================="
 
 chmod 600 "$LOGFILE" 2>/dev/null || true
+if [ -d "$SD_LOG_DIR" ]; then
+    cp -f "$LOGFILE" "$SD_LOG_DIR/nfqttl_debug.log" 2>/dev/null || true
+fi

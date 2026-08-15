@@ -3,7 +3,7 @@ SKIPUNZIP=0
 ui_print " "
 ui_print " ******************************* "
 ui_print " *  Magisk Module Nfqttl eCubz   * "
-ui_print " *         Version v13.0        * "
+ui_print " *        Version v15.0.1       * "
 ui_print " ******************************* "
 ui_print " "
 
