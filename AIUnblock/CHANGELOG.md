@@ -1,3 +1,7 @@
+# Версия v2.5.4
+
+- Добавлен домен веб-портала Google AI разработчиков (`ai.google.dev`) в sni_routes.conf.
+
 # Версия v2.5.3
 
 - Проведён полный аудит sni_routes.conf: удалены сторонние CDN домены картинок/аватарок (lh3..lh6), сервисы Google Play (play.googleapis.com, play-lh) и отладочные клиенты.
