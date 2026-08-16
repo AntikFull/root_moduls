@@ -26,7 +26,7 @@
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
 | **[zapret2-android](./zapret2-android)** | `v3.2.13` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + AmneziaWG Cloudflare WARP. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
-| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v5.4.2` | Умное отключение рекламных и аналитических служб/ресиверов в любых приложениях (HyperOS/MIUI, RuStore, Яндекс, Google) штатными средствами Package Manager без декомпиляции APK. | Magisk 20.4+ / KernelSU / APatch |
+| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v5.5.0` | Комплексная блокировка рекламы, аналитики и трекеров + нативный Zygisk Auto-Collapse для автоматического схлопывания пустых рекламных рамок без LSPosed. | Magisk 20.4+ / KernelSU / APatch |
 | **[AIUnblock](./AIUnblock)** | `v2.4.8` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch |
 | **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.0.2` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек для обхода ограничений сотовых операторов (МТС, Мегафон, Билайн, Tele2) на раздачу интернета. | Magisk / KernelSU / APatch |
 | **[alice-bt-launcher](./alice-bt-launcher)** | `v1.1.0` | Автоматический фоновый запуск и контроль процессов голосового ассистента Алиса AI при подключении Bluetooth-наушников или гарнитуры. | Magisk / KernelSU / APatch |
@@ -49,8 +49,8 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 1. **[zapret2-android](./zapret2-android) (v3.2.13)**
    - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight AmneziaWG Cloudflare WARP.
    - Restores YouTube 4K playback, Discord voice/media, and blocked web resources directly in the kernel netfilter. Zero battery drain compared to classic VPNs. Full hotspot/tethering support.
-2. **[analytics_ads_disabler](./analytics_ads_disabler) (v5.4.2)**
-   - Systemwide native component disabler (disables ads, trackers, and telemetry `Service`/`Receiver` components via Android Package Manager).
+2. **[analytics_ads_disabler](./analytics_ads_disabler) (v5.5.0)**
+   - Systemwide native component disabler + built-in native Zygisk Auto-Collapse engine for zero-touch ad frame hiding without LSPosed.
    - Cleans vendor bloatware (HyperOS/MIUI, OEM analytics) and 3rd-party tracking without modifying APK signatures or wasting CPU cycles.
 3. **[AIUnblock](./AIUnblock) (v2.4.8)**
    - Smart transparent routing for AI apps (ChatGPT, Google Gemini, Claude, Grok, NotebookLM, Perplexity) without tunneling full device traffic.
@@ -66,7 +66,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 | Модуль / Module | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- |
 | **zapret2-android v3.2.13** | [zapret2-android_v3.2.13_3133.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v3.2.13_3133.zip) | ~24 MB |
-| **analytics_ads_disabler v5.4.2** | [analytics_ads_disabler_v5.4.2_5421.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v5.4.2_5421.zip) | ~98 KB |
+| **analytics_ads_disabler v5.5.0** | [analytics_ads_disabler_v5.5.0_5500.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v5.5.0_5500.zip) | ~435 KB |
 | **AIUnblock v2.4.8** | [AIUnblock_v2.4.8_248.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v2.4.8_248.zip) | ~9.9 MB |
 | **nfqttl_ecubz v15.0.2** | [nfqttl_ecubz_v15.0.2_1502.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/nfqttl_ecubz_v15.0.2_1502.zip) | ~80 KB |
 | **alice-bt-launcher v1.1.0** | [alice-bt-launcher_v1.1.0_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/alice-bt-launcher_v1.1.0_110.zip) | ~7.5 KB |

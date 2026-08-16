@@ -1,4 +1,14 @@
-# Список изменений Analytics & Ads Disabler v5.4.2 (5420)
+# Список изменений Analytics & Ads Disabler v5.5.0 (5500)
+
+## v5.5.0
+
+- **Встроенный нативный Zygisk-движок Auto-Collapse (`zygisk/*.so` + `aad_core.dex`)**:
+  - Полная интеграция нативного C++ Zygisk-перехватчика в корень модуля (`arm64-v8a.so`, `armeabi-v7a.so`, `x86.so`, `x86_64.so`).
+  - Автоматическое схлопывание пустых рекламных рамок и контейнеров (AdMob, Yandex, MAX, Unity, ironSource, myTarget, RuStore, Meta, InMobi, BidMachine и др.) до `0x0 (View.GONE)` при запуске приложений.
+  - 100% автономность: не требует установки LSPosed, отдельных APK-компаньонов или ручного выбора приложений в списках.
+  - Динамический перехват добавления View через `OnHierarchyChangeListener` и `OnGlobalLayoutListener`.
+- **Исправление генерации меток времени моста данных**:
+  - Переход на `aad_epoch_ms` (Unix Epoch timestamp в миллисекундах) вместо `uptime`.
 
 ## v5.4.2
 

@@ -531,6 +531,11 @@ set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/log_mirror.sh" 0 0 0755
 set_perm "$MODPATH/rule_updater.sh" 0 0 0755
 
+if [ -d "$MODPATH/zygisk" ]; then
+  set_perm_recursive "$MODPATH/zygisk" 0 0 0755 0644
+  ui_print "- Zygisk Native Engine: active (Auto-Collapse Ad Frames)"
+fi
+
 ui_print " "
 ui_print "- Installation complete. Compatibility profile saved."
 ui_print "- Install diagnostics: $INSTALL_DIAG (mirrored: $SDCARD_INSTALL_DIAG)"

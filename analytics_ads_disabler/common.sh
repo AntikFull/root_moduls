@@ -182,6 +182,12 @@ aad_now_ms() {
     echo $((_aad_sec * 1000))
 }
 
+aad_epoch_ms() {
+    _aem_sec=$(date +%s 2>/dev/null)
+    case "$_aem_sec" in ''|*[!0-9]*) _aem_sec=0 ;; esac
+    echo $((_aem_sec * 1000))
+}
+
 aad_elapsed_ms() {
     _aad_start="$1"; _aad_end="$2"
     case "$_aad_start:$_aad_end" in *[!0-9:]*|'') echo 0 ;; *) echo $((_aad_end - _aad_start)) ;; esac
@@ -737,7 +743,7 @@ aad_export_xposed_targets() {
     }
     _axt_env=$(aad_detect_xposed 2>/dev/null); [ -n "$_axt_env" ] || _axt_env="none"
 
-    awk -F'|' -v stamp="$(aad_now_ms)" -v version="$MODULE_VERSION" -v env="$_axt_env" \
+    awk -F'|' -v stamp="$(aad_epoch_ms)" -v version="$MODULE_VERSION" -v env="$_axt_env" \
         -v listout="$_axt_list" '
         function esc(v) {gsub(/\\/,"\\\\",v); gsub(/"/,"\\\"",v); return v}
         function addval(arrname, key, val,   cur, sep) {
@@ -1459,7 +1465,7 @@ list_all_package_state() {
         list_packages_for_user "$user" | while IFS='|' read -r pkg vc; do
             [ -n "$pkg" ] && echo "$user|$pkg|${vc:-0}"
         done
-    done
+    done | awk -F'|' '!seen[$1,$2]++'
 }
 
 list_all_installed_package_keys() {
@@ -1606,6 +1612,11 @@ restore_original_state() {
     [ -z "$original" ] && original=default
     if set_component_state_smart "$user" "$comp" "$original"; then
         log "RESTORE u$user: $comp -> $original"
+        remove_state_record "$user" "$comp"
+        return 0
+    fi
+    if [ "${CAP_LAST_STATE_NONEXISTENT:-0}" = "1" ]; then
+        log "RESTORE-DROP u$user: $comp not in package; dropped obsolete record"
         remove_state_record "$user" "$comp"
         return 0
     fi
@@ -1894,25 +1905,14 @@ apk_parse_unzip_listing() {
 
 apk_list_entries_readonly() {
     apk="$1"
-    _ale_out=""
     if command -v unzip >/dev/null 2>&1; then
-        _ale_out=$(unzip -Z1 "$apk" 2>/dev/null)
-        if [ -n "$_ale_out" ]; then
-            printf '%s\n' "$_ale_out"
+        if unzip -Z1 "$apk" 2>/dev/null; then
             return 0
         fi
-        _ale_out=$(unzip -l "$apk" 2>/dev/null | apk_parse_unzip_listing)
-        if [ -n "$_ale_out" ]; then
-            printf '%s\n' "$_ale_out"
-            return 0
-        fi
+        unzip -l "$apk" 2>/dev/null | apk_parse_unzip_listing && return 0
     fi
     if aad_have_bb; then
-        _ale_out=$(aad_bb unzip -l "$apk" 2>/dev/null | apk_parse_unzip_listing)
-        if [ -n "$_ale_out" ]; then
-            printf '%s\n' "$_ale_out"
-            return 0
-        fi
+        aad_bb unzip -l "$apk" 2>/dev/null | apk_parse_unzip_listing && return 0
     fi
     return 1
 }

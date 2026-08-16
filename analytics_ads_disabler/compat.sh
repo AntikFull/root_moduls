@@ -690,13 +690,13 @@ cap_query_component_override_state() {
     pkg=${comp%%/*}; cls=${comp#*/}
     case "$cls" in .*) full_cls="$pkg$cls" ;; *) full_cls="$cls" ;; esac
     if command -v dumpsys >/dev/null 2>&1; then
-        dump=$(dumpsys package "$pkg" 2>/dev/null)
+        _cq_cmd="dumpsys package"
     elif command -v cmd >/dev/null 2>&1; then
-        dump=$(cmd package dump "$pkg" 2>/dev/null)
+        _cq_cmd="cmd package dump"
     else
-        dump=$(pm dump "$pkg" 2>/dev/null)
+        _cq_cmd="pm dump"
     fi
-    state=$(printf '%s\n' "$dump" | awk -v uid="$user" -v full="$full_cls" -v short="$cls" '
+    state=$($_cq_cmd "$pkg" 2>/dev/null | awk -v uid="$user" -v full="$full_cls" -v short="$cls" '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
         /^[ \t]*User [0-9]+:/ {
             line=$0; gsub(/^[ \t]*/, "", line)
@@ -965,6 +965,10 @@ cap_exec_state_candidate() {
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$actual_user" "$target")
     command -v log_cmd_exec >/dev/null 2>&1 && log_cmd_exec "$cmd_text" "$out" "$rc"
     command -v aad_package_dump_invalidate >/dev/null 2>&1 && aad_package_dump_invalidate "${target%%/*}"
+    if printf '%s\n' "$out" | grep -Eiq 'does not exist in|Component class .* does not exist|Unknown component|No component found'; then
+        CAP_LAST_STATE_NONEXISTENT=1
+        return 1
+    fi
     cap_action_ok "$rc" "$out" || return 1
     cap_component_state_matches "$user" "$target" "$expected" || return 1
     return 0
@@ -973,6 +977,7 @@ cap_exec_state_candidate() {
 cap_set_component_state() {
     user="$1"; target="$2"; state="$3"
     [ -z "$state" ] && state="default"
+    CAP_LAST_STATE_NONEXISTENT=0
     case "$state" in
         enabled) verb="enable" ;;
         disabled) verb="disable" ;;
@@ -983,6 +988,7 @@ cap_set_component_state() {
         cap_exec_state_candidate "$CAP_PM_LEARNED_DISABLE_BACKEND" "$verb" \
             "${CAP_PM_LEARNED_DISABLE_HAS_USER:-1}" "${CAP_PM_LEARNED_DISABLE_EXEC:-direct}" \
             "$user" "$target" "$state" "${CAP_PM_LEARNED_DISABLE_USER_TOKEN:-numeric}" && return 0
+        [ "${CAP_LAST_STATE_NONEXISTENT:-0}" = "1" ] && return 1
         command -v log >/dev/null 2>&1 && log "WRITE-TRANSPORT learned backend failed for restore state=$state u$user: $target; trying restore cascade."
     fi
 
