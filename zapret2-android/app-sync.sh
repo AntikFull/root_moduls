@@ -98,6 +98,27 @@ EXCLUDE_UIDS=$(get_uids "$EXCLUDE_LIST" 0)
 [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -S ZAPRET2_MANGLE >/dev/null 2>&1 && "$IP6T" -w 5 -t mangle -F ZAPRET2_MANGLE >/dev/null 2>&1 || true
 [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -S ZAPRET2_FILTER >/dev/null 2>&1 && "$IP6T" -w 5 -t filter -F ZAPRET2_FILTER >/dev/null 2>&1 || true
 
+WARP_UIDS=$(printf '%s\n%s\n' "$(get_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
+
+# Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
+"$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN >/dev/null 2>&1 || true
+[ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN >/dev/null 2>&1 || true
+[ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN >/dev/null 2>&1 || true
+
+for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
+  "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+  "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+done
+
+for uid in $WARP_UIDS; do
+  case "$uid" in ''|0|*[!0-9]*) continue ;; esac
+  "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+done
+
 add4_nfq() { "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE "$@" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 >/dev/null 2>&1; }
 add4_mark() {
   [ "$STRATEGY_EFFECTIVE" = SMART_NATIVE ] || return 0

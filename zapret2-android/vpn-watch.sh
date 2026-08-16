@@ -189,9 +189,15 @@ while :; do
       # изменения сетевой роли/default upstream, а не на каждый vendor event.
       [ "$AUTO_SELECT_ENABLED" = 1 ] && [ -x "$MODDIR/auto-select.sh" ] && \
         sh "$MODDIR/auto-select.sh" schedule >/dev/null 2>&1 || true
+      [ "${ENABLE_WARP:-0}" = "1" ] && [ -x "$MODDIR/warp-tunnel.sh" ] && \
+        sh "$MODDIR/warp-tunnel.sh" sync >/dev/null 2>&1 || true
       last_auto_check=$now
     fi
     [ "$retrying" = 1 ] && need_apply=1
+  fi
+
+  if [ "${ENABLE_WARP:-0}" = "1" ] && [ -x "$MODDIR/warp-tunnel.sh" ]; then
+    sh "$MODDIR/warp-tunnel.sh" watchdog >/dev/null 2>&1 || true
   fi
 
   if [ "$need_apply" = 0 ] && [ $((now - last_verify)) -ge "$VPN_VERIFY_INTERVAL" ] 2>/dev/null; then

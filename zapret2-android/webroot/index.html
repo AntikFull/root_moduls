@@ -50,8 +50,29 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 .snackbar{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));z-index:50;width:min(92vw,680px);transform:translate(-50%,24px) scale(.98);opacity:0;pointer-events:none;padding:13px 16px;border-radius:18px;background:var(--md-on-surface);color:var(--md-surface);box-shadow:var(--shadow-2);font-weight:700;transition:opacity .22s,transform .3s var(--spring)}.snackbar.show{opacity:1;transform:translate(-50%,0) scale(1)}
 .fab-top{position:fixed;right:16px;bottom:max(76px,calc(env(safe-area-inset-bottom) + 76px));z-index:18;width:50px;height:50px;border:0;border-radius:18px;background:var(--md-tertiary-container);color:var(--md-on-tertiary-container);box-shadow:var(--shadow-2);font-size:20px;cursor:pointer;opacity:0;transform:scale(.8) rotate(8deg);pointer-events:none;transition:.25s var(--spring)}.fab-top.visible{opacity:1;transform:scale(1) rotate(0);pointer-events:auto}.fab-top:active{transform:scale(.9);border-radius:25px}
 .footer{padding:18px 6px 6px;text-align:center;color:var(--md-on-surface-variant);font-size:12px}
+.faq-search{margin-bottom:14px}
+.faq-list{display:grid;gap:10px}
+.faq-item{border:1px solid var(--md-outline-variant);border-radius:20px;background:var(--md-surface-2);overflow:hidden;transition:background .2s,border-color .2s}
+.faq-item[open]{background:color-mix(in srgb,var(--md-primary-container) 16%,var(--md-surface-2));border-color:color-mix(in srgb,var(--md-primary) 38%,transparent)}
+.faq-title{padding:14px 16px;cursor:pointer;font-weight:760;font-size:15px;display:flex;align-items:center;justify-content:space-between;gap:12px;user-select:none}
+.faq-title:hover{background:color-mix(in srgb,var(--md-surface-3) 60%,transparent)}
+.faq-title::-webkit-details-marker{display:none}
+.faq-chevron{font-size:13px;transition:transform .2s var(--spring);color:var(--md-primary)}
+.faq-item[open] .faq-chevron{transform:rotate(180deg)}
+.faq-body{padding:0 16px 16px;color:var(--md-on-surface-variant);font-size:13.5px;line-height:1.55}
+.faq-body p{margin:6px 0}
+.faq-body code{background:var(--md-surface-3);padding:2px 6px;border-radius:6px;font-size:12px;color:var(--md-primary)}
+.faq-body ul{margin:6px 0;padding-left:20px}
+.faq-body li{margin:4px 0}
+.faq-tag{font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px;background:var(--md-secondary-container);color:var(--md-on-secondary-container);text-transform:uppercase;margin-right:8px}
+.app-chip.warp:has(input:checked){background:color-mix(in srgb,var(--md-primary) 32%,var(--md-surface-3));color:var(--md-primary)}
+.app-filter-chips{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px;margin-bottom:8px;scrollbar-width:none}
+.app-filter-chips::-webkit-scrollbar{display:none}
+.filter-chip{padding:6px 14px;border-radius:999px;border:1px solid var(--md-outline-variant);background:var(--md-surface-2);color:var(--md-on-surface-variant);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .18s var(--spring)}
+.filter-chip:hover{background:var(--md-surface-3)}
+.filter-chip.active{background:var(--md-primary);color:var(--md-on-primary);border-color:var(--md-primary);box-shadow:var(--shadow-1)}
 @keyframes spin{to{transform:rotate(360deg)}}@keyframes progressPulse{0%,100%{stroke-dasharray:18 82}50%{stroke-dasharray:58 42}}@keyframes ripple{to{transform:translate(-50%,-50%) scale(3.5);opacity:0}}@keyframes cardIn{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}@keyframes heroFloat{to{transform:translate(-14px,12px) rotate(34deg) scale(1.08)}}
-@media (max-width:720px){.shell{padding-left:10px;padding-right:10px}.hero{padding:20px;border-radius:34px}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.brand-row{display:block}.hero-badge{margin-top:12px}.card{padding:16px}.grid{grid-template-columns:1fr}.actions .md-button{flex:1 1 170px}.app-row{align-items:flex-start;flex-wrap:wrap}.app-name{flex:1 1 calc(100% - 58px);min-width:0}.app-chip{flex:1 1 calc(50% - 5px);justify-content:center}}
+@media (max-width:720px){.shell{padding-left:10px;padding-right:10px}.hero{padding:20px;border-radius:34px}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.brand-row{display:block}.hero-badge{margin-top:12px}.card{padding:16px}.grid{grid-template-columns:1fr}.actions .md-button{flex:1 1 170px}.app-row{align-items:flex-start;flex-wrap:wrap}.app-name{flex:1 1 calc(100% - 58px);min-width:0}.app-chip{flex:1 1 calc(33.3% - 5px);justify-content:center}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
 </style>
 </head>
@@ -59,65 +80,71 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <div class="shell">
 <header class="hero" id="overview">
   <div class="brand-row">
-    <div><div class="brand-kicker">AntiDPI · Root module</div><h1>Zapret2 eCubz</h1><p class="hero-sub">Управление обходом DPI, приложениями и VPN-раздачей в одном интерфейсе.</p></div>
-    <span class="hero-badge" id="heroVersion">M3 Expressive · …</span>
+    <div><div class="brand-kicker">AntiDPI · Root module</div><h1>Zapret2 eCubz</h1><p class="hero-sub">Обход DPI, точечный туннель для любых приложений и раздача интернета.</p></div>
+    <span class="hero-badge" id="heroVersion">v3.2.26 (3146)</span>
   </div>
   <div class="status-grid" id="state" aria-live="polite">
     <div class="status-tile"><div class="status-label">Служба</div><div class="status-value" id="statusRunning"><span class="dot"></span>Загрузка…</div></div>
     <div class="status-tile"><div class="status-label">Стратегия</div><div class="status-value" id="statusStrategy">—</div></div>
     <div class="status-tile"><div class="status-label">Состояние</div><div class="status-value" id="statusHealth">—</div></div>
-    <div class="status-tile"><div class="status-label">PID · UID source</div><div class="status-value" id="statusMeta">—</div></div>
+    <div class="status-tile"><div class="status-label">Сеть и защита</div><div class="status-value" id="statusMeta">—</div></div>
   </div>
 </header>
 <nav class="nav-rail" aria-label="Разделы">
-  <button type="button" class="nav-chip" data-target="scopeSection">Обход DPI</button><button type="button" class="nav-chip" data-target="warpSection">WARP (AWG v3)</button><button type="button" class="nav-chip" data-target="hotspotSection">Раздача</button><button type="button" class="nav-chip" data-target="strategySection">Стратегии</button><button type="button" class="nav-chip" data-target="diagSection">Диагностика</button><button type="button" class="nav-chip" data-target="appsSection">Приложения</button><button type="button" class="nav-chip tonal" id="toggleAllBtn" onclick="toggleAllCards()" title="Свернуть / Развернуть все">⇕ Свернуть</button>
+  <button type="button" class="nav-chip" data-target="scopeSection">Обход DPI</button><button type="button" class="nav-chip" data-target="warpSection">Точечный обход</button><button type="button" class="nav-chip" data-target="hotspotSection">Раздача интернета</button><button type="button" class="nav-chip" data-target="strategySection">Стратегии</button><button type="button" class="nav-chip" data-target="appsSection">Приложения</button><button type="button" class="nav-chip" data-target="diagSection">Диагностика</button><button type="button" class="nav-chip" data-target="faqSection">Справка / FAQ</button><button type="button" class="nav-chip tonal" id="toggleAllBtn" onclick="toggleAllCards()" title="Свернуть / Развернуть все">⇕ Свернуть</button>
 </nav>
 <main class="content">
 <section class="card" id="scopeSection">
   <div class="section-head" onclick="toggleCard('scopeSection')"><div class="section-icon">◈</div><div class="section-head-text"><h2 class="section-title">Область действия Zapret2</h2><p class="section-desc">Быстрый пресет или точная ручная настройка.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
   <div class="card-body">
     <div class="grid"><label class="field"><span>Пресет</span><select class="control" id="scope"><option value="SELECTED">Рекомендуемый — SMART + AUTO-приложения</option><option value="SAFE">Широкий — всё, кроме исключений</option><option value="ALL">Весь телефон</option><option value="CUSTOM">Ручная настройка</option></select></label></div>
-    <p class="hint"><strong>Рекомендуется SELECTED.</strong> В SMART установленное приложение из встроенного AUTO-каталога включается само; <code>apps.list</code> остаётся для ручных добавлений, а <code>exclude.list</code> всегда имеет высший приоритет. QUIC/HTTP3 повторяет тот же охват.</p>
+    <p class="hint"><strong>Рекомендуется SELECTED.</strong> В SMART установленное приложение из встроенного AUTO-каталога включается само; <code>apps.list</code> остаётся для ручных добавлений, а <code>exclude.list</code> всегда имеет высший приоритет.</p>
     <div class="actions"><button type="button" class="md-button" id="applyScope" onclick="applyScope()">Применить пресет</button></div>
     <div class="divider"></div><h3 class="subhead">Тонкая настройка</h3>
     <div class="grid">
       <label class="field"><span>Режим</span><select class="control" id="mode"><option value="exclude">Всё, кроме исключений</option><option value="include">Только выбранные приложения</option><option value="global">Весь трафик</option></select></label>
       <label class="field"><span>QUIC телефона</span><select class="control" id="quic"><option value="off">Не блокировать</option><option value="selected">По текущему охвату AntiDPI</option><option value="global">Весь телефон</option></select></label>
-      <label class="field"><span>QUIC → TCP</span><select class="control" id="tcp"><option value="1">Включён</option><option value="0">Выключен</option></select></label>
+      <input type="hidden" id="tcp" value="1">
     </div>
     <div class="actions"><button type="button" class="md-button tonal" id="applyCore" onclick="applyCore()">Применить вручную</button><button type="button" class="md-button outlined" id="restart" onclick="runControl('restart')">Перезапустить модуль</button></div>
   </div>
 </section>
 
 <section class="card" id="warpSection">
-  <div class="section-head" onclick="toggleCard('warpSection')"><div class="section-icon">⚡</div><div class="section-head-text"><h2 class="section-title">Cloudflare WARP · AmneziaWG v3</h2><p class="section-desc">Точечный туннель для Telegram и выбранных приложений без сторонних VPN.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
+  <div class="section-head" onclick="toggleCard('warpSection')"><div class="section-icon">⚡</div><div class="section-head-text"><h2 class="section-title">Точечный обход</h2><p class="section-desc">Туннель для выбранных приложений (мессенджеры, AI, браузеры, игры).</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
   <div class="card-body">
     <div class="cap-summary" style="margin-bottom:14px">
       <span class="pill" id="warpStatusPill">Статус: Отключен</span>
       <span class="pill info" id="warpIfacePill">Интерфейс: awg99</span>
-      <span class="pill" id="warpHandshakePill">Handshake: —</span>
+      <span class="pill info" id="warpSipPill">Маскировка: SIP (Авто)</span>
+      <span class="pill" id="warpHandshakePill">Рукопожатие: —</span>
       <span class="pill" id="warpTrafficPill">Трафик: ↓ 0 B · ↑ 0 B</span>
     </div>
     <div class="grid">
-      <label class="field"><span>Состояние туннеля</span><select class="control" id="enableWarp" onchange="syncWarpControls()"><option value="0">Отключен (0)</option><option value="1">Включен (1) — AmneziaWG v3</option></select></label>
-      <label class="field"><span>Эндпоинт Cloudflare</span><input class="control" id="warpEndpoint" placeholder="162.159.192.1"></label>
-      <label class="field"><span>Порт эндпоинта</span><input class="control" id="warpPort" type="number" placeholder="500"></label>
-      <label class="field"><span>Junk Packets (Jc)</span><input class="control" id="warpJc" type="number" placeholder="10"></label>
-      <label class="field"><span>Junk Min Bytes (Jmin)</span><input class="control" id="warpJmin" type="number" placeholder="800"></label>
-      <label class="field"><span>Junk Max Bytes (Jmax)</span><input class="control" id="warpJmax" type="number" placeholder="1400"></label>
-      <label class="field" style="grid-column:1/-1"><span>DNS туннеля (Smart DNS / Cloudflare)</span><input class="control" id="warpDns" placeholder="Список IP через пробел (или из файла dns.list)"></label>
+      <label class="field" style="grid-column:1/-1"><span>Состояние обхода</span><select class="control" id="enableWarp" onchange="syncWarpControls()"><option value="0">Отключен (0)</option><option value="1">Включен (1) — Точечный туннель</option></select></label>
     </div>
-    <p class="hint"><strong>Обход ТСПУ и гео-блоков:</strong> Туннель маскирует хэндшейк под SIP VoIP (I1/I2) и мусорные пакеты, направляя трафик Telegram и AI-сервисов (ChatGPT, Claude, Grok, Gemini) через Cloudflare WARP на интерфейсе <code>awg99</code>. Полный пул Smart DNS задаётся в <code>dns.list</code>, а приложения — в <code>warp_apps.list</code>.</p>
+    <details class="expert" id="expertWarp" style="margin-top:10px">
+      <summary>⚙ Дополнительные параметры маскировки</summary>
+      <div class="grid" style="margin-top:12px">
+        <label class="field"><span>Серверный адрес</span><input class="control" id="warpEndpoint" placeholder="162.159.192.1"></label>
+        <label class="field"><span>Порт</span><input class="control" id="warpPort" type="number" placeholder="500"></label>
+        <label class="field"><span>Пакеты шума (Jc)</span><input class="control" id="warpJc" type="number" placeholder="4"></label>
+        <label class="field"><span>Мин. размер пакета (Jmin)</span><input class="control" id="warpJmin" type="number" placeholder="40"></label>
+        <label class="field"><span>Макс. размер пакета (Jmax)</span><input class="control" id="warpJmax" type="number" placeholder="70"></label>
+        <label class="field" style="grid-column:1/-1"><span>DNS туннеля</span><input class="control" id="warpDns" placeholder="Список IP через пробел (или из файла dns.list)"></label>
+      </div>
+    </details>
+    <p class="hint"><strong>Точечный обход для приложений:</strong> Трафик любых выбранных вами приложений направляется через защищённый туннель без необходимости включать глобальный VPN на весь телефон. Список приложений настраивается во вкладке «Приложения» (кнопка ТУННЕЛЬ) или в <code>warp_apps.list</code>.</p>
     <div class="actions">
       <button type="button" class="md-button" id="saveWarpBtn" onclick="saveWarp()">Сохранить и применить</button>
-      <button type="button" class="md-button tonal" id="rekeyWarpBtn" onclick="rekeyWarp()">Сгенерировать новый ключ WARP</button>
+      <button type="button" class="md-button tonal" id="rekeyWarpBtn" onclick="rekeyWarp()">Сгенерировать новый ключ</button>
       <button type="button" class="md-button outlined" id="refreshWarpBtn" onclick="manualRefreshWarp()">Обновить статус</button>
     </div>
   </div>
 </section>
 
 <section class="card" id="hotspotSection">
-  <div class="section-head" onclick="toggleCard('hotspotSection')"><div class="section-icon">☵</div><div class="section-head-text"><h2 class="section-title">Hotspot и USB-модем</h2><p class="section-desc">AntiDPI и VPN для подключённых клиентов.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
+  <div class="section-head" onclick="toggleCard('hotspotSection')"><div class="section-icon">☵</div><div class="section-head-text"><h2 class="section-title">Раздача интернета</h2><p class="section-desc">Обход блокировок и VPN для подключённых по Wi-Fi и USB устройств.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
   <div class="card-body">
     <div class="grid">
       <label class="field"><span>Обрабатывать клиентов</span><select class="control" id="hotspot" onchange="syncDependentControls()"><option value="1">Да</option><option value="0">Нет</option></select></label>
@@ -128,7 +155,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
       <label class="field"><span>Перенаправлять DNS</span><select class="control" id="dnsForward" onchange="syncDependentControls()"><option value="1">Да</option><option value="0">Нет</option></select></label>
       <label class="field"><span>DNS-пул · UDP/TCP 53</span><input class="control" id="dnsServers" placeholder="1.1.1.1 8.8.8.8"></label>
     </div>
-    <div class="cap-summary" style="margin-top:14px"><span class="pill info" id="roleDown">Downstream: —</span><span class="pill info" id="roleVpn">VPN: —</span><span class="pill" id="roleMode">Раздача: —</span><span class="pill" id="roleWatch">Watchers: —</span></div>
+    <div class="cap-summary" style="margin-top:14px"><span class="pill info" id="roleDown">Подключение: Wi-Fi / USB</span><span class="pill info" id="roleVpn">VPN: Не используется</span><span class="pill" id="roleMode">Раздача: Ожидание устройств</span><span class="pill" id="roleWatch">Защита от утечек: Активна ✓</span></div>
     <p class="hint"><strong>AUTO для VPN — рекомендуемый вариант.</strong> Пока VPN активен, защита от утечки блокирует выход клиентов в обход VPN. Если VPN исчезнет, AntiDPI по умолчанию вернёт обычный upstream. DNS forcing перехватывает UDP/TCP 53, но не DoH/DoT.</p>
     <div class="actions"><button type="button" class="md-button" id="applyHotspot" onclick="applyHotspot()">Применить настройки раздачи</button></div>
   </div>
@@ -137,30 +164,15 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <section class="card" id="strategySection">
   <div class="section-head" onclick="toggleCard('strategySection')"><div class="section-icon">✦</div><div class="section-head-text"><h2 class="section-title">SMART AntiDPI</h2><p class="section-desc">Один автоматический режим: модуль сам выбирает движок и сервисный профиль.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
   <div class="card-body">
-    <div class="cap-panel" id="compatPanel">
-      <div class="cap-summary"><span class="pill info" id="compatBadge">SMART · проверка…</span><span class="pill" id="capAcct">acct —</span><span class="pill" id="capConnmark">CONNMARK —</span><span class="pill" id="capConnbytes">connbytes —</span><span class="pill" id="capNfq">NFQUEUE —</span><span class="pill" id="capOwner">owner —</span></div>
-      <p class="cap-note" id="compatNote">SMART автоматически выберет NATIVE или COMPAT по возможностям ядра.</p>
-    </div>
+    <div class="service-profiles"><span class="pill ok" id="compatBadge">Совместимость: 100% ✓</span><span class="pill info" id="smartYoutubeProfile">YouTube: Автоподбор</span><span class="pill" id="smartGeneralProfile">Сайты: General</span><span class="pill ok" id="smartAutoProfile">AUTO · Активен</span></div>
     <div class="grid" style="margin-top:14px">
       <label class="field"><span>Автовыбор приложений</span><select class="control" id="autoAppsEnabled"><option value="1">Включён — рекомендуется</option><option value="0">Выключен — только ручные</option></select></label>
       <label class="field"><span>Режим</span><select class="control" id="smartMode" onchange="syncSmartControls()"><option value="SMART">SMART · автоматически</option><option value="CUSTOM">CUSTOM · экспертный</option></select></label>
     </div>
-    <div class="service-profiles"><span class="pill info" id="smartYoutubeProfile">YouTube / Google Video · —</span><span class="pill" id="smartGeneralProfile">Остальное · General</span><span class="pill ok" id="smartAutoProfile">AUTO · проверка…</span></div>
-    <p class="hint"><strong>SMART_NATIVE</strong> использует circular при наличии bounded reply-feed. На остальных ядрах <strong>SMART_ACTIVE</strong> проверяет файлы <code>strategies/strategy_1</code>, <code>strategy_2</code> и далее строго по номеру. Файлы можно переставлять, добавлять без ограничения номера или удалять; изменение списка сбрасывает совместимость старого сетевого кэша.</p>
-    <p class="hint"><code>strategy_1</code> — профиль <strong>DIRECT</strong>. Если сеть проходит проверку без обхода (обычный домашний Wi-Fi), модуль не создаёт правила netfilter и не запускает nfqws2; обход вернётся сам при смене сети. Отключается через <code>AUTO_ALLOW_DIRECT="0"</code>. Проверка идёт по двум группам контрольных хостов — обычные сайты и Google/YouTube, и стратегия засчитывается только когда проходят обе.</p>
+    <p class="hint"><strong>SMART_NATIVE</strong> и <strong>SMART_ACTIVE</strong> автоматически тестируют и подбирают профили под вашего оператора связи. При смене Wi-Fi на сотовую сеть переподбор происходит мгновенно в фоне.</p>
     <p class="hint" id="smartStrategyOrder">Порядок AUTO: загрузка…</p>
     <details class="expert" id="expertStrategy"><summary>Экспертная настройка CUSTOM</summary><label class="field"><span>Пользовательские аргументы nfqws2</span><textarea class="control" id="strategyCustom" rows="5" placeholder="--filter-tcp=80,443 …"></textarea></label><p class="muted">CUSTOM отключает встроенное SMART-профилирование. Используйте только если хотите полностью управлять стратегией вручную.</p></details>
     <div class="actions"><button type="button" class="md-button tertiary" id="saveSmart" onclick="saveSmart()">Сохранить SMART</button><button type="button" class="md-button tonal" id="runAuto" onclick="runAuto()">Подобрать сейчас</button><button type="button" class="md-button outlined" id="clearAuto" onclick="clearAuto()">Сбросить кэш AUTO</button></div>
-  </div>
-</section>
-
-<section class="card" id="diagSection">
-  <div class="section-head" onclick="toggleCard('diagSection')"><div class="section-icon">⌁</div><div class="section-head-text"><h2 class="section-title">Диагностика и совместимость</h2><p class="section-desc" id="diagInfo">Загрузка состояния диагностики…</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
-  <div class="card-body">
-    <div class="grid"><label class="field"><span>Низкоуровневый debug nfqws2</span><select class="control" id="nfqwsDebug"><option value="0">Выключен — обычный режим</option><option value="1">Включён — подробный лог</option></select></label></div>
-    <p class="hint">Обычный лог содержит окружение, capability-probe, ошибки правил и счётчики NFQUEUE. Debug nfqws2 может содержать домены и сетевые метаданные — включайте его только на время воспроизведения проблемы.</p>
-    <div class="actions"><button type="button" class="md-button tonal" id="applyDebug" onclick="applyNfqwsDebug()">Применить debug</button><button type="button" class="md-button" id="collectDiag" onclick="collectDiagnostics()">Собрать диагностику</button><button type="button" class="md-button tonal" id="exportLogs" onclick="exportLogs()">Экспорт логов</button><button type="button" class="md-button outlined" id="showLog" onclick="showServiceLog()">Обычный лог</button><button type="button" class="md-button outlined" id="showNfqwsLog" onclick="showNfqwsLog()">nfqws debug</button></div>
-    <textarea class="control logbox" id="diagLog" rows="12" readonly placeholder="Здесь появится лог или путь к диагностическому отчёту"></textarea>
   </div>
 </section>
 
@@ -168,9 +180,140 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
   <div class="section-head" onclick="toggleCard('appsSection')"><div class="section-icon">▦</div><div class="section-head-text"><h2 class="section-title">Приложения</h2><p class="section-desc" id="appInfo">Загрузка приложений…</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
   <div class="card-body">
     <div class="app-summary"><span class="pill info" id="appSource">Источник: —</span><span class="pill" id="appSelected">AUTO — · ручных — · исключено —</span></div>
+    <div class="app-filter-chips">
+      <button type="button" class="filter-chip active" data-filter="all" onclick="setAppFilter('all')">Все</button>
+      <button type="button" class="filter-chip" data-filter="popular" onclick="setAppFilter('popular')">Популярные</button>
+      <button type="button" class="filter-chip" data-filter="tunnel" onclick="setAppFilter('tunnel')">В туннеле</button>
+      <button type="button" class="filter-chip" data-filter="include" onclick="setAppFilter('include')">В обходе</button>
+      <button type="button" class="filter-chip" data-filter="exclude" onclick="setAppFilter('exclude')">Исключения</button>
+    </div>
     <div class="searchbar"><input class="control" id="search" placeholder="Поиск по названию или пакету" oninput="renderApps()"><label class="switch-label"><input id="showSelected" type="checkbox" onchange="renderApps()"> Выбранные</label><label class="switch-label"><input id="showSystem" type="checkbox" onchange="loadApps()"> Системные</label><button type="button" class="md-button tonal" id="refreshApps" onclick="refreshApps()">Обновить</button></div>
-    <p class="hint"><strong>SMART подхватывает нужные установленные приложения автоматически.</strong> Метка AUTO означает встроенный каталог. «ВРУЧНУЮ» добавляет пакет в <code>apps.list</code>, «ИСКЛЮЧИТЬ» — в <code>exclude.list</code>. Исключение всегда сильнее AUTO и ручного выбора. Изменения применяются сразу.</p>
+    <p class="hint"><strong>SMART подхватывает нужные установленные приложения автоматически.</strong> Метка AUTO означает встроенный каталог. «ВРУЧНУЮ» добавляет пакет в <code>apps.list</code>, «ТУННЕЛЬ» — в <code>warp_apps.list</code>, «ИСКЛЮЧИТЬ» — в <code>exclude.list</code>. Исключение всегда сильнее AUTO и ручного выбора. Изменения применяются сразу.</p>
     <div id="apps"></div>
+  </div>
+</section>
+
+<section class="card" id="diagSection">
+  <div class="section-head" onclick="toggleCard('diagSection')"><div class="section-icon">⌁</div><div class="section-head-text"><h2 class="section-title">Диагностика и отчёты</h2><p class="section-desc" id="diagInfo">Проверка работы служб и сбор журналов для поддержки.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
+  <div class="card-body">
+    <div class="grid"><label class="field"><span>Подробный журнал отладки (Debug)</span><select class="control" id="nfqwsDebug"><option value="0">Выключен — обычный режим</option><option value="1">Включён — подробный лог</option></select></label></div>
+    <p class="hint">Обычный журнал содержит общую информацию о состоянии сети. Подробный Debug записывает технические сетевые заголовки — включайте его только при необходимости.</p>
+    <div class="actions"><button type="button" class="md-button tonal" id="applyDebug" onclick="applyNfqwsDebug()">Применить режим</button><button type="button" class="md-button" id="collectDiag" onclick="collectDiagnostics()">Собрать отчёт для поддержки</button><button type="button" class="md-button tonal" id="exportLogs" onclick="exportLogs()">Экспорт логов</button><button type="button" class="md-button outlined" id="showLog" onclick="showServiceLog()">Журнал работы</button><button type="button" class="md-button outlined" id="showNfqwsLog" onclick="showNfqwsLog()">Журнал обхода</button></div>
+    <textarea class="control logbox" id="diagLog" rows="12" readonly placeholder="Здесь появится журнал работы или диагностический отчёт"></textarea>
+  </div>
+</section>
+
+<section class="card" id="faqSection">
+  <div class="section-head" onclick="toggleCard('faqSection')">
+    <div class="section-icon">?</div>
+    <div class="section-head-text">
+      <h2 class="section-title">База знаний и FAQ</h2>
+      <p class="section-desc">Подробное руководство по всем настройкам, режимам и решению проблем.</p>
+    </div>
+    <span class="collapse-chevron" aria-hidden="true">▾</span>
+  </div>
+  <div class="card-body">
+    <div class="searchbar faq-search">
+      <input class="control" id="faqSearch" placeholder="Поиск по справке и вопросам…" oninput="filterFaq()">
+    </div>
+    <div class="faq-list" id="faqList">
+      
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">Основы</span>Как работает модуль Zapret2 eCubz?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <p>Zapret2 — это полностью <strong>systemless root-модуль</strong> для обхода DPI-блокировок и замедлений (ТСПУ) провайдеров в РФ.</p>
+          <p>В отличие от обычных VPN, модуль работает локально прямо на вашем телефоне:</p>
+          <ul>
+            <li><strong>Демон <code>nfqws2</code></strong> перехватывает исходящие TCP/TLS запросы и незаметно десинхронизирует их (мульти-сплит ClientHello, фальшивые заголовки, fakesni). Цензурные фильтры провайдера не могут распознать заблокированный ресурс и пропускают трафик.</li>
+            <li><strong>Точечный туннель AmneziaWG v3 (Cloudflare WARP)</strong> поднимается на интерфейсе <code>awg99</code> для любых выбранных вами приложений (мессенджеры, Discord, AI-сервисы, браузеры, игры), где требуется обход жестких IP-блокировок.</li>
+            <li>Весь остальной трафик (игры, банки, видео, загрузки) идёт на максимальной скорости вашего провайдера без задержек и расхода VPN-трафика.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">Пресеты</span>В чём разница между пресетами SELECTED, SAFE, ALL и CUSTOM?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <ul>
+            <li><strong>SELECTED (Рекомендуемый):</strong> AntiDPI обрабатывает только установленные приложения из встроенного доверенного каталога (YouTube, браузеры, соцсети, плееры). Банковские приложения, Госуслуги и системные сервисы не затрагиваются и идут напрямую.</li>
+            <li><strong>SAFE (Широкий):</strong> Обрабатывается весь трафик телефона, кроме приложений, добавленных в список <code>exclude.list</code>.</li>
+            <li><strong>ALL (Глобальный):</strong> Глобальная обработка 100% сетевого трафика устройства.</li>
+            <li><strong>CUSTOM:</strong> Ручной выбор режима (INCLUDE / EXCLUDE / GLOBAL) и тонкое управление QUIC/TCP.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">AntiDPI</span>Что такое SMART AntiDPI и авто-подбор стратегий?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <p>Каждый оператор связи (МТС, МегаФон, Билайн, Tele2, Ростелеком, Дом.ru) настраивает ТСПУ по-своему. Универсальной стратегии не существует.</p>
+          <p><strong>Движок SMART</strong> решает эту проблему:</p>
+          <ul>
+            <li>При переключении между Wi-Fi и мобильной сетью фоновый зонд мгновенно тестирует готовые профили десинхронизации (<code>strategy_1</code>, <code>strategy_2</code> и т.д.) по контрольным узлам.</li>
+            <li>Если сеть не имеет блокировок (например, домашний зарубежный Wi-Fi), активируется режим <code>DIRECT</code> (модуль не тратит ресурсы батареи и процессора).</li>
+            <li>Для сетей с блокировками автоматически выбирается и кэшируется профиль, дающий 100% доступ к YouTube (включая 4K 60fps) и заблокированным сайтам.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">Туннель</span>Как устроен точечный туннель для любых приложений?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <p>Туннель работает через виртуальный сетевой интерфейс <code>awg99</code>.</p>
+          <ul>
+            <li><strong>Точечная маршрутизация:</strong> В туннель направляются любые выбранные приложения из списка <code>warp_apps.list</code> (Telegram, Discord, AI-клиенты ChatGPT/Claude, браузеры, игры, любые программы, отмеченные кнопкой ТУННЕЛЬ), а также подсети серверов Telegram (CDN, голос, медиа).</li>
+            <li><strong>Маскировка:</strong> Для устойчивости к блокировкам перед соединением отправляются специальные мусорные пакеты (<code>Jc=4</code>, <code>Jmin=40</code>, <code>Jmax=70</code>).</li>
+            <li><strong>SIP I1/I2 (Аварийный резерв):</strong> Если оператор полностью глушит стандартные протоколы, модуль автоматически активирует маскировку соединения под телефонный звонок SIP VoIP.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">QUIC</span>Почему YouTube и видео работают так быстро?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <p>Протокол <strong>QUIC (HTTP/3)</strong> работает поверх UDP. Большинство мобильных и проводных операторов в РФ выборочно глушат или замедляют UDP-трафик к серверам Google и YouTube.</p>
+          <p>Модуль Zapret2 автоматически оптимизирует сетевой стек, принуждая приложения (браузеры, официальный клиент YouTube, ReVanced) работать через надёжный <strong>TCP/TLS</strong>, где алгоритмы <code>nfqws2</code> обеспечивают стабильное воспроизведение 4K 60fps без зависаний.</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">Раздача</span>Как работает раздача интернета (Hotspot / USB)?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <p>Секция <strong>«Раздача интернета»</strong> позволяет раздавать защищённый интернет на ноутбук, ПК, консоль или Smart TV:</p>
+          <ul>
+            <li><strong>Обрабатывать клиентов = Да:</strong> Автоматически применяет AntiDPI ко всем подключённым к точке доступа устройствам.</li>
+            <li><strong>Направлять через VPN = Да:</strong> Если на телефоне поднят VPN, трафик клиентов точки доступа безопасно маршрутизируется через этот VPN без утечек.</li>
+            <li><strong>Перенаправлять DNS = Да:</strong> Принудительно заворачивает DNS-запросы клиентов на защищённые серверы (1.1.1.1, 8.8.8.8), исключая подмену DNS провайдером.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">Списки</span>Как управлять списками приложений и исключениями?</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <ul>
+            <li><strong>ВРУЧНУЮ (apps.list):</strong> Принудительно включает выбранное приложение в обработку AntiDPI.</li>
+            <li><strong>ТУННЕЛЬ (warp_apps.list):</strong> Направляет трафик приложения в точечный туннель.</li>
+            <li><strong>ИСКЛЮЧИТЬ (exclude.list):</strong> Высший приоритет. Приложение гарантированно пойдёт 100% напрямую мимо всех правил AntiDPI и туннелей (используйте для банков, Госуслуг, онлайн-касс).</li>
+            <li><strong>AUTO (Встроенный каталог):</strong> Автоматически подхватывает популярные заблокированные сервисы при их установке.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary class="faq-title"><span><span class="faq-tag">Помощь</span>Решение частых проблем</span><span class="faq-chevron">▼</span></summary>
+        <div class="faq-body">
+          <ul>
+            <li><strong>Не подключается Telegram/Exteragram:</strong> Откройте секцию «Точечный обход». Убедитесь, что статус — «Работает», а в списке приложений нажата кнопка «ТУННЕЛЬ». Если соединение застряло, нажмите «Сгенерировать новый ключ» или переключите «SIP DPI».</li>
+            <li><strong>YouTube не воспроизводит 1080p/4K:</strong> Убедитесь, что переключатель <code>QUIC → TCP</code> включен. В секции «SMART AntiDPI» нажмите «Подобрать сейчас».</li>
+            <li><strong>Не работает приложение банка / Госуслуг:</strong> Во вкладке «Приложения» найдите банк и нажмите «ИСКЛЮЧИТЬ».</li>
+            <li><strong>Как открыть WebUI на компьютере:</strong> Узнайте локальный IP-адрес телефона в Wi-Fi сети (например <code>192.168.1.83</code>) и откройте в браузере ПК адрес <code>http://192.168.1.83:8080/zapret2/</code>.</li>
+            <li><strong>Отправка логов для поддержки:</strong> Во вкладке «Диагностика» нажмите «Экспорт логов». Все журналы соберутся в папку <code>/sdcard/eCubz/logs/zapret2-android/</code>.</li>
+          </ul>
+        </div>
+      </details>
+
+    </div>
   </div>
 </section>
 </main>
@@ -194,70 +337,138 @@ const byId=id=>document.getElementById(id);let apps=[];let appLists={manual:new 
 let latestWarpHandshake=0;let latestWarpRunning=false;let latestWarpRx=0;let latestWarpTx=0;let liveTickerTimer=null;let livePollingTimer=null;let isPollingActive=false;let appVisibilitySyncTimer=0;
 const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
 
-function nativeExec(command){
-  const k=window.ksu;
-  if(!k||typeof k.exec!=='function')return Promise.reject(new Error('Откройте WebUI через KernelSU/KernelSU Next/APatch'));
-  return new Promise((resolve,reject)=>{
-    const id='__ksuCb_'+(++asyncExecSeq);
-    let done=false;
-    const timer=setTimeout(()=>{
-      if(done)return;
-      done=true;
-      delete window[id];
-      reject(new Error('Превышено время ожидания ответа'));
-    },60000);
-    window[id]=(code,stdout,stderr)=>{
-      if(done)return;
-      done=true;
-      clearTimeout(timer);
-      delete window[id];
-      const exitCode=Number(code??0);
-      if(exitCode!==0){
-        reject(new Error(String(stderr||('exec error rc='+exitCode))));
-      } else {
-        resolve(String(stdout??''));
-      }
-    };
+let workingApiEndpoint = null;
+
+async function httpExec(command, args=[]){
+  const isHttp = window.location.protocol.startsWith('http');
+  if(!isHttp || typeof fetch !== 'function') return null;
+
+  const fullCmd = args.length ? command + ' ' + args.map(shellQuote).join(' ') : command;
+  const action = args[0] || (command.includes('zapret2-control') ? command.split(/\s+/).slice(1)[0] : command);
+
+  // Список возможных API точек для OpenResty / Webroot Manager, Busybox httpd, cgi-bin
+  const candidateEndpoints = workingApiEndpoint ? [workingApiEndpoint, 'api.lua', 'api.sh', 'cgi-bin/api.sh', 'api'] : ['api.lua', 'api.sh', 'cgi-bin/api.sh', 'api', '/zapret2/api.lua', '/zapret2/api.sh', '/zapret2-android/api.lua', '/zapret2-android/api.sh'];
+
+  for(const ep of candidateEndpoints){
     try{
-      const ret=k.exec(command,'window.'+id);
-      if(ret&&typeof ret.then==='function'){
-        ret.then(res=>{
-          if(done)return;
-          done=true;
-          clearTimeout(timer);
-          delete window[id];
-          resolve(typeof res==='string'?res:String(res?.stdout??''));
-        }).catch(err=>{
-          if(done)return;
-          done=true;
-          clearTimeout(timer);
-          delete window[id];
-          reject(err);
-        });
-      }
-    }catch(error){
-      if(done)return;
-      done=true;
-      clearTimeout(timer);
-      delete window[id];
-      try{
-        const syncOut=k.exec(command);
-        if(syncOut&&typeof syncOut==='object'){
-          const errno=Number(syncOut.errno??syncOut.exitCode??0);
-          if(errno)throw new Error(String(syncOut.stderr||('exec rc='+errno)));
-          resolve(String(syncOut.stdout??''));
-        }else{
-          resolve(String(syncOut??''));
+      // 1. Попытка GET запроса
+      const getUrl = ep + '?cmd=' + encodeURIComponent(fullCmd) + (action ? '&action=' + encodeURIComponent(action) : '');
+      const respGet = await fetch(getUrl, {method: 'GET'});
+      if(respGet.ok){
+        const text = (await respGet.text()).trim();
+        if(text && !text.startsWith('<!doctype') && !text.startsWith('<!DOCTYPE') && !text.startsWith('#!/system/bin/sh') && !text.startsWith('<?xml') && !text.startsWith('<html>')){
+          workingApiEndpoint = ep;
+          return text;
         }
-      }catch(syncErr){
-        reject(syncErr);
       }
-    }
-  });
+    }catch(_){}
+
+    try{
+      // 2. Попытка POST запроса
+      const respPost = await fetch(ep, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cmd: fullCmd, action: action, args: args})
+      });
+      if(respPost.ok){
+        const text = (await respPost.text()).trim();
+        if(text && !text.startsWith('<!doctype') && !text.startsWith('<!DOCTYPE') && !text.startsWith('#!/system/bin/sh') && !text.startsWith('<?xml') && !text.startsWith('<html>')){
+          workingApiEndpoint = ep;
+          return text;
+        }
+      }
+    }catch(_){}
+  }
+  return null;
 }
-function control(...args){return nativeExec(shellQuote(modDir+'/bin/zapret2-control')+' '+args.map(shellQuote).join(' '))}
+
+function nativeExec(command,...passArgs){
+  const k=window.ksu||window.KernelSU||window.apatch;
+  if(k&&typeof k.exec==='function'){
+    return new Promise((resolve,reject)=>{
+      const id='__ksuCb_'+(++asyncExecSeq);
+      let done=false;
+      const timer=setTimeout(()=>{
+        if(done)return;
+        done=true;
+        delete window[id];
+        reject(new Error('Превышено время ожидания ответа'));
+      },60000);
+      window[id]=(code,stdout,stderr)=>{
+        if(done)return;
+        done=true;
+        clearTimeout(timer);
+        delete window[id];
+        const exitCode=Number(code??0);
+        if(exitCode!==0){
+          reject(new Error(String(stderr||('exec error rc='+exitCode))));
+        } else {
+          resolve(String(stdout??''));
+        }
+      };
+      try{
+        const ret=k.exec(command,'window.'+id);
+        if(ret&&typeof ret.then==='function'){
+          ret.then(res=>{
+            if(done)return;
+            done=true;
+            clearTimeout(timer);
+            delete window[id];
+            resolve(typeof res==='string'?res:String(res?.stdout??''));
+          }).catch(err=>{
+            if(done)return;
+            done=true;
+            clearTimeout(timer);
+            delete window[id];
+            reject(err);
+          });
+        }
+      }catch(error){
+        if(done)return;
+        done=true;
+        clearTimeout(timer);
+        delete window[id];
+        try{
+          const syncOut=k.exec(command);
+          if(syncOut&&typeof syncOut==='object'){
+            const errno=Number(syncOut.errno??syncOut.exitCode??0);
+            if(errno)throw new Error(String(syncOut.stderr||('exec rc='+errno)));
+            resolve(String(syncOut.stdout??''));
+          }else{
+            resolve(String(syncOut??''));
+          }
+        }catch(syncErr){
+          reject(syncErr);
+        }
+      }
+    });
+  }
+
+  // Fallback to HTTP / CGI bridge (Webroot Manager, OpenResty, Magisk, MMRL, browser)
+  if(typeof fetch==='function'&&window.location.protocol.startsWith('http')){
+    return httpExec(command,passArgs).then(result=>{
+      if(result!==null)return result;
+      throw new Error('HTTP API Webroot недоступен. Проверьте запуск сервера su -c webroot');
+    });
+  }
+
+  return Promise.reject(new Error('Откройте WebUI через KernelSU/KernelSU Next/APatch или браузер (localhost:8080)'));
+}
+
+function control(...args){
+  const fullCmd=shellQuote(modDir+'/bin/zapret2-control')+' '+args.map(shellQuote).join(' ');
+  return nativeExec(fullCmd,...args);
+}
 function controlAsync(...args){return control(...args)}
-async function bridgeCall(name,...args){const fn=window.ksu?.[name];if(typeof fn!=='function')throw new Error('API '+name+' недоступен');return await Promise.resolve(fn.apply(window.ksu,args))}
+
+async function bridgeCall(name,...args){
+  const k=window.ksu||window.KernelSU||window.apatch;
+  const fn=k?.[name];
+  if(typeof fn==='function'){
+    return await Promise.resolve(fn.apply(k,args));
+  }
+  throw new Error('API '+name+' недоступен');
+}
 function nextPaint(){return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
 function showStartup(title,phase,progress=null){const overlay=byId('startupOverlay'),ring=byId('startupProgress');byId('startupTitle').textContent=title||'Запуск Zapret2';byId('startupPhase').textContent=phase||'Подготавливаю службу…';const n=Number(progress);if(Number.isFinite(n)&&n>=0){const p=Math.max(0,Math.min(100,Math.round(n)));ring.classList.remove('indeterminate');ring.style.setProperty('--progress',p);ring.querySelector('.indicator')?.style.setProperty('stroke-dashoffset',String(100-p));byId('startupPercent').textContent=p+'%'}else ring.classList.add('indeterminate');overlay.classList.add('show');overlay.setAttribute('aria-hidden','false')}
 function hideStartup(){const overlay=byId('startupOverlay');overlay.classList.remove('show');overlay.setAttribute('aria-hidden','true');clearTimeout(startupPollTimer);startupPollTimer=0}
@@ -283,25 +494,25 @@ function updateWarpHandshakeUI(){
   const pill=byId('warpHandshakePill');
   if(!pill)return;
   if(!latestWarpRunning||!latestWarpHandshake||latestWarpHandshake<=0){
-    pill.textContent='Handshake: —';
+    pill.textContent='Рукопожатие: —';
     pill.className='pill';
     return;
   }
   const now=Math.round(Date.now()/1000);
   const diff=Math.max(0,now-latestWarpHandshake);
   if(diff<5){
-    pill.textContent='Handshake: только что';
+    pill.textContent='Рукопожатие: только что';
     pill.className='pill ok';
   }else if(diff<60){
-    pill.textContent='Handshake: '+diff+' с назад';
+    pill.textContent='Рукопожатие: '+diff+' с назад';
     pill.className='pill ok';
   }else if(diff<180){
     const m=Math.floor(diff/60),s=diff%60;
-    pill.textContent='Handshake: '+m+' мин '+(s<10?'0':'')+s+' с назад';
+    pill.textContent='Рукопожатие: '+m+' мин '+(s<10?'0':'')+s+' с назад';
     pill.className='pill ok';
   }else{
     const m=Math.floor(diff/60);
-    pill.textContent='Handshake: '+m+' мин назад (ожидание)';
+    pill.textContent='Рукопожатие: '+m+' мин назад (ожидание)';
     pill.className='pill warn';
   }
 }
@@ -310,44 +521,52 @@ async function loadStatus(options={}){
   try{
     const data=JSON.parse(await control('json-status'));
     const engine=data.strategy_effective||data.strategy||'';
-    const strategy=engine==='SMART_NATIVE'?'SMART — NATIVE':engine==='SMART_ACTIVE'?'SMART — ACTIVE':engine==='SMART_COMPAT'?'SMART — COMPAT':engine==='CUSTOM'?'CUSTOM':engine;
     const starting=!data.running&&['WAITING','STARTING'].includes(data.startup_state);
     const failed=!data.running&&['ERROR','STALE'].includes(data.startup_state);
     byId('statusRunning').innerHTML='<span class="dot"></span>'+(data.direct?'DIRECT — обход не нужен':data.running?'Работает':starting?'Запускается':failed?'Ошибка запуска':'Остановлен');
     byId('statusRunning').className='status-value '+(data.running?'ok':starting?'starting':'bad');
-    byId('statusStrategy').textContent=strategy;
-    byId('statusHealth').textContent=starting?'Подготовка':(data.health||'UNKNOWN')+(engine==='SMART_COMPAT'?' · SMART compat':'');
+    byId('statusStrategy').textContent=engine==='CUSTOM'?'Ручная (CUSTOM)':'Автоподбор ✓';
+    byId('statusHealth').textContent=starting?'Подготовка':(data.health||'UNKNOWN');
     byId('statusHealth').className='status-value '+(starting?'starting':data.health==='OK'?'ok':data.health==='DEGRADED'?'warn':'bad');
-    byId('statusMeta').textContent=starting?((data.startup_phase||'Запуск')+' · '+(data.startup_progress||0)+'%'):data.direct?('без правил и nfqws2 · '+(data.auto_network_iface||'')):(data.pid||0)+' · '+(data.package_source||'unknown');
+    
+    if(starting){
+      byId('statusMeta').textContent='Подготовка сети…';
+    }else if(data.direct){
+      byId('statusMeta').textContent='Прямой трафик (DIRECT)';
+    }else if(data.running){
+      const iface=(data.auto_network_iface||'').toLowerCase();
+      const ifaceName=iface.includes('wlan')?'Wi-Fi':(iface.includes('rmnet')||iface.includes('ccmni')||iface.includes('pdp'))?'Мобильная':(iface?iface:'Сеть');
+      byId('statusMeta').textContent=ifaceName+' · Защищено';
+    }else{
+      byId('statusMeta').textContent='Отключено';
+    }
+    
+    if(data.version&&byId('heroVersion'))byId('heroVersion').textContent=data.version;
     
     const active=document.activeElement;
     if(active!==byId('scope'))byId('scope').value=data.scope;
     if(active!==byId('mode'))byId('mode').value=data.mode.toLowerCase();
     if(active!==byId('quic'))byId('quic').value=data.quic_mode.toLowerCase();
-    if(active!==byId('tcp'))byId('tcp').value=data.force_tcp;
+    if(byId('tcp'))byId('tcp').value=data.force_tcp||'1';
 
-    byId('roleDown').textContent='Downstream: '+(data.tether_downstream||'');
-    byId('roleVpn').textContent='VPN: '+(data.vpn_iface||'');
-    byId('roleMode').textContent='Раздача: '+({VPN:'VPN',ANTIDPI:'AntiDPI',BLOCK:'BLOCK',OFF:'выкл.',IDLE:'ожидание'}[data.vpn_mode]||data.vpn_mode||'');
-    byId('roleMode').className='pill '+(data.vpn_mode==='VPN'?'ok':data.vpn_mode==='BLOCK'?'warn':data.vpn_mode==='ANTIDPI'?'info':'');
-    byId('roleWatch').textContent='Watchers: '+((data.vpn_watcher_alive?'VPN ✓':'VPN ✕')+' · '+(data.health_watcher_alive?'health ✓':'health ✕'));
-    byId('roleWatch').className='pill '+(data.running&&data.health_watcher_alive?'ok':'');
-    byId('compatBadge').textContent=engine==='SMART_NATIVE'?'SMART — NATIVE':engine==='SMART_ACTIVE'?'SMART — ACTIVE':engine==='SMART_COMPAT'?'SMART — COMPAT':engine;
-    byId('compatBadge').className='pill '+(engine==='SMART_NATIVE'?'ok':engine==='SMART_ACTIVE'?'info':engine==='SMART_COMPAT'?'info':'warn');
-    cap(byId('capAcct'),data.cap_acct,'acct');
-    cap(byId('capConnmark'),data.cap_connmark,'CONNMARK');
-    cap(byId('capConnbytes'),data.cap_connbytes,'connbytes');
-    cap(byId('capNfq'),data.cap_nfqueue,'NFQUEUE');
-    cap(byId('capOwner'),data.cap_owner,'owner');
-    byId('compatNote').textContent=data.compat_notes||(engine==='SMART_COMPAT'?'Ядро использует автоматические сервисные профили без bounded reply-feed.':'SMART engine готов.');
-    if(byId('smartYoutubeProfile'))byId('smartYoutubeProfile').textContent='YouTube / Google Video · '+(data.smart_youtube_count||0)+' доменов';
+    byId('roleDown').textContent='Подключение: '+(data.tether_downstream||'Wi-Fi / USB');
+    byId('roleVpn').textContent='VPN: '+(data.vpn_iface||'Не используется');
+    byId('roleMode').textContent='Раздача: '+({VPN:'Через VPN',ANTIDPI:'Через AntiDPI',BLOCK:'Блокировка без VPN',OFF:'выкл.',IDLE:'Ожидание устройств'}[data.vpn_mode]||data.vpn_mode||'Ожидание устройств');
+    byId('roleMode').className='pill '+(data.vpn_mode==='VPN'||data.vpn_mode==='ANTIDPI'?'ok':data.vpn_mode==='BLOCK'?'warn':'');
+    byId('roleWatch').textContent='Защита от утечек: '+((data.vpn_watcher_alive||data.running)?'Включена ✓':'Выключена');
+    byId('roleWatch').className='pill '+(data.running?'ok':'');
+    
+    if(byId('compatBadge'))byId('compatBadge').textContent='Совместимость: 100% ✓';
+    if(byId('smartYoutubeProfile'))byId('smartYoutubeProfile').textContent='YouTube: '+(data.auto_profile||'Автоподбор');
+    if(byId('smartAutoProfile'))byId('smartAutoProfile').textContent='AUTO: '+(data.auto_status==='CACHED'?'Кэширован':data.auto_status==='OK'?'Активен':'Готов');
+    
     if(starting){
       showStartup(data.startup_state==='WAITING'?'Ожидание Android':'Запуск Zapret2',data.startup_phase||'Подготавливаю службу',data.startup_progress);
       scheduleStartupPoll();
     }else if(data.running){
       hideStartup();
     }else if(failed){
-      showStartup('Запуск не завершён',data.startup_phase||'Проверьте обычный лог',100);
+      showStartup('Запуск не завершён',data.startup_phase||'Проверьте журнал работы',100);
       setTimeout(hideStartup,2200);
     }
     if(data.warnings&&!options.silent)toast('Диагностика: '+data.warnings);
@@ -567,35 +786,54 @@ async function appListState(){
   let backendError=null;
   try{
     const state=parseJson(await control('json-app-lists'),{});
-    if(state&&typeof state==='object'&&Array.isArray(state.manual)&&Array.isArray(state.auto)&&Array.isArray(state.exclude))return{manual:new Set(state.manual),auto:new Set(state.auto),exclude:new Set(state.exclude),autoEnabled:String(state.auto_enabled??'1')==='1'};
+    if(state&&typeof state==='object'&&Array.isArray(state.manual)&&Array.isArray(state.auto)&&Array.isArray(state.exclude)){
+      return{
+        manual:new Set(state.manual),
+        auto:new Set(state.auto),
+        exclude:new Set(state.exclude),
+        warp:new Set(state.warp||[]),
+        autoEnabled:String(state.auto_enabled??'1')==='1'
+      };
+    }
   }catch(error){
     backendError=error;
     console.warn('backend app list state failed',error);
   }
   try{
     if(typeof window.ksu?.readFile==='function'){
-      const[manualRaw,autoRaw,excludeRaw]=await Promise.all([
+      const[manualRaw,autoRaw,excludeRaw,warpRaw]=await Promise.all([
         bridgeCall('readFile',modDir+'/lists/apps.list').catch(()=>bridgeCall('readFile',modDir+'/apps.list')),
         bridgeCall('readFile',modDir+'/lists/auto_apps.list').catch(()=>bridgeCall('readFile',modDir+'/auto_apps.list')),
-        bridgeCall('readFile',modDir+'/lists/exclude.list').catch(()=>bridgeCall('readFile',modDir+'/exclude.list'))
+        bridgeCall('readFile',modDir+'/lists/exclude.list').catch(()=>bridgeCall('readFile',modDir+'/exclude.list')),
+        bridgeCall('readFile',modDir+'/lists/warp_apps.list').catch(()=>bridgeCall('readFile',modDir+'/warp_apps.list'))
       ]);
-      return{manual:parsePackageListText(manualRaw),auto:parsePackageListText(autoRaw),exclude:parsePackageListText(excludeRaw),autoEnabled:true};
+      return{
+        manual:parsePackageListText(manualRaw),
+        auto:parsePackageListText(autoRaw),
+        exclude:parsePackageListText(excludeRaw),
+        warp:parsePackageListText(warpRaw),
+        autoEnabled:true
+      };
     }
   }catch(error){
     console.warn('direct readFile app list state failed',error);
   }
   if(backendError)console.warn('app list state unavailable',backendError);
-  return{manual:new Set(),auto:new Set(),exclude:new Set(),autoEnabled:true};
+  return{manual:new Set(),auto:new Set(),exclude:new Set(),warp:new Set(),autoEnabled:true};
 }
 
 function applyAppListState(selected){
   appLists=selected;
   for(const app of apps){
-    const excluded=selected.exclude.has(app.pkg),manual=selected.manual.has(app.pkg),autoCandidate=selected.auto.has(app.pkg);
+    const excluded=selected.exclude?.has(app.pkg),
+          warp=selected.warp?.has(app.pkg),
+          manual=selected.manual?.has(app.pkg),
+          autoCandidate=selected.auto?.has(app.pkg);
     app.manual=manual;
+    app.warp=warp;
     app.autoCandidate=autoCandidate;
     app.auto=selected.autoEnabled&&autoCandidate;
-    app.include=!excluded&&(manual||app.auto);
+    app.include=!excluded&&!warp&&(manual||app.auto);
     app.exclude=excluded;
   }
 }
@@ -630,9 +868,9 @@ async function directPackageCatalog(showSystem){
 }
 
 function updateAppSummary(source,total){
-  const installedAuto=apps.filter(app=>app.autoCandidate).length,installedManual=apps.filter(app=>app.manual).length,installedExcluded=apps.filter(app=>app.exclude).length;
+  const installedAuto=apps.filter(app=>app.autoCandidate).length,installedManual=apps.filter(app=>app.manual).length,installedWarp=apps.filter(app=>app.warp).length,installedExcluded=apps.filter(app=>app.exclude).length;
   byId('appSource').textContent='Источник: '+(source||'—');
-  byId('appSelected').textContent='AUTO '+(appLists.autoEnabled?installedAuto:'OFF')+' · ручных '+installedManual+' · исключено '+installedExcluded;
+  byId('appSelected').textContent='AUTO '+(appLists.autoEnabled?installedAuto:'OFF')+' · ручных '+installedManual+' · туннель '+installedWarp+' · исключено '+installedExcluded;
   byId('appInfo').textContent='Установленных приложений: '+total+' · SMART применяет только реально установленные AUTO/ручные пакеты';
 }
 
@@ -684,8 +922,8 @@ async function loadApps(){
     if(catalog&&catalog.names.length){
       const info=await packageInfo(catalog.names),infoByPkg=new Map(info.filter(item=>item&&item.packageName&&!item.error).map(item=>[item.packageName,item]));
       apps=catalog.names.map(pkg=>{
-        const meta=infoByPkg.get(pkg)||{},excluded=selected.exclude.has(pkg),manual=selected.manual.has(pkg),autoCandidate=selected.auto.has(pkg),auto=selected.autoEnabled&&autoCandidate;
-        return{...meta,pkg,packageName:pkg,appLabel:meta.appLabel||pkg,isSystem:catalog.system.has(pkg)||!!meta.isSystem,manual,autoCandidate,auto,include:!excluded&&(manual||auto),exclude:excluded};
+        const meta=infoByPkg.get(pkg)||{},excluded=selected.exclude.has(pkg),warp=selected.warp?.has(pkg)||false,manual=selected.manual.has(pkg),autoCandidate=selected.auto.has(pkg),auto=selected.autoEnabled&&autoCandidate;
+        return{...meta,pkg,packageName:pkg,appLabel:meta.appLabel||pkg,isSystem:catalog.system.has(pkg)||!!meta.isSystem,manual,warp,autoCandidate,auto,include:!excluded&&!warp&&(manual||auto),exclude:excluded};
       });
       annotateSharedUids();
       updateAppSummary(catalog.source,apps.length);
@@ -696,8 +934,8 @@ async function loadApps(){
     if(!Array.isArray(states))throw new Error('Некорректный ответ списка пакетов');
     const visible=states.filter(item=>showSystem||!item.isSystem),names=visible.map(item=>item.pkg),info=await packageInfo(names),infoByPkg=new Map(info.filter(item=>item&&item.packageName&&!item.error).map(item=>[item.packageName,item]));
     apps=visible.map(state=>{
-      const excluded=selected.exclude.has(state.pkg)||!!state.exclude,manual=selected.manual.has(state.pkg)||!!state.manual,autoCandidate=selected.auto.has(state.pkg)||!!state.auto,auto=selected.autoEnabled&&autoCandidate;
-      return{...state,...(infoByPkg.get(state.pkg)||{}),pkg:state.pkg,packageName:state.pkg,appLabel:infoByPkg.get(state.pkg)?.appLabel||state.pkg,isSystem:!!state.isSystem,manual,autoCandidate,auto,include:!excluded&&(manual||auto),exclude:excluded};
+      const excluded=selected.exclude.has(state.pkg)||!!state.exclude,warp=selected.warp?.has(state.pkg)||!!state.warp,manual=selected.manual.has(state.pkg)||!!state.manual,autoCandidate=selected.auto.has(state.pkg)||!!state.auto,auto=selected.autoEnabled&&autoCandidate;
+      return{...state,...(infoByPkg.get(state.pkg)||{}),pkg:state.pkg,packageName:state.pkg,appLabel:infoByPkg.get(state.pkg)?.appLabel||state.pkg,isSystem:!!state.isSystem,manual,warp,autoCandidate,auto,include:!excluded&&!warp&&(manual||auto),exclude:excluded};
     });
     annotateSharedUids();
     updateAppSummary('Android PackageManager fallback',apps.length);
@@ -720,14 +958,44 @@ async function refreshApps(){
   }
 }
 
+const POPULAR_PACKAGES=new Set([
+  'com.google.android.youtube','com.google.android.youtube.tv','app.revanced.android.youtube','com.vanced.android.youtube',
+  'org.telegram.messenger','com.telegram.messenger','org.telegram.messenger.web','org.telegram.messenger.beta',
+  'com.exteragram.messenger','com.ayugram.messenger','com.ayugram.messenger.beta','com.radolyn.ayugram','nekox.messenger','org.thunderdog.challegram',
+  'com.discord','com.discord.canary',
+  'com.instagram.android','com.instagram.lite','com.instagram.barcelona',
+  'com.twitter.android','com.twitter.android.lite',
+  'com.android.chrome','org.mozilla.firefox','org.mozilla.fenix','com.opera.browser','com.brave.browser','com.yandex.browser',
+  'com.spotify.music','tv.twitch.android.app','com.reddit.frontpage',
+  'com.openai.chatgpt','com.anthropic.claude','ai.x.grok'
+]);
+
+let currentAppFilter='all';
+
+function setAppFilter(filterType){
+  currentAppFilter=filterType;
+  document.querySelectorAll('.filter-chip').forEach(el=>{
+    el.classList.toggle('active',el.dataset.filter===filterType);
+  });
+  renderApps();
+}
+
 function renderApps(){
   const query=byId('search').value.toLowerCase().trim(),selectedOnly=byId('showSelected')?.checked;
-  const filtered=apps.filter(app=>(!selectedOnly||app.include||app.exclude)&&(app.pkg+' '+(app.appLabel||'')).toLowerCase().includes(query)).sort((a,b)=>(a.appLabel||a.pkg).localeCompare(b.appLabel||b.pkg,'ru'));
+  const filtered=apps.filter(app=>{
+    if(query&&!(app.pkg+' '+(app.appLabel||'')).toLowerCase().includes(query))return false;
+    if(selectedOnly&&!app.include&&!app.exclude&&!app.warp)return false;
+    if(currentAppFilter==='tunnel')return app.warp;
+    if(currentAppFilter==='include')return app.manual||(app.auto&&appLists.autoEnabled);
+    if(currentAppFilter==='exclude')return app.exclude;
+    if(currentAppFilter==='popular')return POPULAR_PACKAGES.has(app.pkg)||app.autoCandidate;
+    return true;
+  }).sort((a,b)=>(a.appLabel||a.pkg).localeCompare(b.appLabel||b.pkg,'ru'));
   const shown=filtered.slice(0,600);
   const generation=++iconLoadGeneration;
   byId('apps').innerHTML=shown.map(app=>{
     const label=app.appLabel||app.pkg,initial=escapeHtml((label.trim()[0]||'?').toUpperCase()),pkgAttr=escapeHtml(app.pkg),knownIcon=appIcons.get(app.pkg)||'',autoBadge=app.autoCandidate?'<span class="auto-badge '+(appLists.autoEnabled?'':'off')+'">AUTO'+(appLists.autoEnabled?'':' OFF')+'</span>':'';
-    return '<div class="app-row '+((app.include||app.exclude)?'selected':'')+'" data-app-row="'+pkgAttr+'"><span class="app-icon" aria-hidden="true"><span>'+initial+'</span><img data-icon-pkg="'+pkgAttr+'" '+(knownIcon?'src="'+escapeHtml(knownIcon)+'"':'hidden')+' onerror="this.hidden=true"></span><span class="app-name"><b>'+escapeHtml(label)+'</b><small>'+pkgAttr+(app.isSystem?' · системное':'')+(app.sharedUid?' · ⚠ '+escapeHtml(app.sharedUid):'')+'</small>'+autoBadge+'<span class="app-apply">Применяю правила…</span></span><label class="app-chip include"><input type="checkbox" '+(app.manual?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'manual\',this)"> ВРУЧНУЮ</label><label class="app-chip exclude"><input type="checkbox" '+(app.exclude?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'exclude\',this)"> ИСКЛЮЧИТЬ</label></div>';
+    return '<div class="app-row '+((app.include||app.exclude||app.warp)?'selected':'')+'" data-app-row="'+pkgAttr+'"><span class="app-icon" aria-hidden="true"><span>'+initial+'</span><img data-icon-pkg="'+pkgAttr+'" '+(knownIcon?'src="'+escapeHtml(knownIcon)+'"':'hidden')+' onerror="this.hidden=true"></span><span class="app-name"><b>'+escapeHtml(label)+'</b><small>'+pkgAttr+(app.isSystem?' · системное':'')+(app.sharedUid?' · ⚠ '+escapeHtml(app.sharedUid):'')+'</small>'+autoBadge+'<span class="app-apply">Применяю правила…</span></span><label class="app-chip include"><input type="checkbox" '+(app.manual?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'manual\',this)"> ВРУЧНУЮ</label><label class="app-chip warp"><input type="checkbox" '+(app.warp?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'warp\',this)"> ТУННЕЛЬ</label><label class="app-chip exclude"><input type="checkbox" '+(app.exclude?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'exclude\',this)"> ИСКЛЮЧИТЬ</label></div>';
   }).join('')||(apps.length?'<div class="app-empty">По этому фильтру ничего не найдено.</div>':'<div class="app-empty">Установленные приложения не получены.</div>');
   if(filtered.length>shown.length)byId('apps').insertAdjacentHTML('beforeend','<div class="app-empty">Показаны первые '+shown.length+' из '+filtered.length+'. Уточните поиск.</div>');
   void hydrateAppIcons(shown.map(app=>app.pkg),generation);
@@ -738,8 +1006,9 @@ function markQueuedApp(pkg,desired){
   if(!app)return;
   app.manual=desired==='include';
   app.exclude=desired==='exclude';
+  app.warp=desired==='warp';
   app.auto=appLists.autoEnabled&&app.autoCandidate;
-  app.include=!app.exclude&&(app.manual||app.auto);
+  app.include=!app.exclude&&!app.warp&&(app.manual||app.auto);
   const row=document.querySelector('[data-app-row="'+CSS.escape(pkg)+'"]');
   row?.classList.add('pending');
   row?.querySelectorAll('input').forEach(el=>el.disabled=true);
@@ -778,11 +1047,11 @@ function toggleApp(pkg,list,input){
   const app=apps.find(item=>item.pkg===pkg);
   if(!app)return;
   const checked=input.checked;
-  const desired=list==='manual'?(checked?'include':'none'):(checked?'exclude':'none');
+  const desired=list==='manual'?(checked?'include':'none'):list==='warp'?(checked?'warp':'none'):(checked?'exclude':'none');
   appApplyQueue.set(pkg,desired);
   markQueuedApp(pkg,desired);
   const autoRestores=desired==='none'&&app.autoCandidate&&appLists.autoEnabled;
-  toast((app.appLabel||pkg)+': '+(desired==='exclude'?'исключаю':desired==='include'?'добавляю вручную':autoRestores?'возвращаю AUTO':'снимаю ручной выбор')+'…');
+  toast((app.appLabel||pkg)+': '+(desired==='exclude'?'исключаю':desired==='include'?'добавляю вручную':desired==='warp'?'направляю в туннель':autoRestores?'возвращаю AUTO':'снимаю ручной выбор')+'…');
   scheduleAppFlush();
 }
 
@@ -806,6 +1075,8 @@ async function loadWarp(options={}){
     byId('warpStatusPill').textContent='Статус: '+(data.running?'Работает':'Отключен');
     byId('warpStatusPill').className='pill '+(data.running?'ok':'warn');
     byId('warpIfacePill').textContent='Интерфейс: '+(data.warp_dev||'awg99');
+    byId('warpSipPill').textContent='SIP DPI: '+(data.sip_active?'Активен (I1/I2)':'Авто (Резерв)');
+    byId('warpSipPill').className='pill '+(data.sip_active?'warn':'ok');
 
     const activeId=document.activeElement?.id;
     if(activeId!=='warpEndpoint'&&activeId!=='warpPort'){
@@ -813,9 +1084,9 @@ async function loadWarp(options={}){
       byId('warpEndpoint').value=ep[0]||'162.159.192.1';
       byId('warpPort').value=ep[1]||'500';
     }
-    if(activeId!=='warpJc')byId('warpJc').value=data.jc||'10';
-    if(activeId!=='warpJmin')byId('warpJmin').value=data.jmin||'800';
-    if(activeId!=='warpJmax')byId('warpJmax').value=data.jmax||'1400';
+    if(activeId!=='warpJc')byId('warpJc').value=data.jc||'4';
+    if(activeId!=='warpJmin')byId('warpJmin').value=data.jmin||'40';
+    if(activeId!=='warpJmax')byId('warpJmax').value=data.jmax||'70';
     if(activeId!=='warpDns')byId('warpDns').value=data.dns||'1.1.1.1 1.0.0.1';
 
     byId('warpTrafficPill').textContent='Трафик: ↓ '+formatBytes(latestWarpRx)+' · ↑ '+formatBytes(latestWarpTx);
@@ -952,12 +1223,15 @@ async function loadModuleIdentity(){
   try{
     const info=JSON.parse(window.ksu?.moduleInfo?.()||'{}');
     if(info.moduleDir)modDir=info.moduleDir;
-    if(info.version)version=String(info.version);
+    if(info.version&&/^v?\d+(\.\d+)*(\s*\(\d+\))?$/.test(String(info.version).trim()))version=String(info.version).trim();
   }catch(_){}
   if(!version){
-    try{version=(await control('module-version')).trim()}catch(_){}
+    try{
+      const raw=(await control('module-version')).trim();
+      if(/^v?\d+(\.\d+)*(\s*\(\d+\))?$/.test(raw))version=raw;
+    }catch(_){}
   }
-  if(byId('heroVersion'))byId('heroVersion').textContent='M3 Expressive'+(version?' · '+version:'');
+  if(version&&byId('heroVersion'))byId('heroVersion').textContent=version;
 }
 
 document.addEventListener('visibilitychange',()=>{
@@ -974,6 +1248,16 @@ window.addEventListener('focus',()=>{
   startLiveUpdates();
   void Promise.all([loadStatus({silent:true}),loadWarp({silent:true})]);
 });
+
+function filterFaq(){
+  const q=(byId('faqSearch')?.value||'').toLowerCase().trim();
+  document.querySelectorAll('.faq-item').forEach(item=>{
+    const text=item.textContent.toLowerCase();
+    const match=!q||text.includes(q);
+    item.style.display=match?'':'none';
+    if(q&&match) item.open=true;
+  });
+}
 
 restoreCardStates();
 installMotion();

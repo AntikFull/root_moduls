@@ -251,10 +251,12 @@ for f in \
   "$MODPATH/bin/amneziawg-go" "$MODPATH/bin/awg" "$MODPATH/bin/ai-router" "$MODPATH/warp-tunnel.sh" \
   "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
-  "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh"
+  "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh" \
+  "$MODPATH/webroot/api.sh"
 do
   [ -f "$f" ] && { set_exec "$f" || fail_install "Не удалось установить права +x: $f"; }
 done
+chmod 0755 "$MODPATH/webroot" 2>/dev/null || true
 
 volume_select() {
   default_answer="$1"

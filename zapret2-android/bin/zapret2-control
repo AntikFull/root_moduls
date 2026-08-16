@@ -11,6 +11,7 @@ LISTS_DIR="$MODDIR/lists"
 APPS_LIST="$LISTS_DIR/apps.list"
 AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
 EXCLUDE_LIST="$LISTS_DIR/exclude.list"
+WARP_APPS_LIST="$LISTS_DIR/warp_apps.list"
 SMART_YOUTUBE_FILE="$LISTS_DIR/smart_youtube.list"
 AUTO_DOMAINS_FILE="$LISTS_DIR/auto_domains.list"
 EXCLUDE_DOMAINS_FILE="$LISTS_DIR/exclude_domains.list"
@@ -152,8 +153,11 @@ cmd_json_status() {
   if [ "$running" = true ]; then startup_state=READY; startup_phase="Служба запущена"; startup_progress=100
   elif [ "$startup_state" = WAITING ] && [ "$late_start_waiting" = true ]; then startup_phase="Ожидание завершения загрузки Android"
   elif { [ "$startup_state" = STARTING ] || [ "$startup_state" = WAITING ]; } && [ "$age" -gt 120 ] 2>/dev/null; then startup_state=STALE; startup_phase="Перезапуск не завершён за 2 минуты"; fi
-  printf '{"running":%s,"direct":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"manual_apps_count":%s,"auto_apps_count":%s,"auto_apps_enabled":"%s","exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","smart_youtube_count":%s,"compat_status":"%s","compat_notes":"%s","auto_profile":"%s","auto_status":"%s","auto_network_key":"%s","auto_network_iface":"%s","auto_updated":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s,"tether_downstream":"%s","vpn_iface":"%s","vpn_mode":"%s","vpn_watcher_alive":%s,"health_watcher_alive":%s}\n' \
-    "$running" "$direct" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$((manual_apps+auto_apps))" "$manual_apps" "$auto_apps" "${AUTO_APPS_ENABLED:-1}" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-SMART}")" "$(json_escape "$effective")" "$youtube_count" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_network_key:-none}")" "$(json_escape "${auto_network_iface:-none}")" "${auto_updated:-0}" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}" "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated" "$(json_escape "$downstream")" "$(json_escape "$vpn_iface")" "$(json_escape "$vpn_mode")" "$vpn_watcher_alive" "$health_watcher_alive"
+  local mod_ver
+  mod_ver=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | head -n1)
+  [ -n "$mod_ver" ] || mod_ver="v3.2.23"
+  printf '{"version":"%s","running":%s,"direct":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"manual_apps_count":%s,"auto_apps_count":%s,"auto_apps_enabled":"%s","exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","smart_youtube_count":%s,"compat_status":"%s","compat_notes":"%s","auto_profile":"%s","auto_status":"%s","auto_network_key":"%s","auto_network_iface":"%s","auto_updated":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s,"tether_downstream":"%s","vpn_iface":"%s","vpn_mode":"%s","vpn_watcher_alive":%s,"health_watcher_alive":%s}\n' \
+    "$(json_escape "$mod_ver")" "$running" "$direct" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$((manual_apps+auto_apps))" "$manual_apps" "$auto_apps" "${AUTO_APPS_ENABLED:-1}" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-SMART}")" "$(json_escape "$effective")" "$youtube_count" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_network_key:-none}")" "$(json_escape "${auto_network_iface:-none}")" "${auto_updated:-0}" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}" "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated" "$(json_escape "$downstream")" "$(json_escape "$vpn_iface")" "$(json_escape "$vpn_mode")" "$vpn_watcher_alive" "$health_watcher_alive"
 }
 
 cmd_scope_preset() {
@@ -292,6 +296,8 @@ cmd_json_app_lists() {
   json_pkg_array_from_file "$AUTO_APPS_LIST"
   printf ',"exclude":'
   json_pkg_array_from_file "$EXCLUDE_LIST"
+  printf ',"warp":'
+  json_pkg_array_from_file "$WARP_APPS_LIST"
   printf ',"auto_enabled":"%s"}\n' "${AUTO_APPS_ENABLED:-1}"
 }
 cmd_json_apps() {
@@ -301,11 +307,12 @@ cmd_json_apps() {
   system_package_list_raw "$sys_tmp"
   if [ "$rc" -ne 0 ]; then rm -f "$raw" "$sys_tmp"; echo '[]'; return 1; fi
   load_conf
-  awk -v inc="$APPS_LIST" -v aut="$AUTO_APPS_LIST" -v autoen="${AUTO_APPS_ENABLED:-1}" -v exc="$EXCLUDE_LIST" -v sys="$sys_tmp" '
+  awk -v inc="$APPS_LIST" -v aut="$AUTO_APPS_LIST" -v autoen="${AUTO_APPS_ENABLED:-1}" -v exc="$EXCLUDE_LIST" -v wrp="$WARP_APPS_LIST" -v sys="$sys_tmp" '
     BEGIN {
       while ((getline l < inc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") a[l]=1} close(inc)
       while ((getline l < aut)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") u[l]=1} close(aut)
       while ((getline l < exc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") e[l]=1} close(exc)
+      while ((getline l < wrp)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") w[l]=1} close(wrp)
       while ((getline l < sys)>0) {sub(/^package:/,"",l); sub(/[[:space:]].*/,"",l); if(l!="") s[l]=1} close(sys)
       print "["; first=1
     }
@@ -313,7 +320,7 @@ cmd_json_apps() {
       line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,parts,"="); pkg=parts[n]; sub(/[[:space:]].*/,"",pkg)
       if(pkg!="") {
         if(!first) printf ","; first=0
-        printf "{\"pkg\":\"%s\",\"manual\":%s,\"auto\":%s,\"include\":%s,\"exclude\":%s,\"isSystem\":%s}", pkg, (pkg in a)?"true":"false", (pkg in u)?"true":"false", (((pkg in a)||(autoen=="1" && (pkg in u))) && !(pkg in e))?"true":"false", (pkg in e)?"true":"false", (pkg in s)?"true":"false"
+        printf "{\"pkg\":\"%s\",\"manual\":%s,\"auto\":%s,\"include\":%s,\"exclude\":%s,\"warp\":%s,\"isSystem\":%s}", pkg, (pkg in a)?"true":"false", (pkg in u)?"true":"false", (((pkg in a)||(autoen=="1" && (pkg in u))) && !(pkg in e))?"true":"false", (pkg in e)?"true":"false", (pkg in w)?"true":"false", (pkg in s)?"true":"false"
       }
     }
     END { print "]" }' "$raw"
@@ -332,31 +339,38 @@ cmd_add_del() {
     remove_pkg_exact "$other" "$pkg" || return 1
     grep -qxF "$pkg" "$file" 2>/dev/null || echo "$pkg" >> "$file"
   else
-    tmp="$file.tmp.$$"
+    tmp="$RUN_DIR/list_del.$$.tmp"
     awk -v p="$pkg" '$0 != p { print }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
   fi
-  chmod 0600 "$APPS_LIST" "$EXCLUDE_LIST" 2>/dev/null || true
+  chmod 0644 "$APPS_LIST" "$EXCLUDE_LIST" "$file" 2>/dev/null || true
   sync_apps
 }
 
 remove_pkg_exact() {
-  local file="$1" pkg="$2" tmp="$file.tmp.$$"
+  local file="$1" pkg="$2" tmp="$RUN_DIR/list_update.$$.tmp"
   [ -f "$file" ] || : > "$file"
   awk -v p="$pkg" '{ raw=$0; t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if (t != p) print raw }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+  chmod 0644 "$file" 2>/dev/null || true
 }
 
 set_app_state_only() {
   local pkg="$1" state="$2"
   validate_pkg "$pkg" || { echo "Некорректный ID пакета"; return 1; }
-  case "$state" in include|exclude|none) ;; *) echo "Некорректное состояние приложения"; return 1 ;; esac
+  case "$state" in include|exclude|warp|none) ;; *) echo "Некорректное состояние приложения"; return 1 ;; esac
   mark_control_write
   remove_pkg_exact "$APPS_LIST" "$pkg" || return 1
   remove_pkg_exact "$EXCLUDE_LIST" "$pkg" || return 1
+  remove_pkg_exact "$WARP_APPS_LIST" "$pkg" 2>/dev/null || true
   case "$state" in
     include) echo "$pkg" >> "$APPS_LIST" || return 1 ;;
     exclude) echo "$pkg" >> "$EXCLUDE_LIST" || return 1 ;;
+    warp)
+      mkdir -p "$LISTS_DIR" 2>/dev/null
+      echo "$pkg" >> "$WARP_APPS_LIST" || return 1
+      sh "$MODDIR/warp-tunnel.sh" sync 2>/dev/null || true
+      ;;
   esac
-  chmod 0600 "$APPS_LIST" "$EXCLUDE_LIST" 2>/dev/null || true
+  chmod 0644 "$APPS_LIST" "$EXCLUDE_LIST" "$WARP_APPS_LIST" 2>/dev/null || true
 }
 cmd_app_state() {
   local pkg="$2" state="$3"
@@ -374,14 +388,14 @@ cmd_sync_apps() { sync_apps; }
 cmd_replace_list() {
   local list="$1" input="$2" file tmp line
   file=$(list_file "$list") || return 1
-  tmp="$file.tmp.$$"; : > "$tmp" || return 1
+  tmp="$RUN_DIR/list_replace.$$.tmp"; : > "$tmp" || return 1
   printf '%s\n' "$input" | while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[!A-Za-z0-9._#\ -]* ) exit 1 ;; esac
     echo "$line"
   done > "$tmp" || { rm -f "$tmp"; echo "Некорректная строка в списке"; return 1; }
   mark_control_write
   mv -f "$tmp" "$file"
-  chmod 0600 "$file" 2>/dev/null || true
+  chmod 0644 "$file" 2>/dev/null || true
   case "$list" in
     apps)
       if [ -f "$EXCLUDE_LIST" ]; then
@@ -452,8 +466,10 @@ cmd_json_warp_status() {
     fi
   fi
   [ -n "$endpoint" ] || endpoint="${WARP_ENDPOINT:-162.159.192.1}:${WARP_PORT:-500}"
-  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"endpoint":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"jc":"%s","jmin":"%s","jmax":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","apps_count":%s,"ai_apps_count":%s,"dns":"%s","dns_force":"%s"}\n' \
-    "$enabled" "$dev" "$running" "$(json_escape "$endpoint")" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "${WARP_JC:-10}" "${WARP_JMIN:-800}" "${WARP_JMAX:-1400}" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$apps_count" "$ai_apps_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
+  local sip_active=false
+  grep -q '^I1 =' "$MODDIR/state/warp.conf" 2>/dev/null && sip_active=true
+  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"endpoint":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"jc":"%s","jmin":"%s","jmax":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"apps_count":%s,"ai_apps_count":%s,"dns":"%s","dns_force":"%s"}\n' \
+    "$enabled" "$dev" "$running" "$(json_escape "$endpoint")" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "${WARP_JC:-4}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$apps_count" "$ai_apps_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
 }
 
 cmd_warp_toggle() {
@@ -464,6 +480,21 @@ cmd_warp_toggle() {
   else
     sh "$MODDIR/warp-tunnel.sh" stop
   fi
+}
+
+cmd_warp_sip() {
+  case "$2" in
+    on|1|enable) sh "$MODDIR/warp-tunnel.sh" sip-on ;;
+    off|0|disable) sh "$MODDIR/warp-tunnel.sh" sip-off ;;
+    toggle)
+      if grep -q '^I1 =' "$MODDIR/state/warp.conf" 2>/dev/null; then
+        sh "$MODDIR/warp-tunnel.sh" sip-off
+      else
+        sh "$MODDIR/warp-tunnel.sh" sip-on
+      fi
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 cmd_warp_rekey() {
@@ -508,6 +539,7 @@ case "$1" in
   json-diagnostics) cmd_json_diagnostics ;;
   json-warp-status) cmd_json_warp_status ;;
   warp-toggle) cmd_warp_toggle "$@" ;;
+  warp-sip) cmd_warp_sip "$@" ;;
   warp-rekey) cmd_warp_rekey ;;
   warp-save) cmd_warp_save "$@" ;;
   mode) case "$2" in include|exclude|global) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;

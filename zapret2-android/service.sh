@@ -826,6 +826,7 @@ fi
 stop_pid "$NFQWS_PID_FILE" "nfqws2" nfqws2
 stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
 stop_pid "$HEALTH_WATCHER_PID_FILE" "health watcher" health-watch
+stop_pid "$RUN_DIR/httpd.pid" "httpd" httpd
 stop_owned_nfqws
 [ -x "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" stop >/dev/null 2>&1 || true
 write_start_state "STARTING" "Очистка предыдущих netfilter-правил" 30
@@ -955,6 +956,30 @@ ipt4 -t mangle -N ZAPRET2_MANGLE || health_error "Не удалось созда
 ipt4 -t filter -N ZAPRET2_FILTER || health_error "Не удалось создать IPv4 filter chain"
 [ "$NFQ6" = "1" ] && ipt6 -t mangle -N ZAPRET2_MANGLE || true
 [ -n "$IP6T" ] && ipt6 -t filter -N ZAPRET2_FILTER || true
+
+# Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
+ipt4 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
+ipt4 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
+[ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
+[ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
+
+for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
+  ipt4 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
+  ipt4 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
+done
+for subnet in 2001:b28:f23d::/48 2001:67c:4e8::/48; do
+  [ -n "$IP6T" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
+  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
+done
+
+WARP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_app_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
+for uid in $WARP_UIDS; do
+  case "$uid" in ''|0|*[!0-9]*) continue ;; esac
+  ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+  ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+done
 
 case "$MODE" in
   GLOBAL)
@@ -1221,6 +1246,25 @@ log_i "Служба запущена: nfqws2 PID=$nfqws_pid health=$HEALTH"
 if [ "${ENABLE_WARP:-1}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
   log_i "Запуск точечного туннеля AmneziaWG v3 (WARP)..."
   sh "$MODDIR/warp-tunnel.sh" start >> "$LOG_FILE" 2>&1 &
+fi
+
+# Запуск встроенного веб-сервера для WebUI (Magisk / Webroot Manager / Браузер)
+if [ -d "$MODDIR/webroot" ]; then
+  BB_BIN=""
+  for b in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox /system/bin/busybox $(command -v busybox 2>/dev/null); do
+    if [ -x "$b" ] && "$b" httpd --help >/dev/null 2>&1; then
+      BB_BIN="$b"
+      break
+    fi
+  done
+  if [ -n "$BB_BIN" ]; then
+    chmod 0755 "$MODDIR/webroot/api.sh" "$MODDIR/webroot/api.lua" 2>/dev/null || true
+    chmod 0644 "$MODDIR/webroot/index.html" "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
+    # Запускаем httpd на порту 8080 (или 8088 если 8080 занят)
+    "$BB_BIN" httpd -p 8080 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null || \
+    "$BB_BIN" httpd -p 8088 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
+    log_i "WebUI HTTPD сервер запущен"
+  fi
 fi
 
 # Активный подбор не блокирует загрузку. Сначала всегда работает кэшированный

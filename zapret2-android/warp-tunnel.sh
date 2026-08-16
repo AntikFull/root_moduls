@@ -34,9 +34,9 @@ chmod 0700 "$RUN_DIR" "$LOG_DIR" "$STATE_DIR" 2>/dev/null || true
 TABLE="$WARP_ROUTE_TABLE"
 DEV="$WARP_DEV"
 
-: "${WARP_JC:=10}"
-: "${WARP_JMIN:=800}"
-: "${WARP_JMAX:=1400}"
+: "${WARP_JC:=5}"
+: "${WARP_JMIN:=40}"
+: "${WARP_JMAX:=70}"
 : "${WARP_S1:=0}"
 : "${WARP_S2:=0}"
 : "${WARP_S3:=0}"
@@ -107,7 +107,28 @@ generate_warp_config() {
     local payload
     payload="{\"key\":\"$pubkey\",\"install_id\":\"\",\"fcm_token\":\"\",\"tos\":\"$now_iso\",\"model\":\"Android\",\"serial_number\":\"\",\"locale\":\"en_US\"}"
     
-    reg_resp=$(curl -4 -s -k -m 10 -X POST -H "Content-Type: application/json" -H "User-Agent: okhttp/3.12.1" -d "$payload" https://api.cloudflareclient.com/v0a2158/reg 2>/dev/null)
+    # Перебор API-эндпоинтов Cloudflare и прямых IP в обход заблокированного DNS
+    for cf_endpoint in \
+      "https://api.cloudflareclient.com/v0a2158/reg" \
+      "https://api.cloudflareclient.com/v0a2405/reg" \
+      "https://api.cloudflareclient.com/v0a3121/reg"
+    do
+      # 1. Прямой запрос через системный DNS
+      reg_resp=$(curl -4 -s -k -m 6 -X POST -H "Content-Type: application/json" -H "User-Agent: okhttp/3.12.1" -d "$payload" "$cf_endpoint" 2>/dev/null)
+      echo "$reg_resp" | grep -q '"id"' && break
+
+      # 2. Запрос через прямые Anycast IP Cloudflare
+      for cf_ip in 162.159.192.1 162.159.193.1 104.16.124.96 104.16.123.96 188.114.97.1; do
+        reg_resp=$(curl -4 -s -k -m 6 --resolve "api.cloudflareclient.com:443:$cf_ip" -X POST -H "Content-Type: application/json" -H "User-Agent: okhttp/3.12.1" -d "$payload" "$cf_endpoint" 2>/dev/null)
+        echo "$reg_resp" | grep -q '"id"' && break 2
+      done
+
+      # 3. Запрос через локальный AI Router прокси
+      if [ -x "$AI_ROUTER_BIN" ]; then
+        reg_resp=$(curl -4 -s -k -m 6 -x "http://127.0.0.1:$ROUTER_PORT" -X POST -H "Content-Type: application/json" -H "User-Agent: okhttp/3.12.1" -d "$payload" "$cf_endpoint" 2>/dev/null)
+        echo "$reg_resp" | grep -q '"id"' && break
+      fi
+    done
     
     if echo "$reg_resp" | grep -q '"id"'; then
       local reg_id token v6 peer
@@ -121,8 +142,8 @@ generate_warp_config() {
 
       # Активация маршрутизации WARP через PATCH API
       if [ -n "$reg_id" ] && [ -n "$token" ]; then
-        curl -4 -s -k -m 10 -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer $token" -H "User-Agent: okhttp/3.12.1" -d '{"warp_enabled":true}' "https://api.cloudflareclient.com/v0a2158/reg/$reg_id" >/dev/null 2>&1 || true
-        log_i "Успешная регистрация и активация WARP аккаунта (id=$reg_id, client_v4=$client_v4, peer=$peer_pubkey)"
+        curl -4 -s -k -m 6 -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer $token" -H "User-Agent: okhttp/3.12.1" -d '{"warp_enabled":true}' "https://api.cloudflareclient.com/v0a2158/reg/$reg_id" >/dev/null 2>&1 || true
+        log_i "Успешная регистрация и активация WARP аккаунта в Cloudflare API (id=$reg_id, client_v4=$client_v4, peer=$peer_pubkey)"
       else
         log_i "Успешная регистрация WARP аккаунта (client_v4=$client_v4, peer=$peer_pubkey)"
       fi
@@ -131,7 +152,7 @@ generate_warp_config() {
   fi
 
   if [ "$reg_success" -eq 0 ]; then
-    log_w "Онлайн регистрация через API не ответила; используется локальный fallback адрес ($client_v4)"
+    log_w "Онлайн регистрация через Cloudflare API не ответила; используется локальный fallback адрес ($client_v4)"
   fi
 
   # Генерация AmneziaWG v3 ini-файла
@@ -166,12 +187,12 @@ EOF
 PublicKey = $peer_pubkey
 AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = ${WARP_ENDPOINT}:${WARP_PORT}
-PersistentKeepalive = 25
+PersistentKeepalive = 15
 EOF
 
   chmod 0600 "$tmp_conf"
   mv -f "$tmp_conf" "$WARP_CONF"
-  log_i "Конфигурация AmneziaWG v3 сохранена в $WARP_CONF"
+  log_i "Конфигурация AmneziaWG v3 сохранена в $WARP_CONF (Keepalive=15s)"
 }
 
 # ------------------------------------------------------------------------------
@@ -375,13 +396,20 @@ apply_routing_rules() {
   ip -4 route add default dev "$DEV" table "$TABLE" 2>/dev/null || true
   ip -6 route add default dev "$DEV" table "$TABLE" 2>/dev/null || true
 
-  # Резервные прямые маршруты и правила на диапазоны Telegram в таблицу 11888
-  for subnet in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 185.76.151.0/24; do
+  TG_SUBNETS="91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20"
+  TG_SUBNETS_V6="2001:b28:f23d::/48 2001:67c:4e8::/48"
+
+  # Резервные прямые маршруты и правила на все диапазоны Telegram (Core + CDN Media) в таблицу 11888
+  for subnet in $TG_SUBNETS; do
     ip -4 route add "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
     ip -4 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
   done
+  for subnet in $TG_SUBNETS_V6; do
+    ip -6 route add "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+    ip -6 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+  done
 
-  # Добавление ip rule ТОЛЬКО для клиентов Telegram в таблицу WARP awg99
+  # Добавление ip rule ТОЛЬКО для клиентов Telegram и WARP-приложений в таблицу WARP awg99
   local tg_count=0
   for uid in $tg_uids; do
     case "$uid" in ''|0|*[!0-9]*) continue ;; esac
@@ -390,35 +418,28 @@ apply_routing_rules() {
     tg_count=$((tg_count + 1))
   done
 
-  # Принудительный сброс UDP MTProto для мгновенного TCP fallback (0.05 сек)
-  for subnet in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 185.76.151.0/24; do
-    iptables -t filter -I OUTPUT -d "$subnet" -p udp -m multiport --dports 80,443,5222,8443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true
-  done
-  for uid in $tg_uids; do
-    case "$uid" in ''|0|*[!0-9]*) continue ;; esac
-    iptables -t filter -I OUTPUT -m owner --uid-owner "$uid" -p udp -m multiport --dports 80,443,5222,8443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true
-  done
+  # TCP MSS Clamping для awg99 (устраняет зависание картинок, медиа и загрузки файлов)
+  iptables -t mangle -I POSTROUTING -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  ip6tables -t mangle -I POSTROUTING -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables -t mangle -I OUTPUT -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  ip6tables -t mangle -I OUTPUT -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 
-  # TCP MSS Clamping для awg0 (MTU 1280/1420)
-  iptables -t mangle -A POSTROUTING -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-  ip6tables -t mangle -A POSTROUTING -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-
-  # NAT Masquerade для awg0
+  # NAT Masquerade для awg99
   iptables -t nat -C POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || true
   ip6tables -t nat -C POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || true
 
-  # Принудительное перенаправление DNS (Smart DNS forcing)
+  # Принудительное перенаправление DNS (Smart DNS forcing) ТОЛЬКО для ИИ-приложений
   local warp_dns primary_dns
   warp_dns=$(collect_warp_dns)
   primary_dns=$(echo "$warp_dns" | awk '{print $1}')
-  [ -n "$primary_dns" ] || primary_dns="103.27.157.38"
+  [ -n "$primary_dns" ] || primary_dns="1.1.1.1"
   if [ "$WARP_DNS_FORCE" = "1" ] && [ -n "$primary_dns" ]; then
-    for uid in $all_uids; do
+    for uid in $ai_uids; do
       case "$uid" in ''|0|*[!0-9]*) continue ;; esac
       iptables -t nat -I OUTPUT -m owner --uid-owner "$uid" -p udp --dport 53 -j DNAT --to-destination "$primary_dns:53" 2>/dev/null || true
       iptables -t nat -I OUTPUT -m owner --uid-owner "$uid" -p tcp --dport 53 -j DNAT --to-destination "$primary_dns:53" 2>/dev/null || true
     done
-    log_i "Smart DNS Forcing активирован на $primary_dns (UDP/TCP 53, DNS пул: $warp_dns)"
+    log_i "Smart DNS Forcing активирован для ИИ на $primary_dns (UDP/TCP 53)"
   fi
 
   # Направление ИИ-приложений в локальный нативный AI Router (127.0.0.1:15359)
@@ -455,10 +476,13 @@ apply_routing_rules() {
 cleanup_routing_rules() {
   iptables -t nat -D POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || true
   ip6tables -t nat -D POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || true
-  # Очистка UDP reject, DNS forcing и REDIRECT правил
-  for subnet in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 185.76.151.0/24; do
-    while iptables -t filter -D OUTPUT -d "$subnet" -p udp -m multiport --dports 80,443,5222,8443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do :; done
-  done
+  iptables -t mangle -D POSTROUTING -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  ip6tables -t mangle -D POSTROUTING -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables -t mangle -D OUTPUT -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  ip6tables -t mangle -D OUTPUT -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables -t mangle -D OUTPUT -o "$DEV" -j MARK --set-mark 0x40000000/0x40000000 2>/dev/null || true
+  ip6tables -t mangle -D OUTPUT -o "$DEV" -j MARK --set-mark 0x40000000/0x40000000 2>/dev/null || true
+
   local primary_dns
   primary_dns=$(collect_warp_dns | awk '{print $1}')
   [ -n "$primary_dns" ] || primary_dns="1.1.1.1"
@@ -548,12 +572,16 @@ start_tunnel() {
     "$BIN_DIR/awg" setconf "$DEV" "$WARP_CONF" 2>>"$LOG_FILE" || log_w "Ошибка awg setconf"
   fi
 
-  # Считывание адреса из конфига
-  local client_addr
-  client_addr=$(grep '^Address' "$WARP_CONF" | cut -d= -f2 | awk '{print $1}' | tr -d ' ,')
-  [ -n "$client_addr" ] || client_addr="172.16.0.2/32"
+  # Считывание адресов IPv4 и IPv6 из конфига
+  local client_addr_v4 client_addr_v6
+  client_addr_v4=$(grep '^Address' "$WARP_CONF" | cut -d= -f2 | awk -F',' '{print $1}' | tr -d ' ')
+  client_addr_v6=$(grep '^Address' "$WARP_CONF" | cut -d= -f2 | awk -F',' '{print $2}' | tr -d ' ')
+  [ -n "$client_addr_v4" ] || client_addr_v4="172.16.0.2/32"
 
-  ip -4 addr add "$client_addr" dev "$DEV" 2>/dev/null || true
+  ip -4 addr add "$client_addr_v4" dev "$DEV" 2>/dev/null || true
+  if [ -n "$client_addr_v6" ]; then
+    ip -6 addr add "$client_addr_v6" dev "$DEV" 2>/dev/null || true
+  fi
   ip link set up dev "$DEV" 2>/dev/null || true
   ip link set mtu 1280 dev "$DEV" 2>/dev/null || true
 
@@ -610,13 +638,109 @@ healthcheck_ai() {
   fi
 }
 
+SIP_I1="<b 0x5349502f322e302031303020547279696e670d0a5669613a205349502f322e302f55445020706333332e61746c616e74612e636f6d3b6272616e63683d7a39684734624b3737366173646864730d0a546f3a20426f62203c7369703a626f624062696c6f78692e636f6d3e0d0a46726f6d3a20416c696365203c7369703a616c6963654061746c616e74612e636f6d3e3b7461673d313932383330313737340d0a43616c6c2d49443a20613834623463373665363637313040706333332e61746c616e74612e636f6d0d0a435365713a2033313431353920494e564954450d0a436f6e74656e742d4c656e6774683a20300d0a0d0a>"
+SIP_I2="<b 0x494e56495445207369703a626f624062696c6f78692e636f6d205349502f322e300d0a5669613a205349502f322e302f55445020706333332e61746c616e74612e636f6d3b6272616e63683d7a39684734624b3737366173646864730d0a4d61782d466f7277617264733a2037300d0a546f3a20426f62203c7369703a626f624062696c6f78692e636f6d3e0d0a46726f6d3a20416c696365203c7369703a616c6963654061746c616e74612e636f6d3e3b7461673d313932383330313737340d0a43616c6c2d49443a20613834623463373665363637313040706333332e61746c616e74612e636f6d0d0a435365713a2033313431353920494e564954450d0a436f6e74656e742d4c656e6774683a20300d0a0d0a>"
+
+enable_sip_mode() {
+  [ -f "$WARP_CONF" ] || return 0
+  grep -q '^I1 =' "$WARP_CONF" && return 0
+  log_w "Активация AmneziaWG SIP I1/I2 обхода (резервный режим DPI)..."
+  local tmp_conf="$WARP_CONF.tmp.$$"
+  awk -v i1="$SIP_I1" -v i2="$SIP_I2" '
+    /^\[Peer\]/ && !added { print "I1 = " i1; print "I2 = " i2; added=1 }
+    { print }
+  ' "$WARP_CONF" > "$tmp_conf" && mv -f "$tmp_conf" "$WARP_CONF"
+  chmod 0600 "$WARP_CONF" 2>/dev/null || true
+  if ip link show dev "$DEV" >/dev/null 2>&1 && [ -x "$BIN_DIR/awg" ]; then
+    "$BIN_DIR/awg" setconf "$DEV" "$WARP_CONF" 2>/dev/null || true
+    ping -c 1 -W 2 -I "$DEV" 1.1.1.1 >/dev/null 2>&1 || true
+  fi
+}
+
+disable_sip_mode() {
+  [ -f "$WARP_CONF" ] || return 0
+  grep -q '^I1 =' "$WARP_CONF" || return 0
+  log_i "Возврат в стандартный чистый AmneziaWG режим (без I1/I2)..."
+  local tmp_conf="$WARP_CONF.tmp.$$"
+  grep -vE '^(I1|I2|I3|I4|I5) =' "$WARP_CONF" > "$tmp_conf" && mv -f "$tmp_conf" "$WARP_CONF"
+  chmod 0600 "$WARP_CONF" 2>/dev/null || true
+  if ip link show dev "$DEV" >/dev/null 2>&1 && [ -x "$BIN_DIR/awg" ]; then
+    "$BIN_DIR/awg" setconf "$DEV" "$WARP_CONF" 2>/dev/null || true
+    ping -c 1 -W 2 -I "$DEV" 1.1.1.1 >/dev/null 2>&1 || true
+  fi
+}
+
+check_and_heal_warp() {
+  [ "$ENABLE_WARP" = "1" ] || return 0
+  [ -x "$BIN_DIR/awg" ] || return 0
+  ip link show dev "$DEV" >/dev/null 2>&1 || return 0
+  
+  local dump last_hs=0 rx tx now diff
+  dump=$("$BIN_DIR/awg" show "$DEV" 2>/dev/null)
+  last_hs=$(echo "$dump" | grep -m1 '^last_handshake_time_sec=' | cut -d= -f2)
+  [ -n "$last_hs" ] || last_hs=$(echo "$dump" | grep -m1 'latest handshake:' | awk '{print $NF}')
+  case "$last_hs" in ''|*[!0-9]*) last_hs=0 ;; esac
+  
+  now=$(date +%s 2>/dev/null || echo 0)
+  if [ "$last_hs" -gt 0 ]; then
+    diff=$((now - last_hs))
+  else
+    diff=999
+  fi
+  
+  # Если туннель активен, но трафик простаивает >60 сек — посылаем keepalive-пинг для удержания NAT
+  if [ "$last_hs" -gt 0 ] && [ "$diff" -ge 60 ] && [ "$diff" -lt 180 ]; then
+    ping -c 1 -W 2 -I "$DEV" 1.1.1.1 >/dev/null 2>&1 || true
+    return 0
+  fi
+  
+  # Если хендшейка нет вообще или он протух (>180 сек):
+  # Переключаем эндпоинт на следующий из пула Anycast
+  if [ "$diff" -ge 180 ] || [ "$last_hs" -eq 0 ]; then
+    local pool="162.159.192.1:500 162.159.193.1:500 162.159.192.1:4500 162.159.195.1:1701 188.114.97.1:500 188.114.96.1:4500 162.159.192.1:854 162.159.193.1:2408"
+    local cur_ep next_ep="" found=0
+    cur_ep=$(echo "$dump" | grep -m1 '^endpoint=' | cut -d= -f2)
+    [ -n "$cur_ep" ] || cur_ep=$(echo "$dump" | grep -m1 'endpoint:' | awk '{print $NF}')
+    for ep in $pool; do
+      if [ "$found" -eq 1 ]; then
+        next_ep="$ep"
+        break
+      fi
+      [ "$ep" = "$cur_ep" ] && found=1
+    done
+    [ -n "$next_ep" ] || next_ep="162.159.192.1:500"
+    
+    if [ "$next_ep" != "$cur_ep" ]; then
+      log_w "WARP хендшейк устарел (${diff}с, last_hs=$last_hs, now=$now), переключение эндпоинта на $next_ep..."
+      local peer_pk
+      peer_pk=$(grep '^PublicKey' "$WARP_CONF" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+      [ -n "$peer_pk" ] || peer_pk="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+      "$BIN_DIR/awg" set "$DEV" peer "$peer_pk" endpoint "$next_ep" 2>/dev/null || true
+      ping -c 1 -W 2 -I "$DEV" 1.1.1.1 >/dev/null 2>&1 || true
+    else
+      # Если все эндпоинты уже перепробованы и связи нет:
+      # Адаптивно переключаем режим SIP I1/I2
+      if grep -q '^I1 =' "$WARP_CONF"; then
+        log_w "Связь отсутствует в SIP-режиме, пробуем вернуться в чистый режим..."
+        disable_sip_mode
+      else
+        log_w "Связь отсутствует в чистом режиме, пробуем аварийный SIP I1/I2 режим..."
+        enable_sip_mode
+      fi
+    fi
+  fi
+}
+
 case "$1" in
   start) start_tunnel ;;
   stop) stop_tunnel ;;
   restart|reload) start_tunnel ;;
   sync) sync_apps ;;
   status) status_tunnel ;;
+  watchdog|heal) check_and_heal_warp ;;
   healthcheck-ai|check-ai) healthcheck_ai ;;
+  sip-on) enable_sip_mode ;;
+  sip-off) disable_sip_mode ;;
   rekey)
     log_i "Перегенерация профиля WARP по запросу..."
     stop_tunnel
