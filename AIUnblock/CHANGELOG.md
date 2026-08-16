@@ -1,3 +1,8 @@
+# Версия v2.5.2
+
+- Исключён домен Google Поиска (`www.google.com`) и статических ресурсов (`www.gstatic.com`, `ssl.gstatic.com`) из таблицы `sni_routes.conf`.
+- Восстановлена работоспособность Google Поиска, Google Lens и Ленты в приложении Google App, при этом авторизация и нейросети Gemini/AI Studio продолжают работать через обход.
+
 # Версия v2.5.1
 
 - Добавлена поддержка стороннего клиента Gemini Pro / Google AI Studio (`com.rx.geminipro`) в стандартный список приложений `apps.list`.
