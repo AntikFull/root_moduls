@@ -779,7 +779,26 @@ apply_uid_rules() {
       echo "COMMIT"
     } | ip6t_restore --noflush || return 1
   fi
+  clean_vpnhide_rules
   return 0
+}
+
+clean_vpnhide_rules() {
+  local uid uids
+  uids=$(all_target_uids)
+  [ -n "$uids" ] || return 0
+  if iptables -t filter -S vpnhide_out >/dev/null 2>&1; then
+    for uid in $uids; do
+      iptables -t filter -D vpnhide_out -d 127.0.0.0/8 -p tcp -m owner --uid-owner "$uid" -j REJECT --reject-with tcp-reset >/dev/null 2>&1 || true
+      iptables -t filter -D vpnhide_out -d 127.0.0.0/8 -p udp -m owner --uid-owner "$uid" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1 || true
+    done
+  fi
+  if ip6tables -t filter -S vpnhide_out6 >/dev/null 2>&1; then
+    for uid in $uids; do
+      ip6tables -t filter -D vpnhide_out6 -d ::1/128 -p tcp -m owner --uid-owner "$uid" -j REJECT --reject-with tcp-reset >/dev/null 2>&1 || true
+      ip6tables -t filter -D vpnhide_out6 -d ::1/128 -p udp -m owner --uid-owner "$uid" -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1 || true
+    done
+  fi
 }
 
 apply_service_rules() {
