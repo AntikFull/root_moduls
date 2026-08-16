@@ -81,7 +81,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <header class="hero" id="overview">
   <div class="brand-row">
     <div><div class="brand-kicker">AntiDPI · Root module</div><h1>Zapret2 eCubz</h1><p class="hero-sub">Обход DPI, точечный туннель для любых приложений и раздача интернета.</p></div>
-    <span class="hero-badge" id="heroVersion">v3.2.26 (3146)</span>
+    <span class="hero-badge" id="heroVersion">v3.2.27 (3147)</span>
   </div>
   <div class="status-grid" id="state" aria-live="polite">
     <div class="status-tile"><div class="status-label">Служба</div><div class="status-value" id="statusRunning"><span class="dot"></span>Загрузка…</div></div>
@@ -339,6 +339,15 @@ const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
 
 let workingApiEndpoint = null;
 
+function isRealApiResponse(text){
+  if(!text) return false;
+  const t = text.trim();
+  if(!t) return false;
+  if(t.startsWith('<!doctype') || t.startsWith('<!DOCTYPE') || t.startsWith('<html>') || t.startsWith('<head') || t.startsWith('<?xml') || t.startsWith('<!')) return false;
+  if(t.startsWith('#!') || t.startsWith('local ') || t.startsWith('ngx.') || t.includes('ngx.header') || t.startsWith('function ') || t.includes('local moddir')) return false;
+  return true;
+}
+
 async function httpExec(command, args=[]){
   const isHttp = window.location.protocol.startsWith('http');
   if(!isHttp || typeof fetch !== 'function') return null;
@@ -346,8 +355,8 @@ async function httpExec(command, args=[]){
   const fullCmd = args.length ? command + ' ' + args.map(shellQuote).join(' ') : command;
   const action = args[0] || (command.includes('zapret2-control') ? command.split(/\s+/).slice(1)[0] : command);
 
-  // Список возможных API точек для OpenResty / Webroot Manager, Busybox httpd, cgi-bin
-  const candidateEndpoints = workingApiEndpoint ? [workingApiEndpoint, 'api.lua', 'api.sh', 'cgi-bin/api.sh', 'api'] : ['api.lua', 'api.sh', 'cgi-bin/api.sh', 'api', '/zapret2/api.lua', '/zapret2/api.sh', '/zapret2-android/api.lua', '/zapret2-android/api.sh'];
+  // Список возможных API точек для Busybox httpd, cgi-bin, Webroot Manager
+  const candidateEndpoints = workingApiEndpoint ? [workingApiEndpoint, 'api.sh', 'cgi-bin/api.sh', '/zapret2-android/api.sh', 'api'] : ['api.sh', 'cgi-bin/api.sh', '/zapret2-android/api.sh', 'api', '/zapret2/api.sh', '/cgi-bin/api.sh'];
 
   for(const ep of candidateEndpoints){
     try{
@@ -356,7 +365,7 @@ async function httpExec(command, args=[]){
       const respGet = await fetch(getUrl, {method: 'GET'});
       if(respGet.ok){
         const text = (await respGet.text()).trim();
-        if(text && !text.startsWith('<!doctype') && !text.startsWith('<!DOCTYPE') && !text.startsWith('#!/system/bin/sh') && !text.startsWith('<?xml') && !text.startsWith('<html>')){
+        if(isRealApiResponse(text)){
           workingApiEndpoint = ep;
           return text;
         }
@@ -372,7 +381,7 @@ async function httpExec(command, args=[]){
       });
       if(respPost.ok){
         const text = (await respPost.text()).trim();
-        if(text && !text.startsWith('<!doctype') && !text.startsWith('<!DOCTYPE') && !text.startsWith('#!/system/bin/sh') && !text.startsWith('<?xml') && !text.startsWith('<html>')){
+        if(isRealApiResponse(text)){
           workingApiEndpoint = ep;
           return text;
         }

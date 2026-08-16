@@ -1258,7 +1258,7 @@ if [ -d "$MODDIR/webroot" ]; then
     fi
   done
   if [ -n "$BB_BIN" ]; then
-    chmod 0755 "$MODDIR/webroot/api.sh" "$MODDIR/webroot/api.lua" 2>/dev/null || true
+    chmod 0755 "$MODDIR/webroot/api.sh" 2>/dev/null || true
     chmod 0644 "$MODDIR/webroot/index.html" "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
     # Запускаем httpd на порту 8080 (или 8088 если 8080 занят)
     "$BB_BIN" httpd -p 8080 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null || \
