@@ -1,4 +1,11 @@
-# Список изменений Analytics & Ads Disabler v5.6.1 (5610)
+# Список изменений Analytics & Ads Disabler v5.7.0 (5700)
+
+## v5.7.0
+
+- **Universal Unity IL2CPP Native Hooking (`libil2cpp.so`)**:
+  - Нативный C++ перехватчик памяти и C-API IL2CPP внутри Zygisk-движка.
+  - Автоматическое динамическое сканирование и патчинг функций доступности рекламы (`IsAdAvailable`, `IsReady`, `IsRewardedVideoAvailable`, `HasAd`, `CanWatchAd` -> return true) прямо в бинарном коде ARM64/ARM32 `libil2cpp.so`.
+  - Полная поддержка игр на движке Unity (Rogue Legend, Soul Knight, и любых других 3D/2D IL2CPP игр) без необходимости в отдельных чит-модулях.
 
 ## v5.6.1
 
