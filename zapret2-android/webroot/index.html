@@ -81,7 +81,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <header class="hero" id="overview">
   <div class="brand-row">
     <div><div class="brand-kicker">AntiDPI · Root module</div><h1>Zapret2 eCubz</h1><p class="hero-sub">Обход DPI, точечный туннель для любых приложений и раздача интернета.</p></div>
-    <span class="hero-badge" id="heroVersion">v3.2.27 (3147)</span>
+    <span class="hero-badge" id="heroVersion">v3.2.28 (3148)</span>
   </div>
   <div class="status-grid" id="state" aria-live="polite">
     <div class="status-tile"><div class="status-label">Служба</div><div class="status-value" id="statusRunning"><span class="dot"></span>Загрузка…</div></div>
@@ -339,9 +339,21 @@ const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
 
 let workingApiEndpoint = null;
 
+function cleanCgiOutput(raw){
+  if(!raw) return '';
+  let t = String(raw).trim();
+  if(t.startsWith('Status:') || t.startsWith('HTTP/') || t.startsWith('Content-Type:')){
+    const splitIdx = t.indexOf('\r\n\r\n');
+    if(splitIdx !== -1) return t.substring(splitIdx + 4).trim();
+    const splitIdxLf = t.indexOf('\n\n');
+    if(splitIdxLf !== -1) return t.substring(splitIdxLf + 2).trim();
+  }
+  return t;
+}
+
 function isRealApiResponse(text){
   if(!text) return false;
-  const t = text.trim();
+  const t = cleanCgiOutput(text);
   if(!t) return false;
   if(t.startsWith('<!doctype') || t.startsWith('<!DOCTYPE') || t.startsWith('<html>') || t.startsWith('<head') || t.startsWith('<?xml') || t.startsWith('<!')) return false;
   if(t.startsWith('#!') || t.startsWith('local ') || t.startsWith('ngx.') || t.includes('ngx.header') || t.startsWith('function ') || t.includes('local moddir')) return false;
@@ -349,41 +361,86 @@ function isRealApiResponse(text){
 }
 
 async function httpExec(command, args=[]){
-  const isHttp = window.location.protocol.startsWith('http');
-  if(!isHttp || typeof fetch !== 'function') return null;
+  if(typeof fetch !== 'function') return null;
 
-  const fullCmd = args.length ? command + ' ' + args.map(shellQuote).join(' ') : command;
-  const action = args[0] || (command.includes('zapret2-control') ? command.split(/\s+/).slice(1)[0] : command);
+  let action = '';
+  if(args && args.length){
+    action = args[0];
+  } else if(command){
+    const parts = command.trim().split(/\s+/);
+    action = parts[parts.length - 1].replace(/['"]/g, '');
+  }
 
-  // Список возможных API точек для Busybox httpd, cgi-bin, Webroot Manager
-  const candidateEndpoints = workingApiEndpoint ? [workingApiEndpoint, 'api.sh', 'cgi-bin/api.sh', '/zapret2-android/api.sh', 'api'] : ['api.sh', 'cgi-bin/api.sh', '/zapret2-android/api.sh', 'api', '/zapret2/api.sh', '/cgi-bin/api.sh'];
+  const loc = window.location;
+  const curPath = (loc && loc.pathname) ? loc.pathname.replace(/\/[^\/]*$/, '') : '';
 
-  for(const ep of candidateEndpoints){
+  const candidates = [];
+  if(workingApiEndpoint) candidates.push(workingApiEndpoint);
+
+  candidates.push('api.sh');
+  candidates.push('./api.sh');
+  candidates.push('cgi-bin/api.sh');
+  if(curPath) {
+    candidates.push(curPath + '/api.sh');
+    candidates.push(curPath + '/cgi-bin/api.sh');
+  }
+  candidates.push('/api.sh');
+  candidates.push('/cgi-bin/api.sh');
+  candidates.push('/zapret2-android/api.sh');
+  candidates.push('/zapret2-android/webroot/api.sh');
+  candidates.push('/modules/zapret2-android/webroot/api.sh');
+  candidates.push('/modules/zapret2-android/api.sh');
+
+  candidates.push('http://127.0.0.1:8080/api.sh');
+  candidates.push('http://localhost:8080/api.sh');
+  candidates.push('http://127.0.0.1:8088/api.sh');
+  candidates.push('http://localhost:8088/api.sh');
+  candidates.push('http://127.0.0.1:8080/cgi-bin/api.sh');
+  candidates.push('http://127.0.0.1:8088/modules/zapret2-android/webroot/api.sh');
+  candidates.push('http://localhost:8088/modules/zapret2-android/webroot/api.sh');
+
+  const uniqueCandidates = [...new Set(candidates)];
+
+  for(const ep of uniqueCandidates){
     try{
-      // 1. Попытка GET запроса
-      const getUrl = ep + '?cmd=' + encodeURIComponent(fullCmd) + (action ? '&action=' + encodeURIComponent(action) : '');
-      const respGet = await fetch(getUrl, {method: 'GET'});
-      if(respGet.ok){
-        const text = (await respGet.text()).trim();
-        if(isRealApiResponse(text)){
+      const getUrl = ep + (ep.includes('?') ? '&' : '?') + 'cmd=' + encodeURIComponent(command) + (action ? '&action=' + encodeURIComponent(action) : '');
+      const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+      const tId = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
+      
+      const respGet = await fetch(getUrl, {
+        method: 'GET',
+        signal: ctrl ? ctrl.signal : undefined
+      });
+      if(tId) clearTimeout(tId);
+      
+      if(respGet && respGet.ok){
+        const raw = await respGet.text();
+        const cleaned = cleanCgiOutput(raw);
+        if(isRealApiResponse(cleaned)){
           workingApiEndpoint = ep;
-          return text;
+          return cleaned;
         }
       }
     }catch(_){}
 
     try{
-      // 2. Попытка POST запроса
+      const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+      const tId = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
+      
       const respPost = await fetch(ep, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({cmd: fullCmd, action: action, args: args})
+        body: JSON.stringify({cmd: command, action: action, args: args}),
+        signal: ctrl ? ctrl.signal : undefined
       });
-      if(respPost.ok){
-        const text = (await respPost.text()).trim();
-        if(isRealApiResponse(text)){
+      if(tId) clearTimeout(tId);
+      
+      if(respPost && respPost.ok){
+        const raw = await respPost.text();
+        const cleaned = cleanCgiOutput(raw);
+        if(isRealApiResponse(cleaned)){
           workingApiEndpoint = ep;
-          return text;
+          return cleaned;
         }
       }
     }catch(_){}
@@ -392,8 +449,8 @@ async function httpExec(command, args=[]){
 }
 
 function nativeExec(command,...passArgs){
-  const k=window.ksu||window.KernelSU||window.apatch;
-  if(k&&typeof k.exec==='function'){
+  const k = window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk;
+  if(k && typeof k.exec === 'function'){
     return new Promise((resolve,reject)=>{
       const id='__ksuCb_'+(++asyncExecSeq);
       let done=false;
@@ -453,15 +510,15 @@ function nativeExec(command,...passArgs){
     });
   }
 
-  // Fallback to HTTP / CGI bridge (Webroot Manager, OpenResty, Magisk, MMRL, browser)
-  if(typeof fetch==='function'&&window.location.protocol.startsWith('http')){
+  // HTTP / CGI bridge for Magisk, MMRL, Webroot Manager, Browser
+  if(typeof fetch === 'function'){
     return httpExec(command,passArgs).then(result=>{
       if(result!==null)return result;
-      throw new Error('HTTP API Webroot недоступен. Проверьте запуск сервера su -c webroot');
+      throw new Error('HTTP API Webroot недоступен. Проверьте запуск службы или откройте http://localhost:8080');
     });
   }
 
-  return Promise.reject(new Error('Откройте WebUI через KernelSU/KernelSU Next/APatch или браузер (localhost:8080)'));
+  return Promise.reject(new Error('Откройте WebUI через KernelSU / APatch / Magisk или в браузере (http://localhost:8080)'));
 }
 
 function control(...args){

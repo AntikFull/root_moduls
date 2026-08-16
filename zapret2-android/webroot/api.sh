@@ -2,9 +2,6 @@
 # ==============================================================================
 # zapret2-android WebUI HTTP / CGI API Bridge
 # ==============================================================================
-# Позволяет WebUI работать в Webroot Manager (OpenResty), Magisk, MMRL
-# и обычных браузерах (http://localhost:8080/zapret2-android/)
-# ==============================================================================
 
 MODDIR="/data/adb/modules/zapret2-android"
 CONTROL="$MODDIR/bin/zapret2-control"
@@ -27,26 +24,34 @@ if [ $# -gt 0 ]; then
   exec "$CONTROL" "$@"
 fi
 
+# Функция выполнения команды
+run_control() {
+  _cmd="$1"
+  # Удаляем префикс вызова zapret2-control если он есть
+  _cmd=$(echo "$_cmd" | sed "s|^$CONTROL[[:space:]]*||; s|^zapret2-control[[:space:]]*||; s|^/data/adb/modules/zapret2-android/bin/zapret2-control[[:space:]]*||; s|^['\"]*||; s|['\"]*$||")
+  if [ -n "$_cmd" ]; then
+    eval "$CONTROL $_cmd"
+  else
+    exec "$CONTROL" json-status
+  fi
+  exit $?
+}
+
 # 2. Обработка GET запросов через QUERY_STRING
 if [ -n "$QUERY_STRING" ]; then
-  CMD_VAL=$(echo "$QUERY_STRING" | sed -n 's/.*[?&]*\(cmd\|action\|c\)=\([^&]*\).*/\2/p')
-  if [ -n "$CMD_VAL" ]; then
-    DECODED_CMD=$(printf '%b' "$(echo "$CMD_VAL" | sed 's/%/\\x/g')" 2>/dev/null)
-    [ -n "$DECODED_CMD" ] || DECODED_CMD="$CMD_VAL"
-    
-    if echo "$DECODED_CMD" | grep -q "zapret2-control"; then
-      eval "$DECODED_CMD"
-      exit $?
-    fi
-    
-    ARGS_VAL=$(echo "$QUERY_STRING" | sed -n 's/.*[?&]*args=\([^&]*\).*/\1/p')
-    if [ -n "$ARGS_VAL" ]; then
-      DECODED_ARGS=$(printf '%b' "$(echo "$ARGS_VAL" | sed 's/%/\\x/g')" 2>/dev/null)
-      [ -n "$DECODED_ARGS" ] || DECODED_ARGS="$ARGS_VAL"
-      exec "$CONTROL" $DECODED_CMD $DECODED_ARGS
-    else
-      exec "$CONTROL" $DECODED_CMD
-    fi
+  # 2.1 Извлечение action=...
+  ACTION_VAL=$(echo "$QUERY_STRING" | tr '&' '\n' | grep -m1 '^action=' | cut -d= -f2-)
+  # 2.2 Извлечение cmd=...
+  CMD_VAL=$(echo "$QUERY_STRING" | tr '&' '\n' | grep -m1 '^cmd=' | cut -d= -f2-)
+  # 2.3 Извлечение c=...
+  C_VAL=$(echo "$QUERY_STRING" | tr '&' '\n' | grep -m1 '^c=' | cut -d= -f2-)
+
+  CHOSEN="${ACTION_VAL:-${CMD_VAL:-$C_VAL}}"
+  if [ -n "$CHOSEN" ]; then
+    # Быстрое декодирование URL
+    DECODED=$(printf '%b' "$(echo "$CHOSEN" | sed 's/+/ /g; s/%\([0-9a-fA-F][0-9a-fA-F]\)/\\x\1/g')" 2>/dev/null)
+    [ -n "$DECODED" ] || DECODED="$CHOSEN"
+    run_control "$DECODED"
   fi
 fi
 
@@ -54,23 +59,14 @@ fi
 if [ "$REQUEST_METHOD" = "POST" ] || [ -n "$CONTENT_LENGTH" ]; then
   BODY=$(cat)
   if [ -n "$BODY" ]; then
-    JSON_CMD=$(echo "$BODY" | sed -n 's/.*"cmd"[ ]*:[ ]*"\([^"]*\)".*/\1/p')
     JSON_ACTION=$(echo "$BODY" | sed -n 's/.*"action"[ ]*:[ ]*"\([^"]*\)".*/\1/p')
+    JSON_CMD=$(echo "$BODY" | sed -n 's/.*"cmd"[ ]*:[ ]*"\([^"]*\)".*/\1/p')
     
-    if [ -n "$JSON_CMD" ]; then
-      CLEAN_CMD=$(echo "$JSON_CMD" | sed 's/\\"/"/g; s/\\\//\//g')
-      eval "$CLEAN_CMD"
-      exit $?
-    elif [ -n "$JSON_ACTION" ]; then
-      exec "$CONTROL" $JSON_ACTION
-    else
-      if echo "$BODY" | grep -q "zapret2-control"; then
-        eval "$BODY"
-        exit $?
-      else
-        exec "$CONTROL" $BODY
-      fi
-    fi
+    TARGET="${JSON_ACTION:-$JSON_CMD}"
+    [ -n "$TARGET" ] || TARGET="$BODY"
+    
+    CLEAN_TARGET=$(echo "$TARGET" | sed 's/\\"/"/g; s/\\\//\//g')
+    run_control "$CLEAN_TARGET"
   fi
 fi
 

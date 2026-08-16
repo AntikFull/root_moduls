@@ -25,7 +25,7 @@
 
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
-| **[zapret2-android](./zapret2-android)** | `v3.2.27` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
+| **[zapret2-android](./zapret2-android)** | `v3.2.28` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
 | **[analytics_ads_disabler](./analytics_ads_disabler)** | `v5.5.0` | Комплексная блокировка рекламы, аналитики и трекеров + нативный Zygisk Auto-Collapse для автоматического схлопывания пустых рекламных рамок без LSPosed. | Magisk 20.4+ / KernelSU / APatch |
 | **[AIUnblock](./AIUnblock)** | `v2.4.8` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch |
 | **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.0.2` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек для обхода ограничений сотовых операторов (МТС, Мегафон, Билайн, Tele2) на раздачу интернета. | Magisk / KernelSU / APatch |
@@ -46,7 +46,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ### 📦 Modules Overview
 
-1. **[zapret2-android](./zapret2-android) (v3.2.27)**
+1. **[zapret2-android](./zapret2-android) (v3.2.28)**
    - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight tunnel for any selected applications.
    - Restores YouTube 4K playback, Discord voice/media, and blocked web resources directly in the kernel netfilter. Zero battery drain compared to classic VPNs. Full hotspot/tethering support.
 2. **[analytics_ads_disabler](./analytics_ads_disabler) (v5.5.0)**
@@ -65,7 +65,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 | Модуль / Module | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- |
-| **zapret2-android v3.2.27** | [zapret2-android_v3.2.27_3147.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v3.2.27_3147.zip) | ~24 MB |
+| **zapret2-android v3.2.28** | [zapret2-android_v3.2.28_3148.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v3.2.28_3148.zip) | ~24 MB |
 | **analytics_ads_disabler v5.5.0** | [analytics_ads_disabler_v5.5.0_5500.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v5.5.0_5500.zip) | ~435 KB |
 | **AIUnblock v2.4.8** | [AIUnblock_v2.4.8_248.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v2.4.8_248.zip) | ~9.9 MB |
 | **nfqttl_ecubz v15.0.2** | [nfqttl_ecubz_v15.0.2_1502.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/nfqttl_ecubz_v15.0.2_1502.zip) | ~80 KB |
