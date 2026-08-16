@@ -1,4 +1,13 @@
-# Список изменений Analytics & Ads Disabler v5.5.0 (5500)
+# Список изменений Analytics & Ads Disabler v5.6.0 (5600)
+
+## v5.6.0
+
+- **Universal Rewarded Ads Auto-Granting (Имитация наград за просмотр видео)**:
+  - Автоматический перехват полноэкранных рекламных активностей всех основных сетей (Google AdMob, Yandex Ads, AppLovin MAX, Unity Ads, ironSource, myTarget/VK Ads, RuStore Ads).
+  - Мгновенная эмуляция колбэков начисления наград (`onUserEarnedReward`, `onRewarded`, `onUnityAdsShowComplete(COMPLETED)`) и автоматическое закрытие рекламного окна за 0.01 секунды.
+  - Пользователь получает бонусы/монеты/разблокировки в приложениях мгновенно без просмотра видеороликов и без задержек.
+- **Оптимизация Zygisk Lifecycle**:
+  - Улучшенная синхронизация жизненного цикла с ActivityThread без конфликтов с Intent Firewall и iptables.
 
 ## v5.5.0
 
