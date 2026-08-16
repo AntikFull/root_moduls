@@ -30,11 +30,17 @@ run_control() {
   # Удаляем префикс вызова zapret2-control если он есть
   _cmd=$(echo "$_cmd" | sed "s|^$CONTROL[[:space:]]*||; s|^zapret2-control[[:space:]]*||; s|^/data/adb/modules/zapret2-android/bin/zapret2-control[[:space:]]*||; s|^['\"]*||; s|['\"]*$||")
   if [ -n "$_cmd" ]; then
-    eval "$CONTROL $_cmd"
+    _out=$(eval "$CONTROL $_cmd" 2>&1)
+    _rc=$?
+    if [ -n "$_out" ]; then
+      printf "%s\n" "$_out"
+    else
+      printf '{"ok":true}\n'
+    fi
+    exit $_rc
   else
     exec "$CONTROL" json-status
   fi
-  exit $?
 }
 
 # 2. Обработка GET запросов через QUERY_STRING

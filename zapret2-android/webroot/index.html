@@ -81,7 +81,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <header class="hero" id="overview">
   <div class="brand-row">
     <div><div class="brand-kicker">AntiDPI · Root module</div><h1>Zapret2 eCubz</h1><p class="hero-sub">Обход DPI, точечный туннель для любых приложений и раздача интернета.</p></div>
-    <span class="hero-badge" id="heroVersion">v3.2.29 (3149)</span>
+    <span class="hero-badge" id="heroVersion">v3.2.30 (3150)</span>
   </div>
   <div class="status-grid" id="state" aria-live="polite">
     <div class="status-tile"><div class="status-label">Служба</div><div class="status-value" id="statusRunning"><span class="dot"></span>Загрузка…</div></div>
@@ -352,9 +352,9 @@ function cleanCgiOutput(raw){
 }
 
 function isRealApiResponse(text){
-  if(!text) return false;
+  if(text === null || text === undefined) return false;
   const t = cleanCgiOutput(text);
-  if(!t) return false;
+  if(!t) return true;
   if(t.startsWith('<!doctype') || t.startsWith('<!DOCTYPE') || t.startsWith('<html>') || t.startsWith('<head') || t.startsWith('<?xml') || t.startsWith('<!')) return false;
   if(t.startsWith('#!') || t.startsWith('local ') || t.startsWith('ngx.') || t.includes('ngx.header') || t.startsWith('function ') || t.includes('local moddir')) return false;
   return true;
@@ -379,13 +379,10 @@ async function httpExec(command, args=[]){
 
   candidates.push('api.sh');
   candidates.push('./api.sh');
-  candidates.push('cgi-bin/api.sh');
   if(curPath) {
     candidates.push(curPath + '/api.sh');
-    candidates.push(curPath + '/cgi-bin/api.sh');
   }
   candidates.push('/api.sh');
-  candidates.push('/cgi-bin/api.sh');
   candidates.push('/zapret2-android/api.sh');
   candidates.push('/zapret2-android/webroot/api.sh');
   candidates.push('/modules/zapret2-android/webroot/api.sh');
@@ -395,7 +392,6 @@ async function httpExec(command, args=[]){
   candidates.push('http://localhost:8080/api.sh');
   candidates.push('http://127.0.0.1:8088/api.sh');
   candidates.push('http://localhost:8088/api.sh');
-  candidates.push('http://127.0.0.1:8080/cgi-bin/api.sh');
   candidates.push('http://127.0.0.1:8088/modules/zapret2-android/webroot/api.sh');
   candidates.push('http://localhost:8088/modules/zapret2-android/webroot/api.sh');
 
