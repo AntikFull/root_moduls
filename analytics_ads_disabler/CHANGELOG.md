@@ -1,4 +1,11 @@
-# Список изменений Analytics & Ads Disabler v5.6.0 (5600)
+# Список изменений Analytics & Ads Disabler v5.6.1 (5610)
+
+## v5.6.1
+
+- **Pre-Load & Availability Spoofing (Эмуляция готовности видео `isReady = true`)**:
+  - Автоматический фоновый демон опроса слушателей ironSource, LevelPlay, AppLovin MAX, Unity Ads и Google AdMob.
+  - Постоянная отправка положительного статуса готовности видео (`onRewardedVideoAvailabilityChanged(true)`, `onAdAvailable`, `onAdLoaded`) в C# движок Unity и Java.
+  - Устранена ошибка *«Реклама не доступна»* в играх и приложениях при отключенном интернете или заблокированных рекламных серверах.
 
 ## v5.6.0
 

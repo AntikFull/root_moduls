@@ -1,8 +1,8 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v5.6.0
-versionCode=5600
+version=v5.6.1
+versionCode=5610
 author=eCubz (https://t.me/eCubz)
-description=Комплексная блокировка рекламы, аналитики и трекеров + нативный Zygisk Auto-Collapse & Rewarded Ads Spoofing (автоматическое получение наград за рекламу). Логи: /data/adb/analytics_ads_disabler/logs • Группа: https://t.me/module_ecubz
+description=Комплексная блокировка рекламы, аналитики и трекеров + нативный Zygisk Auto-Collapse, Pre-Load Spoofing (isReady=true) & Rewarded Ads Spoofing. Логи: /data/adb/analytics_ads_disabler/logs • Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/update.json
 minMagisk=20400
