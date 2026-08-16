@@ -26,8 +26,6 @@ com.anthropic.claude
 com.google.android.apps.bard
 com.google.android.apps.labs.language.tailwind
 com.google.android.googlequicksearchbox
-com.google.android.webview
-com.android.chrome
 
 # ------------------------------------------------------------------------------
 # X.AI / Grok / X (Twitter)
