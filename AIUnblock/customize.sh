@@ -26,11 +26,39 @@ native_checksum_ok() {
   rel=${file#"$MODPATH/bin/"}
   [ -s "$file" ] || return 1
   if command -v sha256sum >/dev/null 2>&1 && [ -f "$MODPATH/bin/SHA256SUMS.all" ]; then
-    expected=$(awk -v f="$rel" '{ name=$2; sub(/^\*/, "", name); if (name==f) print $1 }' "$MODPATH/bin/SHA256SUMS.all" | head -n 1)
-    actual=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
-    [ -n "$expected" ] && [ "$expected" = "$actual" ] || return 1
+    expected=$(tr -d '\r' < "$MODPATH/bin/SHA256SUMS.all" 2>/dev/null | awk -v f="$rel" '{ name=$2; sub(/^\*/, "", name); if (name==f) { print $1; exit } }')
+    if [ -n "$expected" ]; then
+      actual=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+      [ "$expected" = "$actual" ] || return 1
+    fi
   fi
   return 0
+}
+
+run_native_selftest() {
+  bin_path="$1"
+  if "$bin_path" self-test >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -x /system/bin/linker64 ] && /system/bin/linker64 "$bin_path" self-test >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -x /system/bin/linker ] && /system/bin/linker "$bin_path" self-test >/dev/null 2>&1; then
+    return 0
+  fi
+  tmp_bin="/data/local/tmp/aiunblock_test_$$"
+  cp -f "$bin_path" "$tmp_bin" 2>/dev/null
+  chmod 0755 "$tmp_bin" 2>/dev/null
+  if "$tmp_bin" self-test >/dev/null 2>&1; then
+    rm -f "$tmp_bin" 2>/dev/null
+    return 0
+  fi
+  if [ -x /system/bin/linker64 ] && /system/bin/linker64 "$tmp_bin" self-test >/dev/null 2>&1; then
+    rm -f "$tmp_bin" 2>/dev/null
+    return 0
+  fi
+  rm -f "$tmp_bin" 2>/dev/null
+  return 1
 }
 
 NATIVE_CANDIDATES="$MODPATH/bin/$native_abi/aiunblock-native"
@@ -40,7 +68,7 @@ for native_src in $NATIVE_CANDIDATES; do
   native_checksum_ok "$native_src" || continue
   cp -f "$native_src" "$MODPATH/bin/aiunblock-native" || continue
   chmod 0700 "$MODPATH/bin/aiunblock-native" 2>/dev/null
-  if "$MODPATH/bin/aiunblock-native" self-test >/dev/null 2>&1; then
+  if run_native_selftest "$MODPATH/bin/aiunblock-native"; then
     native_selected=${native_src##*/}
     [ "$native_selected" = "aiunblock-native.static" ] && native_selected="static-fallback"
     [ "$native_selected" = "aiunblock-native" ] && native_selected="primary"

@@ -1,3 +1,19 @@
+# Версия v2.5.1
+
+- Добавлена поддержка стороннего клиента Gemini Pro / Google AI Studio (`com.rx.geminipro`) в стандартный список приложений `apps.list`.
+
+# Версия v2.5.0
+
+- Исправлено застревание Gemini при повторном запуске приложения после закрытия.
+- Добавлены домены верификации и обновления сессии Google (accounts.google.com, oauth2.googleapis.com, apis.google.com, www.google.com, ssl.gstatic.com, www.gstatic.com, ogp.me) в таблицу роутера sni_routes.conf.
+- В native router добавлена блокировка зацикливания подключений к 127.0.0.1 при перехвате доменов, резолвимых локальными рекламорезами.
+
+# Версия v2.4.9
+
+- Исправлена ошибка установки модуля в Magisk App.
+- Устранена проблема с Windows CRLF переносами строк в module.prop и SHA256SUMS.all.
+- Добавлена каскадная проверка run_native_selftest с фоллбэками на системный линкер и /data/local/tmp на случай noexec в инсталляторе Magisk.
+
 # Версия v2.4.3
 
 - Gemini в Google App и отдельное приложение Gemini переведены на выборочную SNI-маршрутизацию вместо полного DNAT всего HTTPS-трафика приложения.

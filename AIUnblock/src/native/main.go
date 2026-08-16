@@ -259,6 +259,9 @@ func handleConn(conn net.Conn, routes routeTable, gatewayDir string, helloTimeou
 			log.Printf("unmatched SNI %q: original destination unavailable: %v", sni, origErr)
 			return
 		}
+		if original.IP.IsLoopback() {
+			return
+		}
 		target = original.String()
 	}
 
