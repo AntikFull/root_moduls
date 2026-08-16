@@ -1,3 +1,8 @@
+# Версия v2.5.3
+
+- Проведён полный аудит sni_routes.conf: удалены сторонние CDN домены картинок/аватарок (lh3..lh6), сервисы Google Play (play.googleapis.com, play-lh) и отладочные клиенты.
+- В таблице сохранены строго выверенные домены Gemini, Google AI Studio, NotebookLM и OAuth-авторизации Google.
+
 # Версия v2.5.2
 
 - Исключён домен Google Поиска (`www.google.com`) и статических ресурсов (`www.gstatic.com`, `ssl.gstatic.com`) из таблицы `sni_routes.conf`.
