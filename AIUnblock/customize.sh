@@ -8,8 +8,7 @@ load_module_metadata "$MODPATH/module.prop"
 
 ui_print "- Установка AI Unblock RU $MODULE_VERSION_LABEL (versionCode=$MODULE_VERSION_CODE)"
 ui_print "- Умная маршрутизация приложений из apps.list/apps.user.list"
-ui_print "- Системный DNS Android не меняется"
-ui_print "- Hosts/AdBlock в режиме optional-перехвата без глобальной подмены"
+ui_print "- Системный DNS Android и hosts не меняются"
 
 detected_arch="${ARCH:-$(getprop ro.product.cpu.abi 2>/dev/null)}"
 case "$detected_arch" in
@@ -87,14 +86,12 @@ rm -rf "$MODPATH/bin/arm64-v8a" "$MODPATH/bin/armeabi-v7a" "$MODPATH/bin/x86_64"
 rm -f "$MODPATH/bin/aiunblock-router" "$MODPATH/bin/curl" "$MODPATH/bin/SHA256SUMS" 2>/dev/null
 
 for text_file in \
-  "$MODPATH/etc/hosts.ai" \
-  "$MODPATH/etc/hosts.adblock" \
   "$MODPATH/apps.list" \
   "$MODPATH/locale_apps.list" \
   "$MODPATH/sni_routes.conf" \
   "$MODPATH/smartdns.conf"; do
   [ -f "$text_file" ] && sed -i 's/\r$//' "$text_file" 2>/dev/null
- done
+done
 
 if [ "$OLD_MODPATH" != "$MODPATH" ] && [ -d "$OLD_MODPATH" ]; then
   for state_file in \
@@ -119,21 +116,18 @@ AIUNBLOCK_CONFIG_FILE="$MODPATH/install.conf"
 config_load "$AIUNBLOCK_CONFIG_FILE"
 config_write "$AIUNBLOCK_CONFIG_FILE" || abort "Не удалось записать install.conf"
 
-ui_print "- Конфигурация: hosts=$ENABLE_HOSTS_ROUTING, adblock=$ENABLE_ADBLOCK, locale=$ENABLE_APP_LOCALE, fail=$FAIL_MODE"
+ui_print "- Конфигурация: locale=$ENABLE_APP_LOCALE, fail=$FAIL_MODE, loc=${BLOCKED_LOC:-off}"
 
-. "$MODPATH/lib/hosts.sh"
-prepare_hosts_tree "$MODPATH" || {
-  rm -rf "$MODPATH/system" 2>/dev/null
-  ui_print "! Optional hosts не монтируется. Per-app routing все равно будет работать."
-}
+# Убеждаемся, что в модуле нет папки system (hosts подмена полностью удалена)
+rm -rf "$MODPATH/system" 2>/dev/null
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 for script in customize.sh post-fs-data.sh late-load.sh boot-completed.sh service.sh action.sh uninstall.sh; do
   [ -f "$MODPATH/$script" ] && set_perm "$MODPATH/$script" 0 0 0755
- done
+done
 for script in "$MODPATH"/lib/*.sh; do
   [ -f "$script" ] && set_perm "$script" 0 0 0644
- done
+done
 [ -f "$MODPATH/bin/aiunblock-native" ] && set_perm "$MODPATH/bin/aiunblock-native" 0 0 0700
 [ -f "$MODPATH/bin/aiunblockctl" ] && set_perm "$MODPATH/bin/aiunblockctl" 0 0 0755
 [ -f "$MODPATH/sni_routes.conf" ] && set_perm "$MODPATH/sni_routes.conf" 0 0 0600
@@ -147,4 +141,3 @@ for script in "$MODPATH"/lib/*.sh; do
 
 ui_print "- Готово. AI Unblock запустится автоматически после перезагрузки."
 ui_print "- Логи: /sdcard/eCubz/AIUnblock/logs"
-ui_print "- Для проверки нажмите Action или запуск в графическом интерфейсе прямо сейчас."

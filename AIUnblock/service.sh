@@ -227,12 +227,11 @@ human_health() {
 }
 
 write_public_report() {
-  local tmp target_count router_text hosts_status
+  local tmp target_count router_text
   public_storage_ready || return 1
   tmp="$PUBLIC_LOG_DIR/.AIUnblock_report.$$.tmp"
   target_count=$(all_target_uids 2>/dev/null | wc -w 2>/dev/null)
   router_text="не запущен"; router_running && router_text="работает"
-  hosts_status=$(cat "$MODDIR/.hosts_status" 2>/dev/null); [ -n "$hosts_status" ] || hosts_status="выключены / не требуются"
   {
     echo "AI Unblock RU $MODULE_VERSION_LABEL"
     echo "Обновлено: $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)"
@@ -246,7 +245,6 @@ write_public_report() {
     else
       echo "Совместимость firewall: явных пересечений не обнаружено"
     fi
-    echo "Hosts: $hosts_status"
     echo ""
     echo "Сервисы:"
     [ -n "$GEMINI_UIDS" ] && { [ -n "$CURRENT_GEMINI" ] && [ "$GEMINI_ROUTER_READY" -eq 1 ] && echo "- Gemini (приложение): OK, TLS через router проверен" || echo "- Gemini (приложение): router/TLS не прошёл проверку"; }
