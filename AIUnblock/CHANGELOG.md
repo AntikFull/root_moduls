@@ -1,3 +1,8 @@
+# Версия v3.0.2
+
+- Расширена SNI-маршрутизация для Gemini, Gemini Live и Google AI Studio.
+- Добавлены домены `gemini.google`, `aistudio.google`, `generativeai.googleapis.com`, `geller-pa.googleapis.com` и `alkalimakersuite-pa.googleapis.com`.
+
 # Версия v3.0.1
 
 - Исправлена неполная выборочная SNI-маршрутизация Gemini/Google AI Studio после перехода на ветку v3.
