@@ -1,3 +1,10 @@
+# Версия v3.0.1
+
+- Исправлена неполная выборочная SNI-маршрутизация Gemini/Google AI Studio после перехода на ветку v3.
+- В `sni_routes.conf` добавлены `aisandbox-pa.googleapis.com`, `assistant-s3-pa.googleapis.com`, `alkalimakersuite-pa.clients6.google.com` и `webchannel-alkalimakersuite-pa.clients6.google.com`.
+- Основной health-check Gemini по-прежнему требует только стабильные SNI (`gemini.google.com`, `robinfrontend-pa.googleapis.com`, `proactivebackend-pa.googleapis.com`, `generativelanguage.googleapis.com`), чтобы временный сбой вспомогательного endpoint не отключал весь сервис.
+- При выборе нового Gemini gateway дополнительно выполняется нефатальная TLS-проверка новых Gemini/AI Studio endpoint'ов; результат попадает в debug-лог.
+
 # Версия v3.0.0
 
 - **Глобальное упрощение и очистка модуля:** модуль переведён исключительно на разблокировку AI-сервисов через нативный роутер `aiunblock-native`.

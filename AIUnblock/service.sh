@@ -1006,11 +1006,12 @@ selector_start() {
 }
 
 refresh_proxy_rules() {
-  local dir="$GATEWAY_DIR/.select.$$" old selected gemini_probe_domains
+  local dir="$GATEWAY_DIR/.select.$$" old selected gemini_probe_domains gemini_aux_probe_domains
   SELECTOR_PIDS=""
   rm -rf "$dir"; mkdir -p "$dir" || return 1
 
   gemini_probe_domains="gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com"
+  gemini_aux_probe_domains="aisandbox-pa.googleapis.com assistant-s3-pa.googleapis.com alkalimakersuite-pa.clients6.google.com"
   [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ] && selector_start gemini "$CURRENT_GEMINI" "$gemini_probe_domains" "$PROXIES" gemini.google.com "$dir"
   [ -n "$NOTEBOOK_UIDS" ] && selector_start notebook "$CURRENT_NOTEBOOK" "notebooklm-pa.googleapis.com" "$PROXIES" notebooklm-pa.googleapis.com "$dir"
   [ -n "$CHATGPT_UIDS" ] && selector_start chatgpt "$CURRENT_CHATGPT" "chatgpt.com" "$AI_PROXIES" chatgpt.com "$dir"
@@ -1026,6 +1027,10 @@ refresh_proxy_rules() {
       GEMINI_ROUTER_READY=1
       if ! router_tls_probe "gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com generativelanguage.googleapis.com"; then
         GEMINI_ROUTER_READY=0; RETRY_SOON=1; log "Gateway Gemini найден, но сквозная TLS-проверка SNI-router не пройдена"
+      elif [ "$old" != "$selected" ] && ! router_tls_probe "$gemini_aux_probe_domains"; then
+        # Новые/вспомогательные endpoint'ы не должны валить весь Gemini: основной
+        # health-check остаётся на стабильной четвёрке, а здесь только диагностика.
+        log "Gateway Gemini: основной SNI-путь OK, но не все дополнительные Gemini/AI Studio SNI прошли TLS-проверку"
       fi
     else
       CURRENT_GEMINI=""; GEMINI_ROUTER_READY=0; RETRY_SOON=1; log "Gateway Gemini не найден"
