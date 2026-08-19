@@ -1,8 +1,7 @@
 id=nfqttl_ecubz
 name=Nfqttl eCubz
-version=v15.0.2
-versionCode=1502
+version=v15.1.5
+versionCode=1515
 author=eCubz (https://t.me/eCubz)
-description=Smart Multi-Engine TTL fix v15.0.2, Absolute IPv6 Hop Limit Lock & Zero-Leak Forward. Группа: https://t.me/module_ecubz
+description=Smart Multi-Engine TTL/HL fix v15.1.5 & Auto VPN Tethering (VPN/Direct router). Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/nfqttl_ecubz/update.json
-

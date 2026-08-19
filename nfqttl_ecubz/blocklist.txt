@@ -1,18 +1,22 @@
-# Nfqttl eCubz Optimized Blocklist
+# Nfqttl eCubz Blocklist
 # Пользовательский список доменов и сигнатур для предотвращения детекции раздачи.
-# Записи, начинающиеся с #, игнорируются.
+# Записи, начинающиеся с символа #, игнорируются.
+#
+# ВНИМАНИЕ: По умолчанию домены проверки связи (Captive Portal / NCSI) закомментированы.
+# Если их раскомментировать, подключенные устройства (ноутбуки, телефоны) могут показывать
+# статус "Подключено без интернета" или отказываться передавать данные.
 
-# --- 1. Windows NCSI, Android & Apple Captive Portals ---
-msftncsi
-msftconnecttest
-dns.msftncsi.com
-captive.apple.com
-connectivitycheck
-clients3.google.com
-detectportal.firefox.com
-nmcheck.gnome.org
-connectivity-check.ubuntu.com
-network-test.debian.org
+# --- 1. Windows NCSI, Android & Apple Captive Portals (Опционально) ---
+#msftncsi
+#msftconnecttest
+#dns.msftncsi.com
+#captive.apple.com
+#connectivitycheck
+#clients3.google.com
+#detectportal.firefox.com
+#nmcheck.gnome.org
+#connectivity-check.ubuntu.com
+#network-test.debian.org
 
 # --- 2. Windows 10/11 Telemetry & Background Updates ---
 windowsupdate.com
@@ -27,15 +31,15 @@ wpad
 Windows-Update-Agent
 Microsoft-Delivery-Optimization
 
-# --- 3. NTP (Сетевое время по HTTP/HTTPS) ---
-time.windows.com
-time.nist.gov
-time.apple.com
-time.google.com
-time.android.com
-time.cloudflare.com
-pool.ntp.org
-ntp.org
+# --- 3. Имена time/NTP-сервисов (только string-поиск в TCP 80/443; НЕ фильтр UDP/123) ---
+#time.windows.com
+#time.nist.gov
+#time.apple.com
+#time.google.com
+#time.android.com
+#time.cloudflare.com
+#pool.ntp.org
+#ntp.org
 
 # --- 4. DoH (DNS over HTTPS) ---
 cloudflare-dns.com
