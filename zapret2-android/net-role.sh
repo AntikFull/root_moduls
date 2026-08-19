@@ -29,6 +29,7 @@ iface_has_ipv4() { "$IP_BIN" -o -4 addr show dev "$1" 2>/dev/null | grep -q '[[:
 iface_has_ip() { "$IP_BIN" -o addr show dev "$1" 2>/dev/null | grep -Eq '[[:space:]]inet6?[[:space:]]'; }
 
 iface_is_strict_vpn_hint() {
+  [ "$1" != "${WARP_DEV:-awg99}" ] || return 1
   case "$1" in
     tun*|wg*|awg*|vpn*|warp*|tailscale*|zt*) return 0 ;;
     *) return 1 ;;

@@ -127,13 +127,16 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
     <details class="expert" id="expertWarp" style="margin-top:10px">
       <summary>⚙ Дополнительные параметры маскировки</summary>
       <div class="grid" style="margin-top:12px">
-        <label class="field"><span>Серверный адрес</span><input class="control" id="warpEndpoint" placeholder="162.159.192.1"></label>
+        <label class="field"><span>Серверный адрес (IP или домен)</span><input class="control" id="warpEndpoint" placeholder="162.159.192.1"></label>
         <label class="field"><span>Порт</span><input class="control" id="warpPort" type="number" placeholder="500"></label>
-        <label class="field"><span>Пакеты шума (Jc)</span><input class="control" id="warpJc" type="number" placeholder="5"></label>
+        <label class="field"><span>Подбор маскировки</span><select class="control" id="warpAdaptive" onchange="syncWarpControls()"><option value="1">AUTO — менять J / порт / SIP при сбое</option><option value="0">Ручной — не менять мои значения</option></select></label>
+        <label class="field"><span>SIP I1/I2 в ручном режиме</span><select class="control" id="warpSipForce"><option value="0">Выключен — BASIC</option><option value="1">Включен — I1/I2</option></select></label>
+        <label class="field"><span>Пакеты шума (Jc)</span><input class="control" id="warpJc" type="number" min="1" max="128" placeholder="5"></label>
         <label class="field"><span>Мин. размер пакета (Jmin)</span><input class="control" id="warpJmin" type="number" placeholder="40"></label>
         <label class="field"><span>Макс. размер пакета (Jmax)</span><input class="control" id="warpJmax" type="number" placeholder="70"></label>
         <label class="field" style="grid-column:1/-1"><span>DNS туннеля</span><input class="control" id="warpDns" placeholder="Список IP через пробел (или из файла dns.list)"></label>
       </div>
+      <p class="muted">Jc/Jmin/Jmax — клиентские junk-пакеты. AUTO сначала пробует BASIC, затем SIP I1/I2 и разные J на официальных WARP-портах; сохранённый официальный порт получает приоритет. В ручном режиме endpoint/port/J используются буквально и не меняются. Большой Jmax может фрагментироваться, если превышает MTU текущей сети.</p>
     </details>
     <p class="hint"><strong>Точечный обход для приложений:</strong> Трафик любых выбранных вами приложений направляется через защищённый туннель без необходимости включать глобальный VPN на весь телефон. Список приложений настраивается во вкладке «Приложения» (кнопка ТУННЕЛЬ) или в <code>warp_apps.list</code>.</p>
     <div class="actions">
@@ -335,7 +338,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <button type="button" class="fab-top" id="fabTop" aria-label="Наверх" title="Наверх">↑</button>
 <script>
 const byId=id=>document.getElementById(id);let apps=[];let appLists={manual:new Set(),auto:new Set(),exclude:new Set(),autoEnabled:true};let appIcons=new Map();let iconLoadGeneration=0;let modDir='/data/adb/modules/zapret2-android';let noticeTimer;let startupPollTimer=0;let asyncExecSeq=0;const appApplyQueue=new Map();let appApplyTimer=0;let appApplyInFlight=false;
-let latestWarpHandshake=0;let latestWarpRunning=false;let latestWarpRx=0;let latestWarpTx=0;let liveTickerTimer=null;let livePollingTimer=null;let isPollingActive=false;let appVisibilitySyncTimer=0;
+let latestWarpHandshake=0;let latestWarpRunning=false;let latestWarpRx=0;let latestWarpTx=0;let liveTickerTimer=null;let livePollingTimer=null;let isPollingActive=false;let appVisibilitySyncTimer=0;let warpFormDirty=false;let warpSaveInFlight=false;
 const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
 
 let workingApiEndpoint = null;
@@ -1105,8 +1108,11 @@ function toggleApp(pkg,list,input){
 
 function syncWarpControls(){
   const enabled=byId('enableWarp')?.value==='1';
-  ['warpEndpoint','warpPort','warpJc','warpJmin','warpJmax'].forEach(id=>setFieldEnabled(id,enabled));
+  const adaptive=byId('warpAdaptive')?.value!=='0';
+  ['warpEndpoint','warpPort','warpAdaptive','warpJc','warpJmin','warpJmax','warpDns'].forEach(id=>setFieldEnabled(id,enabled));
+  setFieldEnabled('warpSipForce',enabled&&!adaptive);
 }
+function markWarpDirty(){warpFormDirty=true;}
 
 async function loadWarp(options={}){
   try{
@@ -1117,28 +1123,42 @@ async function loadWarp(options={}){
     latestWarpTx=Number(data.tx_bytes)||0;
 
     const enableEl=byId('enableWarp');
-    if(enableEl&&document.activeElement!==enableEl){
+    if(enableEl&&!warpFormDirty&&!warpSaveInFlight&&document.activeElement!==enableEl){
       enableEl.value=data.enable_warp||'0';
     }
-    const warpState=data.running?'Работает':((data.enable_warp==='1'&&data.interface_up)?'Поиск рабочего профиля':(data.enable_warp==='1'?'Ошибка запуска':'Отключен'));
+    const adaptResult=data.adaptive_result||'pending';
+    const step=Number(data.adaptive_step)||0,total=Math.max(1,Number(data.adaptive_total)||40);
+    const adaptUpdated=Number(data.adaptive_updated)||0,adaptAge=adaptUpdated?Math.max(0,Math.floor(Date.now()/1000)-adaptUpdated):0;
+    let warpState='Отключен',warpClass='';
+    if(data.running){warpState='Работает';warpClass='ok';}
+    else if(data.enable_warp==='1'&&adaptResult==='failed'){warpState='Рабочий профиль не найден';warpClass='bad';}
+    else if(data.enable_warp==='1'&&data.interface_up){
+      if(String(data.adaptive||'1')==='1'){
+        if(adaptResult==='pending'&&adaptAge>30){warpState='Подбор задержан на '+Math.min(step+1,total)+'/'+total+' · '+adaptAge+'с';warpClass='bad';}
+        else{warpState='Подбор профиля '+Math.min(step+1,total)+'/'+total;warpClass='warn';}
+      }
+      else{warpState='Нет рукопожатия · ручной профиль';warpClass='bad';}
+    }else if(data.enable_warp==='1'){warpState='Запуск туннеля…';warpClass='warn';}
     byId('warpStatusPill').textContent='Статус: '+warpState;
-    byId('warpStatusPill').className='pill '+(data.running?'ok':(data.enable_warp==='1'?'warn':''));
+    byId('warpStatusPill').className='pill '+warpClass;
     byId('warpIfacePill').textContent='Интерфейс: '+(data.warp_dev||'awg99');
     byId('warpSipPill').textContent='Маскировка: '+(data.sip_active?'SIP I1/I2':'BASIC (без I1/I2)');
     byId('warpSipPill').className='pill '+(data.sip_active?'warn':'ok');
     const ajc=data.active_jc||data.jc||'5',ajmin=data.active_jmin||data.jmin||'40',ajmax=data.active_jmax||data.jmax||'70';
-    byId('warpProfilePill').textContent='Профиль: J='+ajc+' / '+ajmin+'–'+ajmax+' · step '+(data.adaptive_step??0);
+    byId('warpProfilePill').textContent='Профиль: J='+ajc+' / '+ajmin+'–'+ajmax+' · '+((String(data.adaptive||'1')==='1')?('step '+(Number(data.adaptive_step||0)+1)+'/'+(data.adaptive_total||40)):'ручной');
 
-    const activeId=document.activeElement?.id;
-    if(activeId!=='warpEndpoint'&&activeId!=='warpPort'){
-      const ep=(data.endpoint||'162.159.192.1:500').split(':');
-      byId('warpEndpoint').value=ep[0]||'162.159.192.1';
-      byId('warpPort').value=ep[1]||'500';
+    // Live polling must never destroy unsaved expert edits. Active candidate
+    // is shown in pills, while fields always represent the saved baseline.
+    if(!warpFormDirty&&!warpSaveInFlight){
+      byId('warpEndpoint').value=data.configured_endpoint||'162.159.192.1';
+      byId('warpPort').value=data.configured_port||'500';
+      byId('warpJc').value=data.jc||'5';
+      byId('warpJmin').value=data.jmin||'40';
+      byId('warpJmax').value=data.jmax||'70';
+      byId('warpDns').value=data.dns||'1.1.1.1 1.0.0.1';
+      byId('warpAdaptive').value=String(data.adaptive??'1');
+      byId('warpSipForce').value=String(data.sip_force??'0');
     }
-    if(activeId!=='warpJc')byId('warpJc').value=data.jc||'5';
-    if(activeId!=='warpJmin')byId('warpJmin').value=data.jmin||'40';
-    if(activeId!=='warpJmax')byId('warpJmax').value=data.jmax||'70';
-    if(activeId!=='warpDns')byId('warpDns').value=data.dns||'1.1.1.1 1.0.0.1';
 
     byId('warpTrafficPill').textContent='Трафик: ↓ '+formatBytes(latestWarpRx)+' · ↑ '+formatBytes(latestWarpTx);
     updateWarpHandshakeUI();
@@ -1159,13 +1179,17 @@ async function manualRefreshWarp(){
 }
 
 async function saveWarp(){
-  await busy('saveWarpBtn','Применение настроек WARP…');
+  await busy('saveWarpBtn','Сохранение настроек WARP…');
+  warpSaveInFlight=true;
   try{
-    const enabled=byId('enableWarp').value,ep=byId('warpEndpoint').value.trim()||'162.159.192.1',port=byId('warpPort').value.trim()||'500',jc=byId('warpJc').value.trim()||'5',jmin=byId('warpJmin').value.trim()||'40',jmax=byId('warpJmax').value.trim()||'70',dns=byId('warpDns').value.trim()||'1.1.1.1 1.0.0.1';
-    await control('warp-save',enabled,ep,port,jc,jmin,jmax,'0','0',dns);
+    const enabled=byId('enableWarp').value,ep=byId('warpEndpoint').value.trim()||'162.159.192.1',port=byId('warpPort').value.trim()||'500',jc=byId('warpJc').value.trim()||'5',jmin=byId('warpJmin').value.trim()||'40',jmax=byId('warpJmax').value.trim()||'70',dns=byId('warpDns').value.trim()||'1.1.1.1 1.0.0.1',adaptive=byId('warpAdaptive').value||'1',sipForce=byId('warpSipForce').value||'0';
+    await control('warp-save',enabled,ep,port,jc,jmin,jmax,'0','0',dns,adaptive,sipForce);
+    warpFormDirty=false;
+    warpSaveInFlight=false;
     await loadWarp({silent:true});
-    done('saveWarpBtn',enabled==='1'?(latestWarpRunning?'WARP работает':'WARP ищет рабочий профиль'):'WARP отключен');
+    done('saveWarpBtn',enabled==='1'?(adaptive==='1'?'Настройки сохранены · подбор запущен':'Настройки сохранены · ручной профиль запускается'):'WARP отключен');
   }catch(error){
+    warpSaveInFlight=false;
     done('saveWarpBtn','Ошибка: '+error.message);
   }
 }
@@ -1175,11 +1199,17 @@ async function rekeyWarp(){
   try{
     await control('warp-rekey');
     await loadWarp({silent:true});
-    done('rekeyWarpBtn','Ключ WARP перегенерирован');
+    done('rekeyWarpBtn','Перерегистрация ключа запущена');
   }catch(error){
     done('rekeyWarpBtn','Ошибка: '+error.message);
   }
 }
+
+['enableWarp','warpEndpoint','warpPort','warpAdaptive','warpSipForce','warpJc','warpJmin','warpJmax','warpDns'].forEach(id=>{
+  const el=byId(id);if(!el)return;
+  el.addEventListener('input',markWarpDirty);
+  el.addEventListener('change',markWarpDirty);
+});
 
 function startLiveUpdates(){
   if(!liveTickerTimer){

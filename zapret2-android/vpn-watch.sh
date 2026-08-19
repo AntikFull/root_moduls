@@ -142,6 +142,8 @@ event_pending=0
 event_since=0
 
 while :; do
+  # WebUI может менять WARP/VPN/tethering без рестарта watcher-процесса.
+  [ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
   now=$(now_epoch)
   need_apply=0
   roles=""

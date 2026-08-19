@@ -25,6 +25,10 @@ failures=0
 while :; do
   sleep "$HEALTH_WATCH_INTERVAL"
 
+  # Настройки меняются из WebUI без полного перезапуска службы. Не держим
+  # ENABLE_WARP/WARP_* замороженными с момента загрузки Android.
+  [ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
+
   # 1. Контроль и самовосстановление WARP туннеля (работает независимо от AntiDPI DIRECT режима)
   if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
     dev="${WARP_DEV:-awg99}"

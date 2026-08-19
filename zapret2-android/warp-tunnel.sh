@@ -56,12 +56,47 @@ DEV="$WARP_DEV"
 : "${WARP_DNS:=1.1.1.1 1.0.0.1}"
 : "${WARP_DNS_FORCE:=1}"
 : "${WARP_ADAPTIVE:=1}"
-: "${WARP_STARTUP_TRIES:=7}"
+: "${WARP_SIP_FORCE:=0}"
+: "${WARP_STARTUP_TRIES:=40}"
 : "${WARP_PROBE_TIMEOUT:=3}"
+: "${WARP_WATCH_BATCH:=5}"
+: "${WARP_ADAPT_RETRY_SEC:=300}"
+: "${WARP_AWG_CMD_TIMEOUT:=2}"
 
 log_i() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] warp: $*" >> "$LOG_FILE"; }
 log_w() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] warp: $*" >> "$LOG_FILE"; }
 log_e() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] warp: $*" >> "$LOG_FILE"; }
+
+# Local UAPI commands must never be able to freeze the adaptive state machine.
+# On some Android builds a stale/broken userspace WireGuard socket can make
+# `awg show/set/syncconf` wait indefinitely. A candidate is skipped instead.
+run_with_timeout() {
+  local limit="$1" pid elapsed=0 rc
+  shift
+  case "$limit" in ''|*[!0-9]*) limit=2 ;; esac
+  [ "$limit" -ge 1 ] 2>/dev/null || limit=1
+  [ "$limit" -le 10 ] 2>/dev/null || limit=10
+  "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$elapsed" -ge "$limit" ] 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  wait "$pid"
+  rc=$?
+  return "$rc"
+}
+
+awg_cmd() {
+  run_with_timeout "${WARP_AWG_CMD_TIMEOUT:-2}" "$BIN_DIR/awg" "$@"
+}
 validate_ipv4() {
   local ip="$1" a b c d extra o
   IFS=. read -r a b c d extra <<EOV
@@ -134,7 +169,7 @@ generate_warp_config() {
   fi
 
   log_i "Генерация нового персонального WARP-профиля на этом устройстве..."
-  local privkey="" pubkey="" client_v4="" client_v6="" peer_pubkey=""
+  local privkey="" pubkey="" client_v4="" client_v6="" peer_pubkey="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
 
   if [ -x "$BIN_DIR/awg" ]; then
     privkey=$("$BIN_DIR/awg" genkey 2>/dev/null)
@@ -208,16 +243,44 @@ generate_warp_config() {
     token=$(printf '%s' "$reg_resp" | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
     client_v4=$(printf '%s' "$reg_resp" | grep -o '"v4"[[:space:]]*:[[:space:]]*"172\.[^"]*"' | tail -n1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
     client_v6=$(printf '%s' "$reg_resp" | grep -o '"v6"[[:space:]]*:[[:space:]]*"2606:4700:[^"]*"' | tail -n1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
-    peer_pubkey=$(printf '%s' "$reg_resp" | grep -o '"public_key"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
+    # В ответе API может быть несколько public_key. Нужен ключ именно WARP peer,
+    # а не клиентский/account key. Берём первый public_key после секции peers;
+    # если формат API изменился, оставляем общеизвестный consumer WARP peer key.
+    local peer_blob parsed_peer
+    peer_blob=${reg_resp#*\"peers\"}
+    if [ "$peer_blob" != "$reg_resp" ]; then
+      parsed_peer=$(printf '%s' "$peer_blob" | grep -o '"public_key"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
+      [ -n "$parsed_peer" ] && peer_pubkey="$parsed_peer"
+    fi
     warp_enabled=$(printf '%s' "$reg_resp" | grep -o '"warp_enabled"[[:space:]]*:[[:space:]]*[^,}]*' | head -n1 | cut -d: -f2 | tr -d '[:space:]')
 
     if [ "$warp_enabled" != "true" ]; then
-      if [ -n "$reg_id" ] && [ -n "$token" ] && curl -4 -fsS -m 8 -X PATCH \
-        -H "CF-Client-Version: a-6.10-2158" \
-        -H "Content-Type: application/json; charset=UTF-8" \
-        -H "Authorization: Bearer $token" \
-        -H "User-Agent: okhttp/3.12.1" \
-        -d '{"warp_enabled":true}' "$reg_endpoint/$reg_id" >/dev/null 2>&1; then
+      local patch_success=0
+      if [ -n "$reg_id" ] && [ -n "$token" ]; then
+        if curl -4 -fsS -m 8 -X PATCH \
+          -H "CF-Client-Version: a-6.10-2158" \
+          -H "Content-Type: application/json; charset=UTF-8" \
+          -H "Authorization: Bearer $token" \
+          -H "User-Agent: okhttp/3.12.1" \
+          -d '{"warp_enabled":true}' "$reg_endpoint/$reg_id" >/dev/null 2>&1; then
+          patch_success=1
+        else
+          for cf_ip in 162.159.192.1 162.159.193.1 104.16.124.96 104.16.123.96 188.114.97.1; do
+            if curl -4 -fsS -m 8 \
+              --resolve "api.cloudflareclient.com:443:$cf_ip" \
+              -X PATCH \
+              -H "CF-Client-Version: a-6.10-2158" \
+              -H "Content-Type: application/json; charset=UTF-8" \
+              -H "Authorization: Bearer $token" \
+              -H "User-Agent: okhttp/3.12.1" \
+              -d '{"warp_enabled":true}' "$reg_endpoint/$reg_id" >/dev/null 2>&1; then
+              patch_success=1
+              break
+            fi
+          done
+        fi
+      fi
+      if [ "$patch_success" -eq 1 ]; then
         warp_enabled=true
       else
         log_e "WARP registration получена, но warp_enabled не удалось активировать"
@@ -439,18 +502,33 @@ get_peer_public_key() {
 }
 
 get_latest_handshake_epoch() {
-  local hs
+  local hs raw rc
   [ -x "$BIN_DIR/awg" ] || { echo 0; return 0; }
-  hs=$("$BIN_DIR/awg" show "$DEV" latest-handshakes 2>/dev/null | awk 'NF>=2 && $2+0>m{m=$2+0} END{print m+0}')
+  raw=$(awg_cmd show "$DEV" 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ] 2>/dev/null; then
+    [ "$rc" -eq 124 ] 2>/dev/null && log_w "awg show: UAPI timeout ${WARP_AWG_CMD_TIMEOUT:-2}s"
+    echo 0
+    return 0
+  fi
+  hs=$(printf '%s\n' "$raw" | sed -n 's/^last_handshake_time_sec=//p' | head -n1)
   case "$hs" in ''|*[!0-9]*) hs=0 ;; esac
   printf '%s\n' "$hs"
 }
 
 get_active_endpoint() {
-  local ep
-  ep=$("$BIN_DIR/awg" show "$DEV" endpoints 2>/dev/null | awk 'NF>=2{print $2; exit}')
+  local ep raw
+  raw=$(awg_cmd show "$DEV" 2>/dev/null) || raw=""
+  ep=$(printf '%s\n' "$raw" | sed -n 's/^endpoint=//p' | head -n1)
   [ -n "$ep" ] || ep=$(grep '^Endpoint[[:space:]]*=' "$WARP_CONF" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '[:space:]')
   printf '%s\n' "$ep"
+}
+
+get_rx_bytes() {
+  local rx raw
+  raw=$(awg_cmd show "$DEV" 2>/dev/null) || raw=""
+  rx=$(printf '%s\n' "$raw" | sed -n 's/^rx_bytes=//p' | head -n1)
+  case "$rx" in ''|*[!0-9]*) rx=0 ;; esac
+  printf '%s\n' "$rx"
 }
 
 adapt_state_step() {
@@ -475,40 +553,95 @@ write_adapt_state() {
   mv -f "$tmp" "$WARP_ADAPT_STATE"
 }
 
-# Возвращает один из приоритетных client-side профилей junk train.
-# Профиль 0 — пользовательский baseline. Профиль 1 сохраняет тот же J train,
-# но меняет WARP port; после этого J-профили постепенно расширяются.
+# Возвращает один из воспроизводимых client-side J-профилей.
+# По документации AmneziaWG Jc/Jmin/Jmax не обязаны совпадать с сервером:
+# junk-пакеты отправляются инициатором перед handshake. Профиль 0 — ручной baseline.
+adapt_state_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$WARP_ADAPT_STATE" 2>/dev/null | head -n1
+}
+
+adaptive_profile_count() { echo 5; }
+adaptive_endpoint_count() { echo 4; }
+adaptive_total_steps() { echo 40; }
+
+get_underlay_mtu() {
+  local route dev mtu
+  route=$(ip -4 route get "$WARP_ENDPOINT" 2>/dev/null | head -n1)
+  dev=$(printf '%s\n' "$route" | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+  [ -n "$dev" ] || { echo 1500; return 0; }
+  mtu=$(ip link show dev "$dev" 2>/dev/null | sed -n 's/.* mtu \([0-9][0-9]*\).*/\1/p' | head -n1)
+  case "$mtu" in ''|*[!0-9]*) mtu=1500 ;; esac
+  echo "$mtu"
+}
+
 get_j_profile() {
-  local base_jc="$WARP_JC" base_min="$WARP_JMIN" base_max="$WARP_JMAX"
+  local base_jc="$WARP_JC" base_min="$WARP_JMIN" base_max="$WARP_JMAX" mtu legacy_max legacy_min strong_max
   case "$base_jc" in ''|*[!0-9]*) base_jc=5 ;; esac
   case "$base_min" in ''|*[!0-9]*) base_min=40 ;; esac
   case "$base_max" in ''|*[!0-9]*) base_max=70 ;; esac
   [ "$base_jc" -ge 1 ] 2>/dev/null && [ "$base_jc" -le 128 ] 2>/dev/null || base_jc=5
-  if ! { [ "$base_min" -ge 1 ] 2>/dev/null && [ "$base_min" -lt "$base_max" ] 2>/dev/null && [ "$base_max" -le 1200 ] 2>/dev/null; }; then
+  if ! { [ "$base_min" -ge 1 ] 2>/dev/null && [ "$base_min" -lt "$base_max" ] 2>/dev/null && [ "$base_max" -le 4096 ] 2>/dev/null; }; then
     base_min=40; base_max=70
   fi
 
-  # Не рандомизируем J* на каждом retry: фиксированный набор даёт
-  # воспроизводимый поиск и позволяет запомнить рабочую комбинацию.
+  mtu=$(get_underlay_mtu)
+  # Ограничение сверху для Jmax для предотвращения фрагментации UDP на мобильных данных (MTU 1420)
+  legacy_max=1280
+  if [ "$mtu" -le 1420 ] 2>/dev/null; then legacy_max=$((mtu - 100)); fi
+  [ "$legacy_max" -ge 320 ] 2>/dev/null || legacy_max=320
+  [ "$legacy_max" -le 1280 ] 2>/dev/null || legacy_max=1280
+  legacy_min=$((legacy_max / 2))
+  [ "$legacy_min" -lt "$legacy_max" ] 2>/dev/null || legacy_min=$((legacy_max - 64))
+  [ "$legacy_min" -ge 8 ] 2>/dev/null || legacy_min=8
+
+  strong_max=900
+  if [ "$mtu" -le 1080 ] 2>/dev/null; then strong_max=$((mtu - 100)); fi
+  [ "$strong_max" -ge 320 ] 2>/dev/null || strong_max=320
+
   case "$1" in
-    0|1) printf '%s %s %s\n' "$base_jc" "$base_min" "$base_max" ;;
-    2) echo '4 64 96' ;;
-    3) echo '6 64 160' ;;
-    4) echo '8 96 256' ;;
-    *) echo '10 128 512' ;;
+    0) printf '%s %s %s\n' "$base_jc" "$base_min" "$base_max" ;;
+    1) printf '10 %s %s\n' "$legacy_min" "$legacy_max" ;;
+    2) echo '6 64 320' ;;
+    3) echo '4 8 80' ;;
+    *) printf '12 256 %s\n' "$strong_max" ;;
   esac
 }
 
-# Для consumer WARP используем consumer ingress и документированные
-# WireGuard-порты. Не смешиваем его с Zero Trust ingress и случайными портами.
+# Consumer WARP endpoints: перебор проверенных рабочих IP-адресов Cloudflare и портов.
+# Если пользовательский IP (например 162.159.192.1) заблокирован у провайдера,
+# адаптивный режим пробует 188.114.97.1, 188.114.96.1, 162.159.193.1 и другие пулы.
 get_adaptive_endpoint() {
-  case "$1" in
-    0) printf '%s:%s\n' "$WARP_ENDPOINT" "$WARP_PORT" ;;
-    1) echo '162.159.192.1:2408' ;;
-    2) echo '162.159.192.1:500' ;;
-    3) echo '162.159.192.1:1701' ;;
-    4) echo '162.159.192.1:4500' ;;
-    *) echo '162.159.192.1:2408' ;;
+  local idx="$1" base="${WARP_ENDPOINT:-162.159.192.1}" port="${WARP_PORT:-500}"
+  case "$idx" in
+    0)
+      # 1-й приоритет: сохраненный пользовательский endpoint и порт
+      printf '%s:%s\n' "$base" "$port"
+      ;;
+    1)
+      # 2-й приоритет: основной рабочий европейский пул Cloudflare в РФ (порт 2408)
+      if [ "$base" = "188.114.97.1" ]; then
+        printf '188.114.96.1:2408\n'
+      else
+        printf '188.114.97.1:2408\n'
+      fi
+      ;;
+    2)
+      # 3-й приоритет: IPsec порт 500 на пуле 188.114.96.1
+      if [ "$base" = "188.114.96.1" ]; then
+        printf '188.114.97.1:500\n'
+      else
+        printf '188.114.96.1:500\n'
+      fi
+      ;;
+    *)
+      # 4-й приоритет: резервный пул на порту 4500
+      if [ "$base" = "162.159.193.1" ]; then
+        printf '188.114.98.1:4500\n'
+      else
+        printf '162.159.193.1:4500\n'
+      fi
+      ;;
   esac
 }
 
@@ -566,31 +699,40 @@ set_signature_mode_internal() {
   return 0
 }
 
-apply_candidate() {
-  local step="$1" slot mode prof ep peer jc jmin jmax
+# Strict two-stage search:
+#   0..19  BASIC only: 5 J profiles x 4 official WARP ports
+#  20..39  SIP I1/I2: the same matrix, only after every BASIC candidate failed
+# This preserves the intended fallback semantics: I1/I2 are never injected while
+# there is still an untested BASIC combination.
+candidate_meta() {
+  local step="$1" x mode ep_idx prof_idx
   case "$step" in ''|*[!0-9]*) step=0 ;; esac
-  if [ "$step" -ge 6 ] 2>/dev/null; then
-    mode=sip
-    slot=$(((step - 6) % 6))
+  [ "$step" -ge 0 ] 2>/dev/null || step=0
+  [ "$step" -le 39 ] 2>/dev/null || step=39
+  if [ "$step" -lt 20 ]; then
+    mode=basic; x=$step
   else
-    mode=basic
-    slot=$((step % 6))
+    mode=sip; x=$((step - 20))
   fi
-  prof="$slot"
-  set -- $(get_j_profile "$prof")
+  # Перебираем все эндпоинты на базовом профиле в первую очередь (шаги 0..3)
+  ep_idx=$((x % 4))
+  prof_idx=$(( (x / 4) % 5 ))
+  printf '%s %s %s\n' "$mode" "$ep_idx" "$prof_idx"
+}
+
+apply_candidate() {
+  local step="$1" mode ep_idx prof_idx ep peer jc jmin jmax
+  set -- $(candidate_meta "$step")
+  mode="$1"; ep_idx="$2"; prof_idx="$3"
+  set -- $(get_j_profile "$prof_idx")
   jc="$1"; jmin="$2"; jmax="$3"
-  ep=$(get_adaptive_endpoint "$slot")
+  ep=$(get_adaptive_endpoint "$ep_idx")
 
   replace_conf_kv Jc "$jc" || return 1
   replace_conf_kv Jmin "$jmin" || return 1
   replace_conf_kv Jmax "$jmax" || return 1
-
-  # Cloudflare peer — обычный WG endpoint. S/H не рандомизируем: это server-side
-  # часть AWG и произвольная замена сломала бы совместимость. Варьируются только
-  # client-side J* и затем signature packets I*.
   replace_conf_kv S1 0 || return 1
   replace_conf_kv S2 0 || return 1
-  # Удаляем S3/S4, если они остались от старого профиля.
   local tmp="$WARP_CONF.tmp.$$"
   grep -vE '^(S3|S4)[[:space:]]*=' "$WARP_CONF" > "$tmp" && mv -f "$tmp" "$WARP_CONF" || { rm -f "$tmp"; return 1; }
   replace_conf_kv H1 1 || return 1
@@ -602,86 +744,126 @@ apply_candidate() {
 
   if ip link show dev "$DEV" >/dev/null 2>&1; then
     build_runtime_conf || return 1
-    if ! "$BIN_DIR/awg" syncconf "$DEV" "$WARP_RUNTIME_CONF" 2>>"$LOG_FILE"; then
-      # Старые builds tools могут не иметь syncconf с расширенными полями.
-      "$BIN_DIR/awg" setconf "$DEV" "$WARP_RUNTIME_CONF" 2>>"$LOG_FILE" || return 1
-    fi
-    peer=$(get_peer_public_key)
-    [ -n "$peer" ] || return 1
-    "$BIN_DIR/awg" set "$DEV" peer "$peer" endpoint "$ep" persistent-keepalive 15 2>>"$LOG_FILE" || return 1
+    awg_cmd setconf "$DEV" "$WARP_RUNTIME_CONF" 2>>"$LOG_FILE" || return 1
   fi
 
   write_adapt_state "$step" pending || true
-  log_i "WARP adaptive: step=$step mode=$mode Jc/Jmin/Jmax=$jc/$jmin/$jmax endpoint=$ep"
+  log_i "WARP adaptive: step=$step/39 mode=$mode Jc/Jmin/Jmax=$jc/$jmin/$jmax endpoint=$ep"
   return 0
 }
 
+prepare_manual_profile() {
+  local mode=basic
+  [ "${WARP_SIP_FORCE:-0}" = 1 ] && mode=sip
+  replace_conf_kv Jc "$WARP_JC" || return 1
+  replace_conf_kv Jmin "$WARP_JMIN" || return 1
+  replace_conf_kv Jmax "$WARP_JMAX" || return 1
+  replace_conf_kv S1 0 || return 1
+  replace_conf_kv S2 0 || return 1
+  local tmp="$WARP_CONF.tmp.$$"
+  grep -vE '^(S3|S4)[[:space:]]*=' "$WARP_CONF" > "$tmp" && mv -f "$tmp" "$WARP_CONF" || { rm -f "$tmp"; return 1; }
+  replace_conf_kv H1 1 || return 1
+  replace_conf_kv H2 2 || return 1
+  replace_conf_kv H3 3 || return 1
+  replace_conf_kv H4 4 || return 1
+  set_signature_mode_internal "$mode" || return 1
+  replace_peer_endpoint "${WARP_ENDPOINT}:${WARP_PORT}" || return 1
+  write_adapt_state 0 pending || true
+}
+
 probe_handshake() {
-  local timeout="${1:-$WARP_PROBE_TIMEOUT}" before hs now start peer
-  case "$timeout" in ''|*[!0-9]*) timeout=3 ;; esac
+  local timeout="${1:-$WARP_PROBE_TIMEOUT}" before hs now start rx_before rx_now
+  case "$timeout" in ''|*[!0-9]*) timeout=2 ;; esac
   [ "$timeout" -ge 1 ] 2>/dev/null || timeout=1
   [ "$timeout" -le 10 ] 2>/dev/null || timeout=10
-  peer=$(get_peer_public_key)
-  [ -n "$peer" ] || return 1
   before=$(get_latest_handshake_epoch)
-  "$BIN_DIR/awg" set "$DEV" peer "$peer" persistent-keepalive 1 2>/dev/null || true
+  rx_before=$(get_rx_bytes)
+
+  # Отправляем активный пакет через интерфейс туннеля для мгновенного триггера Handshake Initiation
+  ping -c 1 -W 1 -I "$DEV" 1.1.1.1 >/dev/null 2>&1 &
+
   start=$(date +%s 2>/dev/null || echo 0)
   while :; do
     sleep 1
     hs=$(get_latest_handshake_epoch)
     now=$(date +%s 2>/dev/null || echo 0)
     if [ "$hs" -gt 0 ] 2>/dev/null; then
-      if [ "$before" -eq 0 ] 2>/dev/null || [ "$hs" -gt "$before" ] 2>/dev/null || [ $((now - hs)) -le 10 ] 2>/dev/null; then
-        "$BIN_DIR/awg" set "$DEV" peer "$peer" persistent-keepalive 15 2>/dev/null || true
+      if [ "$before" -eq 0 ] 2>/dev/null || [ "$hs" -gt "$before" ] 2>/dev/null; then
         return 0
       fi
     fi
+    rx_now=$(get_rx_bytes)
+    if [ "$rx_now" -gt "$rx_before" ] 2>/dev/null && [ "$hs" -gt 0 ] 2>/dev/null; then
+      return 0
+    fi
     [ $((now - start)) -ge "$timeout" ] 2>/dev/null && break
   done
-  "$BIN_DIR/awg" set "$DEV" peer "$peer" persistent-keepalive 15 2>/dev/null || true
   return 1
 }
 
 next_adapt_step() {
   local cur="$1"
   case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
-  if [ "$cur" -lt 5 ] 2>/dev/null; then
-    echo $((cur + 1))
-  elif [ "$cur" -eq 5 ] 2>/dev/null; then
-    # Только после полного BASIC-прохода включаем I1/I2.
-    echo 6
-  elif [ "$cur" -lt 11 ] 2>/dev/null; then
-    echo $((cur + 1))
-  else
-    # SIP уже нужен: дальше циклически меняем только J/endpoint, не прыгая
-    # обратно в basic каждую минуту.
-    echo 6
-  fi
+  if [ "$cur" -lt 39 ] 2>/dev/null; then echo $((cur + 1)); else echo 0; fi
+}
+
+adapt_retry_due() {
+  local result updated now age retry="${WARP_ADAPT_RETRY_SEC:-300}"
+  result=$(adapt_state_value result)
+  [ "$result" = failed ] || return 0
+  updated=$(adapt_state_value updated); now=$(date +%s 2>/dev/null || echo 0)
+  case "$updated:$now:$retry" in *[!0-9:]*) return 0 ;; esac
+  age=$((now - updated))
+  [ "$age" -ge "$retry" ] 2>/dev/null
 }
 
 adaptive_bootstrap() {
-  [ "${WARP_ADAPTIVE:-1}" = 1 ] || return 0
-  local tries="${WARP_STARTUP_TRIES:-7}" step n=0
-  case "$tries" in ''|*[!0-9]*) tries=7 ;; esac
-  [ "$tries" -le 12 ] 2>/dev/null || tries=12
-  step=$(adapt_state_step)
+  local total step tries n=0 result
+  total=$(adaptive_total_steps)
+  if [ "${WARP_ADAPTIVE:-1}" != 1 ]; then
+    if probe_handshake "$WARP_PROBE_TIMEOUT"; then write_adapt_state 0 ok || true; return 0; fi
+    write_adapt_state 0 failed || true
+    return 2
+  fi
+
+  result=$(adapt_state_value result)
+  if [ "$result" = failed ] && ! adapt_retry_due; then return 2; fi
+  if [ "$result" = failed ]; then step=0; else step=$(adapt_state_step); fi
+  # Initial/restart search is already launched in background by service/WebUI.
+  # Finish the whole matrix here so the state can become explicitly "failed"
+  # instead of depending on a watcher that may be stale or delayed.
+  tries="${WARP_STARTUP_TRIES:-40}"
+  case "$tries" in ''|*[!0-9]*) tries="$total" ;; esac
+  [ "$tries" -ge "$total" ] 2>/dev/null || tries="$total"
+  [ "$tries" -le "$total" ] 2>/dev/null || tries="$total"
+
   while [ "$n" -lt "$tries" ]; do
-    apply_candidate "$step" || return 1
-    if probe_handshake "$WARP_PROBE_TIMEOUT"; then
-      write_adapt_state "$step" ok || true
-      log_i "WARP adaptive: handshake OK на step=$step"
-      return 0
+    # Publish progress before touching UAPI, so even a rejected candidate cannot
+    # leave WebUI frozen forever on the previous step.
+    write_adapt_state "$step" pending || true
+    if apply_candidate "$step"; then
+      if probe_handshake "$WARP_PROBE_TIMEOUT"; then
+        write_adapt_state "$step" ok || true
+        log_i "WARP adaptive: handshake OK на step=$step"
+        return 0
+      fi
+      log_w "WARP adaptive: handshake не получен на step=$step"
+    else
+      # A malformed/rejected candidate is a failed candidate, not a reason to
+      # abort the whole matrix and leave result=pending forever.
+      log_w "WARP adaptive: step=$step не удалось применить; пропускаем кандидат"
     fi
-    log_w "WARP adaptive: handshake не получен на step=$step"
+    if [ "$step" -eq 39 ] 2>/dev/null; then
+      write_adapt_state "$step" failed || true
+      log_e "WARP adaptive: проверены все 40 профилей, handshake не найден; повтор после ${WARP_ADAPT_RETRY_SEC:-300}с или после ручного сохранения/rekey"
+      return 2
+    fi
     step=$(next_adapt_step "$step")
     n=$((n + 1))
-    # После последней быстрой попытки заранее применяем следующий кандидат,
-    # чтобы state, WebUI и фактический warp.conf не расходились до watchdog.
-    if [ "$n" -ge "$tries" ] 2>/dev/null; then
-      apply_candidate "$step" || true
-      return 1
-    fi
   done
+
+  # Подготавливаем следующий профиль, но не называем поиск успешным.
+  apply_candidate "$step" || true
   return 1
 }
 
@@ -702,6 +884,15 @@ start_tunnel() {
 
   # Предварительная остановка старого интерфейса
   stop_tunnel_internal
+
+  # При ручном режиме значения WebUI должны применяться буквально и больше
+  # не перезаписываться адаптивным поиском. При AUTO свежий поиск стартует с step 0.
+  if [ "${WARP_ADAPTIVE:-1}" = 1 ]; then
+    [ -f "$WARP_ADAPT_STATE" ] || write_adapt_state 0 pending || true
+    apply_candidate 0 || log_w "WARP adaptive recovery: step=0 не применился; продолжим матрицу"
+  else
+    prepare_manual_profile || { release_warp_lock; return 1; }
+  fi
 
   log_i "Запуск интерфейса $DEV через amneziawg-go (AmneziaWG v3)..."
 
@@ -730,7 +921,7 @@ start_tunnel() {
   # `awg setconf` получает runtime-конфиг без wg-quick Address/DNS.
   build_runtime_conf || { stop_tunnel_internal; release_warp_lock; return 1; }
   if [ -x "$BIN_DIR/awg" ]; then
-    if ! "$BIN_DIR/awg" setconf "$DEV" "$WARP_RUNTIME_CONF" 2>>"$LOG_FILE"; then
+    if ! awg_cmd setconf "$DEV" "$WARP_RUNTIME_CONF" 2>>"$LOG_FILE"; then
       log_e "Ошибка awg setconf для $DEV"
       stop_tunnel_internal
       release_warp_lock
@@ -761,7 +952,9 @@ start_tunnel() {
   uids=$(collect_warp_uids)
   apply_routing_rules "$uids" || { stop_tunnel_internal; release_warp_lock; return 1; }
 
-  if adaptive_bootstrap; then
+  local adapt_rc=0
+  adaptive_bootstrap || adapt_rc=$?
+  if [ "$adapt_rc" -eq 0 ]; then
     local active_ep active_step
     active_ep=$(get_active_endpoint)
     active_step=$(adapt_state_step)
@@ -770,12 +963,14 @@ start_tunnel() {
     return 0
   fi
 
-  # Интерфейс оставляем поднятым и выбранные приложения остаются fail-closed:
-  # watchdog продолжит перебор профилей, но ложный SUCCESS не пишем.
-  local pending_step
-  pending_step=$(adapt_state_step)
+  local pending_step pending_result
+  pending_step=$(adapt_state_step); pending_result=$(adapt_state_value result)
   release_warp_lock
-  log_w "WARP $DEV поднят, но handshake пока нет; adaptive recovery продолжит с step=$pending_step"
+  if [ "$adapt_rc" -eq 2 ] || [ "$pending_result" = failed ]; then
+    log_e "WARP $DEV поднят fail-closed, но рабочий handshake не найден (step=$pending_step)"
+  else
+    log_w "WARP $DEV поднят, handshake пока нет; adaptive recovery продолжит с step=$pending_step"
+  fi
   return 0
 }
 
@@ -840,7 +1035,7 @@ status_tunnel() {
     fi
     echo "WARP_DEV=$DEV"
     echo "WARP_ADAPT_STEP=$(adapt_state_step)"
-    [ -x "$BIN_DIR/awg" ] && "$BIN_DIR/awg" show "$DEV" 2>/dev/null || true
+    [ -x "$BIN_DIR/awg" ] && awg_cmd show "$DEV" 2>/dev/null || true
   else
     echo "WARP_STATUS=STOPPED"
   fi
@@ -849,15 +1044,21 @@ status_tunnel() {
 SIP_I1="<b 0x5349502f322e302031303020547279696e670d0a5669613a205349502f322e302f55445020706333332e61746c616e74612e636f6d3b6272616e63683d7a39684734624b3737366173646864730d0a546f3a20426f62203c7369703a626f624062696c6f78692e636f6d3e0d0a46726f6d3a20416c696365203c7369703a616c6963654061746c616e74612e636f6d3e3b7461673d313932383330313737340d0a43616c6c2d49443a20613834623463373665363637313040706333332e61746c616e74612e636f6d0d0a435365713a2033313431353920494e564954450d0a436f6e74656e742d4c656e6774683a20300d0a0d0a>"
 SIP_I2="<b 0x494e56495445207369703a626f624062696c6f78692e636f6d205349502f322e300d0a5669613a205349502f322e302f55445020706333332e61746c616e74612e636f6d3b6272616e63683d7a39684734624b3737366173646864730d0a4d61782d466f7277617264733a2037300d0a546f3a20426f62203c7369703a626f624062696c6f78692e636f6d3e0d0a46726f6d3a20416c696365203c7369703a616c6963654061746c616e74612e636f6d3e3b7461673d313932383330313737340d0a43616c6c2d49443a20613834623463373665363637313040706333332e61746c616e74612e636f6d0d0a435365713a2033313431353920494e564954450d0a436f6e74656e742d4c656e6774683a20300d0a0d0a>"
 
+sync_current_runtime_profile() {
+  # Применяем текущий профиль через setconf
+  ip link show dev "$DEV" >/dev/null 2>&1 || return 0
+  build_runtime_conf || return 1
+  awg_cmd setconf "$DEV" "$WARP_RUNTIME_CONF" 2>>"$LOG_FILE" || return 1
+  return 0
+}
+
 enable_sip_mode() {
   acquire_warp_lock || return 1
   [ -f "$WARP_CONF" ] || { release_warp_lock; return 1; }
-  local step
-  step=$(adapt_state_step)
-  [ "$step" -ge 6 ] 2>/dev/null || step=6
-  log_w "Ручная активация SIP I1/I2 fallback"
-  apply_candidate "$step"
+  log_w "Ручная активация SIP I1/I2 для текущего J/endpoint"
+  set_signature_mode_internal sip && sync_current_runtime_profile
   local rc=$?
+  [ "$rc" -eq 0 ] && write_adapt_state "$(adapt_state_step)" pending || true
   release_warp_lock
   return "$rc"
 }
@@ -865,10 +1066,10 @@ enable_sip_mode() {
 disable_sip_mode() {
   acquire_warp_lock || return 1
   [ -f "$WARP_CONF" ] || { release_warp_lock; return 1; }
-  log_i "Ручной возврат в BASIC: без I1/I2, baseline J/endpoint"
-  apply_candidate 0
+  log_i "Ручной возврат текущего профиля в BASIC без I1/I2"
+  set_signature_mode_internal basic && sync_current_runtime_profile
   local rc=$?
-  [ "$rc" -eq 0 ] && write_adapt_state 0 pending || true
+  [ "$rc" -eq 0 ] && write_adapt_state "$(adapt_state_step)" pending || true
   release_warp_lock
   return "$rc"
 }
@@ -879,12 +1080,11 @@ check_and_heal_warp() {
   [ -x "$BIN_DIR/awg" ] || { release_warp_lock; return 1; }
   ip link show dev "$DEV" >/dev/null 2>&1 || { release_warp_lock; return 1; }
 
-  local hs now diff step next
+  local hs now diff step next result batch i=0
   hs=$(get_latest_handshake_epoch)
   now=$(date +%s 2>/dev/null || echo 0)
   if [ "$hs" -gt 0 ] 2>/dev/null; then diff=$((now - hs)); else diff=999999; fi
 
-  # Свежий handshake — запоминаем рабочую комбинацию и ничего не дёргаем.
   if [ "$hs" -gt 0 ] 2>/dev/null && [ "$diff" -lt 180 ] 2>/dev/null; then
     step=$(adapt_state_step)
     write_adapt_state "$step" ok || true
@@ -892,21 +1092,48 @@ check_and_heal_warp() {
     return 0
   fi
 
-  step=$(adapt_state_step)
-  log_w "WARP handshake отсутствует/устарел (${diff}s), проверяем текущий adaptive step=$step"
-  if probe_handshake "$WARP_PROBE_TIMEOUT"; then
-    write_adapt_state "$step" ok || true
-    log_i "WARP adaptive recovery: восстановлен step=$step"
+  if [ "${WARP_ADAPTIVE:-1}" != 1 ]; then
+    if probe_handshake "$WARP_PROBE_TIMEOUT"; then write_adapt_state 0 ok || true; release_warp_lock; return 0; fi
+    write_adapt_state 0 failed || true
     release_warp_lock
-    return 0
+    return 1
   fi
 
-  next=$(next_adapt_step "$step")
-  if apply_candidate "$next"; then
-    log_w "WARP adaptive recovery: step=$step не помог; подготовлен следующий step=$next"
-  else
-    log_e "WARP adaptive recovery: не удалось применить следующий step=$next"
+  result=$(adapt_state_value result)
+  if [ "$result" = failed ]; then
+    if ! adapt_retry_due; then release_warp_lock; return 1; fi
+    log_w "WARP adaptive: истёк backoff после полного неуспеха, начинаем новый цикл"
+    apply_candidate 0 || { release_warp_lock; return 1; }
   fi
+
+  step=$(adapt_state_step)
+  batch="${WARP_WATCH_BATCH:-5}"
+  case "$batch" in ''|*[!0-9]*) batch=5 ;; esac
+  [ "$batch" -ge 1 ] 2>/dev/null || batch=1
+  [ "$batch" -le 10 ] 2>/dev/null || batch=10
+
+  while [ "$i" -lt "$batch" ]; do
+    log_w "WARP handshake отсутствует/устарел (${diff}s), проверяем adaptive step=$step"
+    if probe_handshake "$WARP_PROBE_TIMEOUT"; then
+      write_adapt_state "$step" ok || true
+      log_i "WARP adaptive recovery: восстановлен step=$step"
+      release_warp_lock
+      return 0
+    fi
+    if [ "$step" -eq 39 ] 2>/dev/null; then
+      write_adapt_state "$step" failed || true
+      log_e "WARP adaptive recovery: все 40 профилей проверены, рабочего handshake нет"
+      release_warp_lock
+      return 1
+    fi
+    next=$(next_adapt_step "$step")
+    write_adapt_state "$next" pending || true
+    if ! apply_candidate "$next"; then
+      log_w "WARP adaptive recovery: step=$next не применился; кандидат пропущен"
+    fi
+    step="$next"
+    i=$((i + 1))
+  done
   release_warp_lock
   return 1
 }

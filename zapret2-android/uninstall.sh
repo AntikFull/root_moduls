@@ -98,10 +98,16 @@ $IP6T -t filter -F ZAPRET2_FILTER_FORWARD 2>/dev/null
 $IP6T -t filter -X ZAPRET2_FILTER_FORWARD 2>/dev/null
 
 # Очистка цепочек WARP и устаревших правил AI Router
+while $IPT -t nat -D OUTPUT -j ZAPRET2_WARP_DNS 2>/dev/null; do :; done
+$IPT -t nat -F ZAPRET2_WARP_DNS 2>/dev/null
+$IPT -t nat -X ZAPRET2_WARP_DNS 2>/dev/null
+
 while $IPT -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+while $IPT -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
 $IPT -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null
 $IPT -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null
 while $IP6T -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+while $IP6T -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
 $IP6T -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null
 

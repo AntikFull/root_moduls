@@ -451,7 +451,7 @@ probe_run_all() {
 score_against_baseline() {
   local candidate_out="$1" baseline_out="$2" host c_ok b_ok
   PROBE_FIXED=0; PROBE_BROKEN=0
-  [ -s "$candidate_out" ] && [ -s "$baseline_out" ] || return 1
+  [ -s "$candidate_out" ] && [ -s "$baseline_out" ] || { echo "0 0"; return 1; }
   while IFS='|' read -r host c_ok; do
     [ -n "$host" ] || continue
     b_ok=$(awk -F'|' -v h="$host" '$1==h {print $2; exit}' "$baseline_out" 2>/dev/null)
@@ -462,6 +462,7 @@ score_against_baseline() {
       PROBE_BROKEN=$((PROBE_BROKEN + 1))
     fi
   done < "$candidate_out"
+  echo "$PROBE_FIXED $PROBE_BROKEN"
   return 0
 }
 
@@ -615,7 +616,7 @@ run_probe() {
     strategy_read "$profile" || continue
     [ "$STRATEGY_FILE_MODE" = DIRECT ] && continue
     log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME position=$number start"
-    log_before=$(log_size)
+    log_before=$(log_size "$NFQWS_LOG")
     if ! install_candidate_rule "$profile"; then
       log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=START_FAILED"
       cleanup_test
@@ -623,7 +624,7 @@ run_probe() {
     fi
     sleep "${AUTO_TEST_WARMUP:-1}"
     probe_run_all "$iface" "$CANDIDATE_FILE"
-    set -- $(score_against_baseline "$CANDIDATE_FILE")
+    set -- $(score_against_baseline "$CANDIDATE_FILE" "$BASELINE_FILE")
     fixed=${1:-0}
     broken=${2:-0}
     packets=$(test_queue_packets)

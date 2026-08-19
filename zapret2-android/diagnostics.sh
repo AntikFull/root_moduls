@@ -249,7 +249,22 @@ pid_owned() {
     printf 'status:\n'; grep -E '^(Name|State|Pid|PPid|Uid|Gid|VmRSS|Threads):' "/proc/$pid/status" 2>/dev/null
     printf 'session: '; awk '{printf "ppid=%s pgrp=%s sid=%s\n",$4,$5,$6}' "/proc/$pid/stat" 2>/dev/null
   fi
-  ps -A -o PID,PPID,USER,NAME,ARGS 2>/dev/null | grep -E 'nfqws|nfqttl|vpn|tether|proxy' || ps -A 2>/dev/null | grep -E 'nfqws|nfqttl|vpn|tether|proxy' || true
+  section "WARP TUNNEL (AmneziaWG v3)"
+  echo "ENABLE_WARP=${ENABLE_WARP:-0}"
+  echo "WARP_DEV=${WARP_DEV:-awg99}"
+  echo "WARP_ENDPOINT=${WARP_ENDPOINT:-162.159.192.1}:${WARP_PORT:-500}"
+  if [ -x "$MODDIR/bin/awg" ]; then
+    run "$MODDIR/bin/awg" show "${WARP_DEV:-awg99}"
+  fi
+  echo "-- warp-adapt.state --"
+  cat "$MODDIR/state/warp-adapt.state" 2>&1
+  echo "-- warp policy routing --"
+  WARP_ROUTE_TABLE=$(sed -n 's/^WARP_ROUTE_TABLE="\([0-9][0-9]*\)"/\1/p' "$CONF_FILE" 2>/dev/null | head -n1)
+  [ -n "$WARP_ROUTE_TABLE" ] || WARP_ROUTE_TABLE=11888
+  run "$IP" -4 route show table "$WARP_ROUTE_TABLE"
+  run "$IP" -6 route show table "$WARP_ROUTE_TABLE"
+  [ -x "$IPT" ] && run "$IPT" -w 5 -t nat -L ZAPRET2_WARP_DNS -nvx --line-numbers
+  [ -x "$IPT" ] && run "$IPT" -w 5 -t mangle -L ZAPRET2_WARP_MANGLE -nvx --line-numbers
 
   section "ROUTING / TETHERING"
   run "$IP" rule show
