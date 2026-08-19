@@ -20,10 +20,30 @@ pid_is_nfqws() {
   cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
   [ "$comm" = nfqws2 ] && [ "$cwd" = "$MODDIR/bin" ]
 }
+
 failures=0
 while :; do
   sleep "$HEALTH_WATCH_INTERVAL"
-  if [ -f "$RUN_DIR/direct.flag" ]; then failures=0; continue; fi
+
+  # 1. Контроль и самовосстановление WARP туннеля (работает независимо от AntiDPI DIRECT режима)
+  if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+    dev="${WARP_DEV:-awg99}"
+    if ! ip link show dev "$dev" >/dev/null 2>&1; then
+      log "WARP интерфейс $dev не активен; перезапуск туннеля..."
+      sh "$MODDIR/warp-tunnel.sh" start >/dev/null 2>&1 || true
+    else
+      # Проверка здоровья хендшейка и ротация эндпоинтов при необходимости
+      sh "$MODDIR/warp-tunnel.sh" watchdog >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # 2. В режиме DIRECT обход AntiDPI не используется — пропуск проверки nfqws2
+  if [ -f "$RUN_DIR/direct.flag" ]; then
+    failures=0
+    continue
+  fi
+
+  # 3. Контроль процесса nfqws2 и очереди NFQUEUE
   pid=$(cat "$PID_FILE" 2>/dev/null)
   ok=1
   case "$pid" in ''|0|*[!0-9]*) ok=0 ;; *) pid_is_nfqws "$pid" || ok=0 ;; esac
@@ -32,20 +52,12 @@ while :; do
   fi
   if [ "$ok" = 1 ]; then
     failures=0
-    if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
-      dev="${WARP_DEV:-awg99}"
-      if ! ip link show dev "$dev" >/dev/null 2>&1; then
-        log "WARP interface $dev is down; reviving tunnel"
-        sh "$MODDIR/warp-tunnel.sh" start >/dev/null 2>&1 || true
-      fi
-      # Автоматический контроль доступности европейского SNI-прокси для ИИ
-      sh "$MODDIR/warp-tunnel.sh" healthcheck-ai >/dev/null 2>&1 || true
-    fi
     continue
   fi
+
   failures=$((failures + 1))
   [ "$failures" -ge 2 ] || continue
-  log "nfqws2/NFQUEUE failed twice; handing this watcher process to one service reload"
+  log "nfqws2/NFQUEUE дал сбой дважды; перезапуск службы zapret2..."
   rm -f "$RUN_DIR/health-watcher.pid" 2>/dev/null
   exec sh "$MODDIR/service.sh" reload >/dev/null 2>&1
 done

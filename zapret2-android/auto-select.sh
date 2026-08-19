@@ -405,9 +405,9 @@ prepare_probe_dns() {
     done
   fi
   [ "$total" -gt 0 ] || { rm -f "$PROBE_SPEC_FILE" 2>/dev/null; return 1; }
-  PROBE_IPV4=0; [ "$n4" = "$total" ] && PROBE_IPV4=1
-  PROBE_IPV6=0; [ "$n6" = "$total" ] && PROBE_IPV6=1
-  log "AUTO probe hosts: total=$total ipv4=$PROBE_IPV4 ipv6=$PROBE_IPV6"
+  PROBE_IPV4=0; [ "$n4" -gt 0 ] && PROBE_IPV4=1
+  PROBE_IPV6=0; [ "$n6" -gt 0 ] && PROBE_IPV6=1
+  log "AUTO probe hosts: total=$total ipv4_resolved=$n4 ipv6_resolved=$n6"
   [ "$PROBE_IPV4" = 1 ] || [ "$PROBE_IPV6" = 1 ]
 }
 
@@ -428,9 +428,9 @@ probe_run_all() {
   while IFS='|' read -r group host code path ip4 ip6; do
     [ -n "$host" ] || continue
     ok=0
-    if [ "$PROBE_IPV4" = 1 ] && [ -n "$ip4" ] && probe_url 4 "$iface" "$host" "$ip4" "https://$host/$path" "$code"; then
+    if [ -n "$ip4" ] && probe_url 4 "$iface" "$host" "$ip4" "https://$host/$path" "$code"; then
       ok=1
-    elif [ "$PROBE_IPV6" = 1 ] && [ -n "$ip6" ] && probe_url 6 "$iface" "$host" "$ip6" "https://$host/$path" "$code"; then
+    elif [ -n "$ip6" ] && probe_url 6 "$iface" "$host" "$ip6" "https://$host/$path" "$code"; then
       ok=1
     fi
     printf '%s|%s\n' "$host" "$ok" >> "$outfile"
@@ -438,53 +438,63 @@ probe_run_all() {
       PROBE_PASS=$((PROBE_PASS + 1))
     else
       PROBE_FAIL=$((PROBE_FAIL + 1))
-      PROBE_FAILED_ON="${PROBE_FAILED_ON}${PROBE_FAILED_ON:+,}$group/$host"
+      [ -n "$PROBE_FAILED_ON" ] || PROBE_FAILED_ON="$host"
     fi
   done < "$PROBE_SPEC_FILE"
-  return 0
+  [ "$PROBE_FAIL" -eq 0 ]
 }
 
 score_against_baseline() {
-  awk -F'|' '
-    NR==FNR { base[$1]=$2; next }
-    {
-      if (base[$1] == "0" && $2 == "1") fixed++
-      if (base[$1] == "1" && $2 == "0") broken++
-    }
-    END { print fixed+0, broken+0 }
-  ' "$BASELINE_FILE" "$1" 2>/dev/null
+  local candidate_out="$1" baseline_out="$2" host c_ok b_ok
+  PROBE_FIXED=0; PROBE_BROKEN=0
+  [ -s "$candidate_out" ] && [ -s "$baseline_out" ] || return 1
+  while IFS='|' read -r host c_ok; do
+    [ -n "$host" ] || continue
+    b_ok=$(awk -F'|' -v h="$host" '$1==h {print $2; exit}' "$baseline_out" 2>/dev/null)
+    [ -n "$b_ok" ] || continue
+    if [ "$b_ok" = 0 ] && [ "$c_ok" = 1 ]; then
+      PROBE_FIXED=$((PROBE_FIXED + 1))
+    elif [ "$b_ok" = 1 ] && [ "$c_ok" = 0 ]; then
+      PROBE_BROKEN=$((PROBE_BROKEN + 1))
+    fi
+  done < "$candidate_out"
+  return 0
 }
 
 log_size() {
-  local size
-  size=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' ')
-  case "$size" in ''|*[!0-9]*) echo 0 ;; *) echo "$size" ;; esac
+  local f="$1"
+  [ -f "$f" ] && wc -c < "$f" 2>/dev/null | tr -d ' ' || echo 0
 }
+
 candidate_had_lua_error() {
-  local from="$1" size
-  size=$(log_size)
-  [ "$size" -gt "$from" ] 2>/dev/null || return 1
-  tail -c $((size - from)) "$LOG_FILE" 2>/dev/null | grep -qE 'LUA ERROR|desync ERROR'
+  local before="$1" after
+  [ -f "$NFQWS_LOG" ] || return 1
+  after=$(log_size "$NFQWS_LOG")
+  [ "$after" -gt "$before" ] 2>/dev/null || return 1
+  tail -n 20 "$NFQWS_LOG" 2>/dev/null | grep -Eiq 'lua[[:space:]]+error|attempt[[:space:]]+to|stack[[:space:]]+traceback'
 }
 
 save_cache() {
-  local key="$1" profile="$2" iface="$3" status="${4:-SELECTED}" now tmp cache
-  now=$(now_epoch); cache=$(cache_file_for "$key"); tmp="$cache.tmp.$$"
+  local key="$1" profile="$2" iface="$3" status="$4" updated tmp
+  updated=$(now_epoch)
+  tmp="$STATE_DIR/auto-$key.env.tmp.$$"
   {
-    echo "PROFILE=$profile"
-    echo "UPDATED=$now"
-    echo "IFACE=$iface"
-  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$cache" 2>/dev/null
-  chmod 0600 "$cache" 2>/dev/null || true
-  write_result "$profile" "$key" "$iface" "$status" "$now"
+    printf 'KEY=%s\n' "$key"
+    printf 'PROFILE=%s\n' "$profile"
+    printf 'IFACE=%s\n' "$iface"
+    printf 'STATUS=%s\n' "$status"
+    printf 'UPDATED=%s\n' "$updated"
+  } > "$tmp" && mv -f "$tmp" "$STATE_DIR/auto-$key.env"
+  chmod 0600 "$STATE_DIR/auto-$key.env" 2>/dev/null || true
+  write_result "$profile" "$key" "$iface" "$status" "$updated"
 }
 
 prune_stale_caches() {
-  local now cache updated age
+  local cache now age updated
   now=$(now_epoch)
-  for cache in "$STATE_DIR"/auto-*.env "$RUN_DIR"/auto-*.env; do
+  for cache in "$STATE_DIR"/auto-*.env; do
     [ -f "$cache" ] || continue
-    updated=$(sed -n 's/^UPDATED=//p' "$cache" 2>/dev/null | head -n1)
+    updated=$(grep '^UPDATED=' "$cache" 2>/dev/null | cut -d= -f2)
     case "$updated" in ''|*[!0-9]*) continue ;; esac
     age=$((now - updated))
     if [ "$age" -ge 2592000 ] 2>/dev/null; then
@@ -496,7 +506,6 @@ prune_stale_caches() {
 
 verify_cached_strategy() {
   local iface="$1" profile="$2" host="www.youtube.com" code
-  [ "$profile" = "strategy_1" ] && return 0
   code=$(curl -4 -sS -o /dev/null --interface "$iface" --connect-timeout 3 --max-time 5 -w '%{http_code}' "https://$host/" 2>/dev/null)
   case "$code" in
     200|301|302|204|404|403) return 0 ;;
@@ -538,18 +547,14 @@ run_probe() {
     write_result "$previous" "$key" "$iface" CACHED "$previous_updated"
     log "AUTO cache hit: key=$key iface=$iface profile=$previous age=$age"
     request_profile_reload "$previous" || true
-    if [ "$previous" != "strategy_1" ]; then
-      sleep 2
-      if verify_cached_strategy "$iface" "$previous"; then
-        log "AUTO verification OK: кэшированный профиль $previous активен и работает на $iface"
-        save_cache "$key" "$previous" "$iface" CACHED
-        return 0
-      else
-        log "AUTO verification FAILED: кэшированный профиль $previous заблокирован на $iface; запускается полный повторный подбор"
-        rm -f "$cache" 2>/dev/null
-      fi
-    else
+    sleep 2
+    if verify_cached_strategy "$iface" "$previous"; then
+      log "AUTO verification OK: кэшированный профиль $previous активен и работает на $iface"
+      save_cache "$key" "$previous" "$iface" CACHED
       return 0
+    else
+      log "AUTO verification FAILED: кэшированный профиль $previous дал сбой на $iface; запускается полный повторный подбор"
+      rm -f "$cache" 2>/dev/null
     fi
   fi
 

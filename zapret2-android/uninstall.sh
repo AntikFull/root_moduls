@@ -17,20 +17,30 @@ pid_owned() {
     health) pid_cmdline "$pid" | grep -Fq "$MODDIR/service-watch.sh" ;;
     auto) pid_cmdline "$pid" | grep -Fq "$MODDIR/auto-select.sh" ;;
     service) pid_cmdline "$pid" | grep -Fq "$MODDIR/service.sh" ;;
-    bootwait) pid_cmdline "$pid" | grep -Fq "$MODDIR/boot-wait.sh" ;;
+    httpd) { [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = httpd ] || pid_cmdline "$pid" | grep -Fq "httpd"; } && pid_cmdline "$pid" | grep -Fq "$MODDIR/webroot" ;;
+    ai-router) pid_cmdline "$pid" | grep -Fq "ai-router" ;;
     *) return 1 ;;
   esac
 }
-for spec in "nfqws2.pid:nfqws2" "watcher.pid:config" "vpn-watcher.pid:vpn" "health-watcher.pid:health" "auto-probe.pid:auto" "late-start.pid:service" "boot-wait.pid:bootwait"; do
+for spec in "nfqws2.pid:nfqws2" "watcher.pid:config" "vpn-watcher.pid:vpn" "health-watcher.pid:health" "auto-probe.pid:auto" "late-start.pid:service" "httpd.pid:httpd" "ai-router.pid:ai-router"; do
   pf=${spec%%:*}; kind=${spec#*:}; pid_file="$RUN_DIR/$pf"
   pid=$(cat "$pid_file" 2>/dev/null)
   pid_owned "$pid" "$kind" && kill -TERM "$pid" 2>/dev/null
   rm -f "$pid_file" 2>/dev/null
 done
 for proc in /proc/[0-9]*; do
-  [ "$(cat "$proc/comm" 2>/dev/null)" = nfqws2 ] || continue
-  [ "$(readlink "$proc/cwd" 2>/dev/null)" = "$MODDIR/bin" ] || continue
-  kill -TERM "${proc##*/}" 2>/dev/null
+  comm=$(cat "$proc/comm" 2>/dev/null)
+  cwd=$(readlink "$proc/cwd" 2>/dev/null)
+  if [ "$comm" = "nfqws2" ] && [ "$cwd" = "$MODDIR/bin" ]; then
+    kill -TERM "${proc##*/}" 2>/dev/null
+  fi
+  cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
+  if printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot" && printf '%s' "$cmd" | grep -Fq "httpd"; then
+    kill -TERM "${proc##*/}" 2>/dev/null
+  fi
+  if printf '%s' "$cmd" | grep -Fq "ai-router"; then
+    kill -TERM "${proc##*/}" 2>/dev/null
+  fi
 done
 [ -f "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" stop 2>/dev/null
 sh "$MODDIR/vpn-routing.sh" cleanup 2>/dev/null
@@ -91,7 +101,23 @@ while $IP6T -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD 2>/dev/null; do :; do
 $IP6T -t filter -F ZAPRET2_FILTER_FORWARD 2>/dev/null
 $IP6T -t filter -X ZAPRET2_FILTER_FORWARD 2>/dev/null
 
+# Очистка цепочек WARP и устаревших правил AI Router
+while $IPT -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+$IPT -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null
+$IPT -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null
+while $IP6T -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+$IP6T -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null
+$IP6T -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null
+
+while $IPT -t nat -D OUTPUT -j ZAPRET2_AI_NAT 2>/dev/null; do :; done
+$IPT -t nat -F ZAPRET2_AI_NAT 2>/dev/null
+$IPT -t nat -X ZAPRET2_AI_NAT 2>/dev/null
+while $IPT -t filter -D OUTPUT -j ZAPRET2_AI_FLT 2>/dev/null; do :; done
+$IPT -t filter -F ZAPRET2_AI_FLT 2>/dev/null
+$IPT -t filter -X ZAPRET2_AI_FLT 2>/dev/null
+while $IPT -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports 15359 2>/dev/null; do :; done
+
 rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
 rm -f /tmp/zapret2_apps_new.json 2>/dev/null
 
-rm -rf "$RUN_DIR/app-sync.lock" "$RUN_DIR/service.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/auto-select.lock" 2>/dev/null
+rm -rf "$RUN_DIR/app-sync.lock" "$RUN_DIR/service.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/auto-select.lock" "$RUN_DIR/warp.lock" 2>/dev/null

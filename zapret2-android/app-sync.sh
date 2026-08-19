@@ -110,6 +110,10 @@ for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
   "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN >/dev/null 2>&1 || true
   "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN >/dev/null 2>&1 || true
 done
+for subnet in 2001:b28:f23d::/48 2001:67c:4e8::/48; do
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+done
 
 for uid in $WARP_UIDS; do
   case "$uid" in ''|0|*[!0-9]*) continue ;; esac

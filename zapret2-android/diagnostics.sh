@@ -85,18 +85,18 @@ pid_owned() {
   echo "package_source=$(cat "$RUN_DIR/package_source" 2>/dev/null)"
   section "SMART STRATEGY RESOLUTION"
   if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
-  local lists_dir="$MODDIR/lists"
+  lists_dir="$MODDIR/lists"
   [ -d "$lists_dir" ] || lists_dir="$MODDIR"
   youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/smart_youtube.list" 2>/dev/null || echo 0)
   auto_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/auto_apps.list" 2>/dev/null || echo 0)
   manual_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/apps.list" 2>/dev/null || echo 0)
   echo "STRATEGY_MODE=${STRATEGY_MODE:-SMART}"
-  echo "STRATEGY_EFFECTIVE=$strategy_effective"
+  echo "STRATEGY_EFFECTIVE=${STRATEGY_EFFECTIVE:-SMART_COMPAT}"
   echo "AUTO_APPS_ENABLED=${AUTO_APPS_ENABLED:-1}"
   echo "AUTO_APPS_CATALOG_COUNT=$auto_count"
   echo "MANUAL_APPS_COUNT=$manual_count"
   echo "SMART_YOUTUBE_DOMAINS=$youtube_count"
-  case "$strategy_effective" in
+  case "${STRATEGY_EFFECTIVE:-SMART_COMPAT}" in
     SMART_NATIVE) echo "SMART_ENGINE_EFFECT=adaptive circular service profiles with bounded incoming reply-feed" ;;
     SMART_COMPAT) echo "SMART_ENGINE_EFFECT=automatic service profiles without incoming bulk/reply-feed" ;;
     CUSTOM) echo "SMART_ENGINE_EFFECT=expert CUSTOM profile" ;;
@@ -134,10 +134,10 @@ pid_owned() {
   echo "legacy_VPN_STATE_RECHECK=${VPN_STATE_RECHECK:-unset} (not used by hot loop)"
   ls -ld "$RUN_DIR" 2>&1
   ls -la "$RUN_DIR" 2>&1
-  for pf in nfqws2.pid watcher.pid vpn-watcher.pid health-watcher.pid auto-probe.pid auto-test-nfqws.pid late-start.pid; do
+  for pf in nfqws2.pid watcher.pid vpn-watcher.pid health-watcher.pid auto-probe.pid auto-test-nfqws.pid late-start.pid httpd.pid; do
     wp=$(cat "$RUN_DIR/$pf" 2>/dev/null)
     alive=0; owned=0; kind=""
-    case "$pf" in nfqws2.pid|auto-test-nfqws.pid) kind=nfqws2 ;; watcher.pid) kind=config ;; vpn-watcher.pid) kind=vpn ;; health-watcher.pid) kind=health ;; auto-probe.pid) kind=auto ;; late-start.pid) kind=service ;; esac
+    case "$pf" in nfqws2.pid|auto-test-nfqws.pid) kind=nfqws2 ;; watcher.pid) kind=config ;; vpn-watcher.pid) kind=vpn ;; health-watcher.pid) kind=health ;; auto-probe.pid) kind=auto ;; late-start.pid) kind=service ;; httpd.pid) kind=httpd ;; esac
     case "$wp" in ''|0|*[!0-9]*) ;; *) kill -0 "$wp" 2>/dev/null && alive=1; pid_owned "$wp" "$kind" && owned=1 ;; esac
     echo "$pf=${wp:-none} alive=$alive owned=$owned"
   done
@@ -165,7 +165,7 @@ pid_owned() {
   awk '{c[$3]++} END{for(u in c) print u,c[u]}' "$RUN_DIR/package_uids.cache" 2>/dev/null | sort -n | awk '{print "user"$1"="$2}'
   echo "cache_lines=$(wc -l < "$RUN_DIR/package_uids.cache" 2>/dev/null | tr -d ' ')"
   echo "-- AUTO catalog apps that are installed/resolved --"
-  local auto_file="$lists_dir/auto_apps.list"
+  auto_file="$lists_dir/auto_apps.list"
   [ -f "$auto_file" ] || auto_file="$MODDIR/auto_apps.list"
   if [ -f "$auto_file" ]; then
     while IFS= read -r pkg || [ -n "$pkg" ]; do
@@ -175,7 +175,7 @@ pid_owned() {
     done < "$auto_file"
   fi
   echo "-- manual apps.list additions --"
-  local apps_file="$lists_dir/apps.list"
+  apps_file="$lists_dir/apps.list"
   [ -f "$apps_file" ] || apps_file="$MODDIR/apps.list"
   if [ -f "$apps_file" ]; then
     while IFS= read -r pkg || [ -n "$pkg" ]; do
@@ -186,7 +186,7 @@ pid_owned() {
     done < "$apps_file"
   fi
   echo "-- excludes that are installed/resolved (highest priority) --"
-  local excl_file="$lists_dir/exclude.list"
+  excl_file="$lists_dir/exclude.list"
   [ -f "$excl_file" ] || excl_file="$MODDIR/exclude.list"
   if [ -f "$excl_file" ]; then
     while IFS= read -r pkg || [ -n "$pkg" ]; do

@@ -234,10 +234,10 @@ verify_current_rules() {
   esac
   "$IPT" -w 5 -t filter -C FORWARD -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
   [ "$VPN_HOTSPOT_MASQUERADE" != "1" ] || "$IPT" -w 5 -t nat -C POSTROUTING -j ZAPRET2_VPN_NAT >/dev/null 2>&1 || return 1
-  "$IP_BIN" -4 route show table "$VPN_ROUTE_TABLE" default 2>/dev/null | grep -q '^default' || return 1
   downs=$(printf '%s' "$sig" | sed -n 's/^down=\([^|]*\).*/\1/p' | tr ',' ' ')
   vpn_if=$(printf '%s' "$sig" | sed -n 's/^.*|vpn=\([^|]*\).*/\1/p')
   [ -n "$vpn_if" ] || return 1
+  "$IP_BIN" -4 route show table "$VPN_ROUTE_TABLE" default 2>/dev/null | grep -q "default.*dev $vpn_if" || return 1
   for down in $downs; do
     "$IPT" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" -o "$vpn_if" -j ACCEPT >/dev/null 2>&1 || return 1
     "$IPT" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" ! -o "$vpn_if" -j REJECT >/dev/null 2>&1 || return 1
@@ -313,7 +313,7 @@ apply_rules() {
 }
 
 signature() { "$MODDIR/net-role.sh" signature 2>/dev/null; }
-acquire_lock || exit 0
+acquire_lock || exit 3
 trap 'release_lock' EXIT HUP INT TERM
 case "$1" in
   apply|reload|'') apply_rules ;;

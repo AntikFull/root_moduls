@@ -181,6 +181,11 @@ pid_is_owned() {
     vpn-watch) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/vpn-watch.sh" ;;
     health-watch) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service-watch.sh" ;;
     service) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service.sh" ;;
+    httpd)
+      comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+      cmd=$(pid_cmdline "$pid")
+      { [ "$comm" = "httpd" ] || printf '%s' "$cmd" | grep -Fq "httpd"; } && printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot"
+      ;;
     *) return 1 ;;
   esac
 }
@@ -760,7 +765,7 @@ reload_active_profile() {
   youtube_args=$STRATEGY_FILE_ARGS
   host=""
   [ -s "$EXCLUDE_DOMAINS_FILE" ] && host="--hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
-  special="$host $youtube_args --new"
+  special="$youtube_args --new"
   debug_arg=""; [ "$NFQWS_DEBUG" = 1 ] && debug_arg="--debug=@$NFQWS_LOG"
   [ -x "$BIN_DIR/nfqws2" ] || return 1
   stop_pid "$NFQWS_PID_FILE" "nfqws2 для смены AUTO-профиля" nfqws2
@@ -768,15 +773,15 @@ reload_active_profile() {
   if command -v setsid >/dev/null 2>&1; then
     setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
       --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $special $host $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
+      $host $special $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
   elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
     busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
       --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $special $host $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
+      $host $special $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
   else
     nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
       --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $special $host $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
+      $host $special $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
   fi
   launcher=$!; sleep 1; pid=$launcher
   pid_is_owned "$pid" nfqws2 || pid=$(find_owned_nfqws_pid)
@@ -943,97 +948,124 @@ log_i "Resolved UIDs: SMART effective=$APP_UID_COUNT auto=$AUTO_APP_UID_COUNT ma
 DIRECT_MODE_FILE="$RUN_DIR/direct.flag"
 rm -f "$DIRECT_MODE_FILE" 2>/dev/null
 if [ "$SMART_DIRECT" = "1" ]; then
-  # Ни одной записи в netfilter и ни одного userspace-процесса: на этой сети
-  # обход не нужен. Флаг direct.flag говорит health-watcher, что отсутствие
+  # Ни одной записи в netfilter и ни одного userspace-процесса nfqws: на этой сети
+  # AntiDPI обход не нужен. Флаг direct.flag говорит health-watcher, что отсутствие
   # nfqws2 — это штатное состояние, а не сбой.
   : > "$DIRECT_MODE_FILE" 2>/dev/null
   chmod 0600 "$DIRECT_MODE_FILE" 2>/dev/null || true
   write_start_state "STARTING" "DIRECT: обход на этой сети не требуется" 90
-  log_i "DIRECT: NFQUEUE/QUIC правила и nfqws2 не устанавливаются"
+  log_i "DIRECT: AntiDPI правила и nfqws2 не устанавливаются"
 else
-write_start_state "STARTING" "Установка AntiDPI/NFQUEUE правил" 62
-ipt4 -t mangle -N ZAPRET2_MANGLE || health_error "Не удалось создать IPv4 mangle chain"
-ipt4 -t filter -N ZAPRET2_FILTER || health_error "Не удалось создать IPv4 filter chain"
-[ "$NFQ6" = "1" ] && ipt6 -t mangle -N ZAPRET2_MANGLE || true
-[ -n "$IP6T" ] && ipt6 -t filter -N ZAPRET2_FILTER || true
+  write_start_state "STARTING" "Установка AntiDPI/NFQUEUE правил" 62
+  ipt4 -t mangle -N ZAPRET2_MANGLE || health_error "Не удалось создать IPv4 mangle chain"
+  ipt4 -t filter -N ZAPRET2_FILTER || health_error "Не удалось создать IPv4 filter chain"
+  [ "$NFQ6" = "1" ] && ipt6 -t mangle -N ZAPRET2_MANGLE || true
+  [ -n "$IP6T" ] && ipt6 -t filter -N ZAPRET2_FILTER || true
 
-# Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
-ipt4 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
-ipt4 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
-[ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
-[ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
+  # Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
+  ipt4 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
+  ipt4 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
+  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
+  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
 
-for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
-  ipt4 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
-  ipt4 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
-done
-for subnet in 2001:b28:f23d::/48 2001:67c:4e8::/48; do
-  [ -n "$IP6T" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
-  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
-done
+  for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
+    ipt4 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
+    ipt4 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
+  done
+  for subnet in 2001:b28:f23d::/48 2001:67c:4e8::/48; do
+    [ -n "$IP6T" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
+    [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
+  done
 
-WARP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_app_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-for uid in $WARP_UIDS; do
-  case "$uid" in ''|0|*[!0-9]*) continue ;; esac
-  ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-  ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-done
+  WARP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_app_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
+  for uid in $WARP_UIDS; do
+    case "$uid" in ''|0|*[!0-9]*) continue ;; esac
+    ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+    ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+    [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+    [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
+  done
 
-case "$MODE" in
-  GLOBAL)
-    if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 GLOBAL CONNMARK rule failed"; fi
-    ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 GLOBAL NFQUEUE"
-    if [ "$NFQ6" = "1" ]; then
-      [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-      ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
-    fi ;;
-  EXCLUDE)
-    if [ "$OWNER4" = "1" ]; then
-      for uid in $EXCLUDE_UIDS; do ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || health_error "Не удалось исключить IPv4 UID=$uid"; done
-      if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 EXCLUDE CONNMARK rule failed"; fi
-      ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 EXCLUDE NFQUEUE"
-    else
-      health_error "EXCLUDE не применён: owner match недоступен, иначе исключённые приложения попали бы в NFQUEUE"
+  case "$MODE" in
+    GLOBAL)
+      if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 GLOBAL CONNMARK rule failed"; fi
+      ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 GLOBAL NFQUEUE"
+      if [ "$NFQ6" = "1" ]; then
+        [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
+        ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+      fi ;;
+    EXCLUDE)
+      if [ "$OWNER4" = "1" ]; then
+        for uid in $EXCLUDE_UIDS; do ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || health_error "Не удалось исключить IPv4 UID=$uid"; done
+        if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 EXCLUDE CONNMARK rule failed"; fi
+        ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 EXCLUDE NFQUEUE"
+      else
+        health_error "EXCLUDE не применён: owner match недоступен, иначе исключённые приложения попали бы в NFQUEUE"
+      fi
+      if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
+        for uid in $EXCLUDE_UIDS; do ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || true; done
+        [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
+        ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+      fi ;;
+    INCLUDE)
+      if [ "$OWNER4" = "1" ]; then
+        for uid in $APP_UIDS; do
+          if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 INCLUDE CONNMARK UID=$uid failed"; fi
+          ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 INCLUDE UID=$uid"
+        done
+      else
+        health_error "INCLUDE требует owner match, но он недоступен"
+      fi
+      if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
+        for uid in $APP_UIDS; do
+          [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
+          ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+        done
+      fi ;;
+    *) health_error "Недопустимый MODE=$MODE" ;;
+  esac
+  ipt4 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || health_error "Не удалось подключить ZAPRET2_MANGLE к OUTPUT"
+  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || true
+
+  if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
+    ipt4 -t mangle -N ZAPRET2_MANGLE_IN || health_error "Не удалось создать IPv4 INPUT reply chain"
+    ipt4 -t mangle -A ZAPRET2_MANGLE_IN -p tcp -m multiport --sports "$PORTS_TCP" -m connmark --mark "$FLOW_CONNMARK" -m connbytes --connbytes 1:"$AUTO_REPLY_PACKETS" --connbytes-dir reply --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "SMART_NATIVE IPv4 reply NFQUEUE rule failed"
+    ipt4 -t mangle -I INPUT 1 -j ZAPRET2_MANGLE_IN || health_error "Не удалось подключить SMART_NATIVE IPv4 INPUT reply chain"
+    if [ "$NFQ6" = "1" ] && [ "$CONNBYTES6" = "1" ] && [ "$CONNMARK6" = "1" ]; then
+      ipt6 -t mangle -N ZAPRET2_MANGLE_IN || health_warn "IPv6 SMART_NATIVE reply chain недоступна"
+      ipt6 -t mangle -A ZAPRET2_MANGLE_IN -p tcp -m multiport --sports "$PORTS_TCP" -m connmark --mark "$FLOW_CONNMARK" -m connbytes --connbytes 1:"$AUTO_REPLY_PACKETS" --connbytes-dir reply --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || health_warn "IPv6 SMART_NATIVE reply NFQUEUE rule недоступно"
+      ipt6 -t mangle -I INPUT 1 -j ZAPRET2_MANGLE_IN || health_warn "IPv6 SMART_NATIVE INPUT hook недоступен"
     fi
-    if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
-      for uid in $EXCLUDE_UIDS; do ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || true; done
-      [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-      ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
-    fi ;;
-  INCLUDE)
-    if [ "$OWNER4" = "1" ]; then
-      for uid in $APP_UIDS; do
-        if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 INCLUDE CONNMARK UID=$uid failed"; fi
-        ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 INCLUDE UID=$uid"
-      done
-    else
-      health_error "INCLUDE требует owner match, но он недоступен"
-    fi
-    if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
-      for uid in $APP_UIDS; do
-        [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-        ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
-      done
-    fi ;;
-  *) health_error "Недопустимый MODE=$MODE" ;;
-esac
-ipt4 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || health_error "Не удалось подключить ZAPRET2_MANGLE к OUTPUT"
-[ "$NFQ6" = "1" ] && ipt6 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || true
-
-if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
-  ipt4 -t mangle -N ZAPRET2_MANGLE_IN || health_error "Не удалось создать IPv4 INPUT reply chain"
-  ipt4 -t mangle -A ZAPRET2_MANGLE_IN -p tcp -m multiport --sports "$PORTS_TCP" -m connmark --mark "$FLOW_CONNMARK" -m connbytes --connbytes 1:"$AUTO_REPLY_PACKETS" --connbytes-dir reply --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "SMART_NATIVE IPv4 reply NFQUEUE rule failed"
-  ipt4 -t mangle -I INPUT 1 -j ZAPRET2_MANGLE_IN || health_error "Не удалось подключить SMART_NATIVE IPv4 INPUT reply chain"
-  if [ "$NFQ6" = "1" ] && [ "$CONNBYTES6" = "1" ] && [ "$CONNMARK6" = "1" ]; then
-    ipt6 -t mangle -N ZAPRET2_MANGLE_IN || health_warn "IPv6 SMART_NATIVE reply chain недоступна"
-    ipt6 -t mangle -A ZAPRET2_MANGLE_IN -p tcp -m multiport --sports "$PORTS_TCP" -m connmark --mark "$FLOW_CONNMARK" -m connbytes --connbytes 1:"$AUTO_REPLY_PACKETS" --connbytes-dir reply --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || health_warn "IPv6 SMART_NATIVE reply NFQUEUE rule недоступно"
-    ipt6 -t mangle -I INPUT 1 -j ZAPRET2_MANGLE_IN || health_warn "IPv6 SMART_NATIVE INPUT hook недоступен"
+    log_i "SMART_NATIVE conntrack feed: server replies 1..$AUTO_REPLY_PACKETS queued on INPUT/FORWARD"
   fi
-  log_i "SMART_NATIVE conntrack feed: server replies 1..$AUTO_REPLY_PACKETS queued on INPUT/FORWARD"
+
+  if [ "$FORCE_TCP" = "1" ]; then
+    case "$QUIC_MODE:$MODE" in
+      GLOBAL:*|SELECTED:GLOBAL)
+        ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "Не удалось блокировать QUIC IPv4"
+        [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true ;;
+      SELECTED:INCLUDE)
+        if [ "$OWNER4" = "1" ]; then
+          for uid in $APP_UIDS; do ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT || health_error "QUIC IPv4 UID=$uid rule failed"; done
+        else health_error "INCLUDE QUIC требует owner match"; fi
+        if [ "$OWNER6" = "1" ]; then for uid in $APP_UIDS; do ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT || true; done; fi ;;
+      SELECTED:EXCLUDE)
+        if [ "$OWNER4" = "1" ]; then
+          for uid in $EXCLUDE_UIDS; do ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN || health_error "QUIC exclude IPv4 UID=$uid failed"; done
+          ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "EXCLUDE QUIC global fallback failed"
+        else health_error "EXCLUDE QUIC требует owner match"; fi
+        if [ "$OWNER6" = "1" ]; then
+          for uid in $EXCLUDE_UIDS; do ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN || true; done
+          ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true
+        fi ;;
+      OFF:*) : ;;
+    esac
+    ipt4 -t filter -A OUTPUT -j ZAPRET2_FILTER || health_error "Не удалось подключить ZAPRET2_FILTER к OUTPUT"
+    [ -n "$IP6T" ] && ipt6 -t filter -A OUTPUT -j ZAPRET2_FILTER || true
+  fi
 fi
 
+# Настройка раздачи и VPN-маршрутизации (работает ВСЕГДА, включая режим DIRECT!)
 write_start_state "STARTING" "Настройка раздачи и VPN-маршрутизации" 74
 if [ "$ENABLE_HOTSPOT" = "1" ]; then
   log_i "Tether scope: dynamic role detection (Android tether state/config + network fallback)"
@@ -1072,136 +1104,109 @@ if [ "$ENABLE_HOTSPOT" = "1" ]; then
 
   ACTIVE_TETHER_IFACES=$(cat "$RUN_DIR/tether-downstreams.state" 2>/dev/null)
   log_i "Tether active downstream: ${ACTIVE_TETHER_IFACES:-none}"
-  [ "$FORCE_TCP_HOTSPOT" = "1" ] && log_i "QUIC для Hotspot/USB: UDP/443 блокируется на динамически определнных downstream"
+  [ "$FORCE_TCP_HOTSPOT" = "1" ] && log_i "QUIC для Hotspot/USB: UDP/443 блокируется на динамически определённых downstream"
 fi
 
-if [ "$FORCE_TCP" = "1" ]; then
-  case "$QUIC_MODE:$MODE" in
-    GLOBAL:*|SELECTED:GLOBAL)
-      ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "Не удалось блокировать QUIC IPv4"
-      [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true ;;
-    SELECTED:INCLUDE)
-      if [ "$OWNER4" = "1" ]; then
-        for uid in $APP_UIDS; do ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT || health_error "QUIC IPv4 UID=$uid rule failed"; done
-      else health_error "INCLUDE QUIC требует owner match"; fi
-      if [ "$OWNER6" = "1" ]; then for uid in $APP_UIDS; do ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT || true; done; fi ;;
-    SELECTED:EXCLUDE)
-      if [ "$OWNER4" = "1" ]; then
-        for uid in $EXCLUDE_UIDS; do ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN || health_error "QUIC exclude IPv4 UID=$uid failed"; done
-        ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "EXCLUDE QUIC global fallback failed"
-      else health_error "EXCLUDE QUIC требует owner match"; fi
-      if [ "$OWNER6" = "1" ]; then
-        for uid in $EXCLUDE_UIDS; do ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN || true; done
-        ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true
-      fi ;;
-    OFF:*) : ;;
-  esac
-fi
-if [ "$FORCE_TCP" = "1" ]; then
-  ipt4 -t filter -A OUTPUT -j ZAPRET2_FILTER || health_error "Не удалось подключить ZAPRET2_FILTER к OUTPUT"
-  [ -n "$IP6T" ] && ipt6 -t filter -A OUTPUT -j ZAPRET2_FILTER || true
-fi
+if [ "$SMART_DIRECT" != "1" ]; then
+  HOST_ARGS=""
+  [ -s "$EXCLUDE_DOMAINS_FILE" ] && HOST_ARGS="$HOST_ARGS --hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
+  SPECIAL_ARGS=""
+  if [ "$STRATEGY_MODE" = "SMART" ] && [ -n "${SMART_AUTO_ARGS:-}" ]; then
+    SPECIAL_ARGS="$HOST_ARGS $SMART_AUTO_ARGS --new"
+    log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
+  elif [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
+    SPECIAL_ARGS="--hostlist=$SMART_YOUTUBE_FILE $HOST_ARGS $SMART_YOUTUBE_ARGS --new"
+    log_i "SMART profile: YouTube=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"
+  else
+    log_i "SMART service profile unavailable or CUSTOM selected; using general profile only"
+  fi
+  NFQWS_DEBUG_ARG=""
+  [ "$NFQWS_DEBUG" = "1" ] && NFQWS_DEBUG_ARG="--debug=@$NFQWS_LOG"
 
-HOST_ARGS=""
-[ -s "$EXCLUDE_DOMAINS_FILE" ] && HOST_ARGS="$HOST_ARGS --hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
-SPECIAL_ARGS=""
-if [ "$STRATEGY_MODE" = "SMART" ] && [ -n "${SMART_AUTO_ARGS:-}" ]; then
-  # Профиль, прошедший активный probe, обслуживает весь TLS/443, а не только
-  SPECIAL_ARGS="$HOST_ARGS $SMART_AUTO_ARGS --new"
-  log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
-elif [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
-  SPECIAL_ARGS="--hostlist=$SMART_YOUTUBE_FILE $HOST_ARGS $SMART_YOUTUBE_ARGS --new"
-  log_i "SMART profile: YouTube=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"
-else
-  log_i "SMART service profile unavailable or CUSTOM selected; using general profile only"
-fi
-NFQWS_DEBUG_ARG=""
-[ "$NFQWS_DEBUG" = "1" ] && NFQWS_DEBUG_ARG="--debug=@$NFQWS_LOG"
+  if [ "$HEALTH" = "ERROR" ]; then
+    write_health
+    write_start_state "ERROR" "Критическая ошибка установки правил" 100
+    boot_trace "abort before nfqws due to critical rule failure"
+    cleanup_iptables
+    "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
+    exit 1
+  fi
+  write_start_state "STARTING" "Запуск nfqws2" 86
+  if ! cd "$BIN_DIR"; then
+    health_error "BIN_DIR недоступен: $BIN_DIR"; write_health; write_start_state "ERROR" "Не удалось открыть каталог nfqws2" 100
+    cleanup_iptables; "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true; exit 1
+  fi
+  if [ ! -x ./nfqws2 ]; then
+    health_error "nfqws2 отсутствует/не исполняемый: $BIN_DIR/nfqws2"; write_health; write_start_state "ERROR" "nfqws2 отсутствует или не исполняемый" 100
+    cleanup_iptables; "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true; exit 1
+  fi
+  log_i "nfqws2 command: qnum=$QNUM debug=$NFQWS_DEBUG smart_engine=$STRATEGY_EFFECTIVE youtube_profile=$([ -n "$SPECIAL_ARGS" ] && echo yes || echo no) exclude-hostlist=$([ -s "$EXCLUDE_DOMAINS_FILE" ] && echo yes || echo no)"
+  nfqws_launcher_pid=""
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
+      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
+    nfqws_launcher_pid=$!
+    boot_trace "nfqws2 launch method=setsid launcher_pid=$nfqws_launcher_pid"
+  elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
+    busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
+      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
+    nfqws_launcher_pid=$!
+    boot_trace "nfqws2 launch method=busybox-setsid launcher_pid=$nfqws_launcher_pid"
+  elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; then
+    toybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
+      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
+    nfqws_launcher_pid=$!
+    boot_trace "nfqws2 launch method=toybox-setsid launcher_pid=$nfqws_launcher_pid"
+  else
+    health_warn "setsid недоступен: nfqws2 запущен через nohup compatibility fallback"
+    nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
+      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
+      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
+    nfqws_launcher_pid=$!
+    boot_trace "nfqws2 launch method=nohup-fallback launcher_pid=$nfqws_launcher_pid"
+  fi
+  sleep 1
+  nfqws_pid="$nfqws_launcher_pid"
+  if ! pid_is_owned "$nfqws_pid" nfqws2; then
+    nfqws_pid=$(find_owned_nfqws_pid)
+  fi
+  write_start_state "STARTING" "Проверка процесса и NFQUEUE" 94
+  if ! pid_is_owned "$nfqws_pid" nfqws2; then
+    health_error "nfqws2 не запустился или завершился сразу; см. внутренний лог $LOG_FILE"
+    rm -f "$NFQWS_PID_FILE"
+    write_health
+    write_start_state "ERROR" "nfqws2 не запустился или завершился сразу" 100
+    boot_trace "nfqws2 launch failed launcher_pid=${nfqws_launcher_pid:-none}"
+    cleanup_iptables
+    "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
+    exit 1
+  fi
+  printf '%s\n' "$nfqws_pid" > "$NFQWS_PID_FILE"
+  chmod 0600 "$NFQWS_PID_FILE" 2>/dev/null || true
+  boot_trace "nfqws2 alive pid=$nfqws_pid $(proc_session_fields "$nfqws_pid")"
 
-if [ "$HEALTH" = "ERROR" ]; then
-  write_health
-  write_start_state "ERROR" "Критическая ошибка установки правил" 100
-  boot_trace "abort before nfqws due to critical rule failure"
-  cleanup_iptables
-  "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
-  exit 1
-fi
-write_start_state "STARTING" "Запуск nfqws2" 86
-if ! cd "$BIN_DIR"; then
-  health_error "BIN_DIR недоступен: $BIN_DIR"; write_health; write_start_state "ERROR" "Не удалось открыть каталог nfqws2" 100
-  cleanup_iptables; "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true; exit 1
-fi
-if [ ! -x ./nfqws2 ]; then
-  health_error "nfqws2 отсутствует/не исполняемый: $BIN_DIR/nfqws2"; write_health; write_start_state "ERROR" "nfqws2 отсутствует или не исполняемый" 100
-  cleanup_iptables; "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true; exit 1
-fi
-log_i "nfqws2 command: qnum=$QNUM debug=$NFQWS_DEBUG smart_engine=$STRATEGY_EFFECTIVE youtube_profile=$([ -n "$SPECIAL_ARGS" ] && echo yes || echo no) exclude-hostlist=$([ -s "$EXCLUDE_DOMAINS_FILE" ] && echo yes || echo no)"
-nfqws_launcher_pid=""
-if command -v setsid >/dev/null 2>&1; then
-  setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-    --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-    $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-  nfqws_launcher_pid=$!
-  boot_trace "nfqws2 launch method=setsid launcher_pid=$nfqws_launcher_pid"
-elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
-  busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-    --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-    $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-  nfqws_launcher_pid=$!
-  boot_trace "nfqws2 launch method=busybox-setsid launcher_pid=$nfqws_launcher_pid"
-elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; then
-  toybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-    --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-    $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-  nfqws_launcher_pid=$!
-  boot_trace "nfqws2 launch method=toybox-setsid launcher_pid=$nfqws_launcher_pid"
-else
-  health_warn "setsid недоступен: nfqws2 запущен через nohup compatibility fallback"
-  nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-    --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-    $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-  nfqws_launcher_pid=$!
-  boot_trace "nfqws2 launch method=nohup-fallback launcher_pid=$nfqws_launcher_pid"
-fi
-sleep 1
-nfqws_pid="$nfqws_launcher_pid"
-if ! pid_is_owned "$nfqws_pid" nfqws2; then
-  nfqws_pid=$(find_owned_nfqws_pid)
-fi
-write_start_state "STARTING" "Проверка процесса и NFQUEUE" 94
-if ! pid_is_owned "$nfqws_pid" nfqws2; then
-  health_error "nfqws2 не запустился или завершился сразу; см. внутренний лог $LOG_FILE"
-  rm -f "$NFQWS_PID_FILE"
-  write_health
-  write_start_state "ERROR" "nfqws2 не запустился или завершился сразу" 100
-  boot_trace "nfqws2 launch failed launcher_pid=${nfqws_launcher_pid:-none}"
-  cleanup_iptables
-  "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
-  exit 1
-fi
-printf '%s\n' "$nfqws_pid" > "$NFQWS_PID_FILE"
-chmod 0600 "$NFQWS_PID_FILE" 2>/dev/null || true
-boot_trace "nfqws2 alive pid=$nfqws_pid $(proc_session_fields "$nfqws_pid")"
-
-verify_rules_snapshot
-if [ -r /proc/net/netfilter/nfnetlink_queue ]; then
-  NFQ_STATE=$(cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
-  log_i "NFQUEUE state:\n$NFQ_STATE"
-  echo "$NFQ_STATE" | awk -v q="$QNUM" '$1==q {found=1} END {exit !found}' || health_error "nfqws2 запущен, но очередь NFQUEUE $QNUM не видна в ядре"
-else
-  health_warn "/proc/net/netfilter/nfnetlink_queue недоступен: привязку очереди нельзя проверить"
-fi
-ipt4_quiet -t mangle -C OUTPUT -j ZAPRET2_MANGLE || health_error "Проверка hook: ZAPRET2_MANGLE не подключена к IPv4 OUTPUT"
-[ "$FORCE_TCP" != "1" ] || ipt4_quiet -t filter -C OUTPUT -j ZAPRET2_FILTER || health_error "Проверка hook: ZAPRET2_FILTER не подключена к IPv4 OUTPUT"
-[ "$ENABLE_HOTSPOT" != "1" ] || ipt4_quiet -t mangle -C FORWARD -j ZAPRET2_MANGLE_FORWARD || health_error "Проверка hook: Hotspot NFQUEUE не подключн к IPv4 FORWARD"
-[ "$STRATEGY_EFFECTIVE" != "SMART_NATIVE" ] || ipt4_quiet -t mangle -C INPUT -j ZAPRET2_MANGLE_IN || health_error "Проверка hook: SMART_NATIVE reply feed не подключн к IPv4 INPUT"
+  verify_rules_snapshot
+  if [ -r /proc/net/netfilter/nfnetlink_queue ]; then
+    NFQ_STATE=$(cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
+    log_i "NFQUEUE state:\n$NFQ_STATE"
+    echo "$NFQ_STATE" | awk -v q="$QNUM" '$1==q {found=1} END {exit !found}' || health_error "nfqws2 запущен, но очередь NFQUEUE $QNUM не видна в ядре"
+  else
+    health_warn "/proc/net/netfilter/nfnetlink_queue недоступен: привязку очереди нельзя проверить"
+  fi
+  ipt4_quiet -t mangle -C OUTPUT -j ZAPRET2_MANGLE || health_error "Проверка hook: ZAPRET2_MANGLE не подключена к IPv4 OUTPUT"
+  [ "$FORCE_TCP" != "1" ] || ipt4_quiet -t filter -C OUTPUT -j ZAPRET2_FILTER || health_error "Проверка hook: ZAPRET2_FILTER не подключена к IPv4 OUTPUT"
+  [ "$ENABLE_HOTSPOT" != "1" ] || ipt4_quiet -t mangle -C FORWARD -j ZAPRET2_MANGLE_FORWARD || health_error "Проверка hook: Hotspot NFQUEUE не подключён к IPv4 FORWARD"
+  [ "$STRATEGY_EFFECTIVE" != "SMART_NATIVE" ] || ipt4_quiet -t mangle -C INPUT -j ZAPRET2_MANGLE_IN || health_error "Проверка hook: SMART_NATIVE reply feed не подключён к IPv4 INPUT"
 fi
 write_health
 
 watch_pid=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
 if [ -z "$watch_pid" ] || ! pid_is_owned "$watch_pid" config-watch; then
   rm -f "$WATCHER_PID_FILE" 2>/dev/null
-  WATCH_TARGETS="$CONF_FILE:w $APPS_LIST:w $AUTO_APPS_LIST:w $LISTS_DIR/warp_apps.list:w $LISTS_DIR/warp_apps.user.list:w $LISTS_DIR/ai_apps.list:w $LISTS_DIR/ai_apps.user.list:w $LISTS_DIR/dns.list:w $LISTS_DIR/dns.user.list:w $EXCLUDE_LIST:w $SMART_YOUTUBE_FILE:w $EXCLUDE_DOMAINS_FILE:w"
+  WATCH_TARGETS="$CONF_FILE:w $APPS_LIST:w $AUTO_APPS_LIST:w $LISTS_DIR/warp_apps.list:w $LISTS_DIR/warp_apps.user.list:w $LISTS_DIR/dns.list:w $LISTS_DIR/dns.user.list:w $EXCLUDE_LIST:w $SMART_YOUTUBE_FILE:w $EXCLUDE_DOMAINS_FILE:w"
   if command -v inotifyd >/dev/null 2>&1; then
     inotifyd "$MODDIR/on_change.sh" $WATCH_TARGETS 2>/dev/null &
     echo $! > "$WATCHER_PID_FILE"
@@ -1250,6 +1255,7 @@ fi
 
 # Запуск встроенного веб-сервера для WebUI (Magisk / Webroot Manager / Браузер)
 if [ -d "$MODDIR/webroot" ]; then
+  stop_pid "$RUN_DIR/httpd.pid" "webui-httpd" "httpd"
   BB_BIN=""
   for b in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox /system/bin/busybox $(command -v busybox 2>/dev/null); do
     if [ -x "$b" ] && "$b" httpd --help >/dev/null 2>&1; then
@@ -1260,10 +1266,28 @@ if [ -d "$MODDIR/webroot" ]; then
   if [ -n "$BB_BIN" ]; then
     chmod 0755 "$MODDIR/webroot/api.sh" 2>/dev/null || true
     chmod 0644 "$MODDIR/webroot/index.html" "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
-    # Запускаем httpd на порту 8080 (или 8088 если 8080 занят)
-    "$BB_BIN" httpd -p 8080 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null || \
-    "$BB_BIN" httpd -p 8088 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
-    log_i "WebUI HTTPD сервер запущен"
+    httpd_started=0
+    # Привязываем httpd строго к 127.0.0.1 (локальный loopback) для предотвращения неавторизованного внешнего доступа
+    if "$BB_BIN" httpd -p 127.0.0.1:8080 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null; then
+      httpd_started=1
+    elif "$BB_BIN" httpd -p 127.0.0.1:8088 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null; then
+      httpd_started=1
+    fi
+    if [ "$httpd_started" = "1" ]; then
+      hpid=""
+      for proc in /proc/[0-9]*; do
+        comm=$(cat "$proc/comm" 2>/dev/null)
+        cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
+        if { [ "$comm" = "httpd" ] || printf '%s' "$cmd" | grep -Fq "httpd"; } && printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot"; then
+          hpid=${proc##*/}
+          break
+        fi
+      done
+      [ -n "$hpid" ] && echo "$hpid" > "$RUN_DIR/httpd.pid"
+      log_i "WebUI HTTPD сервер запущен (PID ${hpid:-unknown})"
+    else
+      log_w "Не удалось запустить WebUI HTTPD сервер"
+    fi
   fi
 fi
 

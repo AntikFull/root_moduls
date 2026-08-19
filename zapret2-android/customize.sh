@@ -42,7 +42,6 @@ set_permissions() {
     "$MODPATH/bin/awg" \
     "$MODPATH/bin/amneziawg-go" \
     "$MODPATH/bin/zapret2-control" \
-    "$MODPATH/bin/ai-router" \
     "$MODPATH/warp-tunnel.sh" \
     "$MODPATH/service.sh" \
     "$MODPATH/boot-completed.sh" \
@@ -96,7 +95,7 @@ UPGRADE_FROM=""
 if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
   mkdir -p "$UPGRADE_BACKUP/lists" 2>/dev/null || fail_install "Не удалось создать временный архив резервных копий"
   [ -f "$ACTIVE_MODDIR/zapret2.conf" ] && cp -f "$ACTIVE_MODDIR/zapret2.conf" "$UPGRADE_BACKUP/zapret2.conf" 2>/dev/null
-  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list ai_apps.list ai_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
+  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
     if [ -f "$ACTIVE_MODDIR/lists/$keep" ]; then
       cp -f "$ACTIVE_MODDIR/lists/$keep" "$UPGRADE_BACKUP/lists/$keep" 2>/dev/null
     elif [ -f "$ACTIVE_MODDIR/$keep" ]; then
@@ -140,18 +139,23 @@ restore_upgrade_data() {
   [ -n "$UPGRADE_FROM" ] || return 0
   merge_previous_config "$UPGRADE_BACKUP/zapret2.conf" "$MODPATH/zapret2.conf"
   mkdir -p "$MODPATH/lists" 2>/dev/null
-  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list ai_apps.list ai_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
+
+  # 1. Восстанавливаем пользовательские переопределения (*.user.list и сохранённые Wi-Fi SSID)
+  for keep in apps.user.list warp_apps.user.list dns.user.list wifi_direct_ssids.list; do
     if [ -f "$UPGRADE_BACKUP/lists/$keep" ]; then
       cp -f "$UPGRADE_BACKUP/lists/$keep" "$MODPATH/lists/$keep" 2>/dev/null
     fi
   done
+
+  # 2. Пользовательские кастомные стратегии
   if [ -d "$UPGRADE_BACKUP/strategies" ]; then
-    rm -f "$MODPATH"/strategies/strategy_* 2>/dev/null
     mkdir -p "$MODPATH/strategies" 2>/dev/null
-    for strategy in "$UPGRADE_BACKUP"/strategies/strategy_*; do
+    for strategy in "$UPGRADE_BACKUP"/strategies/strategy_custom_*; do
       [ -f "$strategy" ] && [ ! -L "$strategy" ] && cp -f "$strategy" "$MODPATH/strategies/" 2>/dev/null
     done
   fi
+
+  # 3. Сохранённое состояние WARP и кэши автоподбора
   if [ -d "$UPGRADE_BACKUP/state" ]; then
     mkdir -p "$MODPATH/state" 2>/dev/null
     [ -f "$UPGRADE_BACKUP/state/warp.conf" ] && cp -f "$UPGRADE_BACKUP/state/warp.conf" "$MODPATH/state/warp.conf" 2>/dev/null
@@ -248,7 +252,7 @@ rm -rf "$MODPATH/binaries" 2>/dev/null
 
 for f in \
   "$MODPATH/bin/nfqws2" "$MODPATH/bin/ip2net" "$MODPATH/bin/mdig" "$MODPATH/bin/zapret2-control" \
-  "$MODPATH/bin/amneziawg-go" "$MODPATH/bin/awg" "$MODPATH/bin/ai-router" "$MODPATH/warp-tunnel.sh" \
+  "$MODPATH/bin/amneziawg-go" "$MODPATH/bin/awg" "$MODPATH/warp-tunnel.sh" \
   "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
   "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh" \
@@ -257,6 +261,18 @@ do
   [ -f "$f" ] && { set_exec "$f" || fail_install "Не удалось установить права +x: $f"; }
 done
 chmod 0755 "$MODPATH/webroot" 2>/dev/null || true
+
+# Очистка устаревших файлов и процессов AI Router при обновлении модуля
+rm -f "$MODPATH/bin/ai-router" "$MODPATH/lists/ai_apps.list" "$MODPATH/lists/ai_apps.user.list" "$MODPATH/ai_apps.list" 2>/dev/null
+rm -f "$ACTIVE_MODDIR/bin/ai-router" "$ACTIVE_MODDIR/lists/ai_apps.list" "$ACTIVE_MODDIR/lists/ai_apps.user.list" "$ACTIVE_MODDIR/ai_apps.list" 2>/dev/null
+rm -f "$ACTIVE_MODDIR/run/ai-router.pid" "$MODPATH/run/ai-router.pid" 2>/dev/null
+for proc in /proc/[0-9]*; do
+  cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
+  if printf '%s' "$cmd" | grep -Fq "ai-router"; then
+    kill -9 "${proc##*/}" 2>/dev/null || true
+  fi
+done
+iptables -w 2 -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports 15359 2>/dev/null || true
 
 volume_select() {
   default_answer="$1"
