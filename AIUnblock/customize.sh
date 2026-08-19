@@ -103,10 +103,8 @@ if [ "$OLD_MODPATH" != "$MODPATH" ] && [ -d "$OLD_MODPATH" ]; then
     [ -f "$OLD_MODPATH/$state_file" ] && cp -f "$OLD_MODPATH/$state_file" "$MODPATH/$state_file"
   done
 
-  mkdir -p "$MODPATH/gateways"
-  for gateway_file in gemini.current notebook.current grok.current chatgpt.current claude.current; do
-    [ -f "$OLD_MODPATH/gateways/$gateway_file" ] && cp -f "$OLD_MODPATH/gateways/$gateway_file" "$MODPATH/gateways/$gateway_file"
-  done
+  rm -rf "$OLD_MODPATH/gateways" 2>/dev/null
+  rm -rf "$MODPATH/gateways" 2>/dev/null
 fi
 
 rm -f "$MODPATH/skip_mount" "$MODPATH/.force_refresh" "$MODPATH/.reload"

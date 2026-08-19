@@ -859,11 +859,14 @@ probe_candidates_parallel() {
 
 select_proxy() {
   local current="$1" domains="$2" candidates="$3" discovery_domain="$4" token="$5" discovered dedup="" ip selected
-  # Проверка текущего gateway тоже уходит в один процесс вместо одного на домен.
+  discovered=$(discover_doh_gateways "$discovery_domain" "$token")
+  case " $candidates $discovered " in
+    *" $current "*) ;;
+    *) current="" ;;
+  esac
   if [ -n "$current" ] && probe_candidates_parallel "$current" "$domains" >/dev/null 2>&1; then
     echo "$current"; return 0
   fi
-  discovered=$(discover_doh_gateways "$discovery_domain" "$token")
   for ip in $discovered $candidates; do
     is_ipv4 "$ip" || continue
     [ "$ip" = "$current" ] && continue
