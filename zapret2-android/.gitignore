@@ -1,2 +1,8 @@
 __MACOSX
 .DS_Store
+state/
+run/
+logs/
+*.tmp*
+*.bak*
+
