@@ -31,6 +31,7 @@ pid_owned() {
     health) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service-watch.sh" ;;
     auto) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/auto-select.sh" ;;
     service) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service.sh" ;;
+    httpd) comm=$(cat "/proc/$pid/comm" 2>/dev/null); cmd=$(pid_cmdline "$pid"); { [ "$comm" = httpd ] || printf '%s' "$cmd" | grep -Fq httpd; } && printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot" ;;
     *) return 1 ;;
   esac
 }
@@ -298,10 +299,7 @@ pid_owned() {
 } > "$OUT" 2>&1
 
 chmod 0600 "$OUT" 2>/dev/null
-if mkdir -p "$EXPORT_DIR" 2>/dev/null && cp -f "$OUT" "$EXPORT_DIR/zapret2_diagnostics_latest.txt" 2>/dev/null; then
-  chmod 0644 "$EXPORT_DIR/zapret2_diagnostics_latest.txt" 2>/dev/null || true
-  [ -x "$MODDIR/log-export.sh" ] && sh "$MODDIR/log-export.sh" now >/dev/null 2>&1 || true
-  echo "$EXPORT_DIR/zapret2_diagnostics_latest.txt"
-else
-  echo "$OUT"
-fi
+# Keep diagnostics private by default. Export to shared storage is a separate,
+# explicit user action (`export-logs`) so sensitive network/package data is not
+# copied to /sdcard merely by running diagnostics.
+echo "$OUT"

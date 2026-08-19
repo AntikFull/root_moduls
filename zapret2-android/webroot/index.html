@@ -116,7 +116,8 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
     <div class="cap-summary" style="margin-bottom:14px">
       <span class="pill" id="warpStatusPill">Статус: Отключен</span>
       <span class="pill info" id="warpIfacePill">Интерфейс: awg99</span>
-      <span class="pill info" id="warpSipPill">Маскировка: SIP (Авто)</span>
+      <span class="pill info" id="warpSipPill">Маскировка: BASIC</span>
+      <span class="pill info" id="warpProfilePill">Профиль: J —</span>
       <span class="pill" id="warpHandshakePill">Рукопожатие: —</span>
       <span class="pill" id="warpTrafficPill">Трафик: ↓ 0 B · ↑ 0 B</span>
     </div>
@@ -128,7 +129,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
       <div class="grid" style="margin-top:12px">
         <label class="field"><span>Серверный адрес</span><input class="control" id="warpEndpoint" placeholder="162.159.192.1"></label>
         <label class="field"><span>Порт</span><input class="control" id="warpPort" type="number" placeholder="500"></label>
-        <label class="field"><span>Пакеты шума (Jc)</span><input class="control" id="warpJc" type="number" placeholder="4"></label>
+        <label class="field"><span>Пакеты шума (Jc)</span><input class="control" id="warpJc" type="number" placeholder="5"></label>
         <label class="field"><span>Мин. размер пакета (Jmin)</span><input class="control" id="warpJmin" type="number" placeholder="40"></label>
         <label class="field"><span>Макс. размер пакета (Jmax)</span><input class="control" id="warpJmax" type="number" placeholder="70"></label>
         <label class="field" style="grid-column:1/-1"><span>DNS туннеля</span><input class="control" id="warpDns" placeholder="Список IP через пробел (или из файла dns.list)"></label>
@@ -262,8 +263,8 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
           <p>Туннель работает через виртуальный сетевой интерфейс <code>awg99</code>.</p>
           <ul>
             <li><strong>Точечная маршрутизация:</strong> В туннель направляются любые выбранные приложения из списка <code>warp_apps.list</code> (Telegram, Discord, AI-клиенты ChatGPT/Claude, браузеры, игры, любые программы, отмеченные кнопкой ТУННЕЛЬ), а также подсети серверов Telegram (CDN, голос, медиа).</li>
-            <li><strong>Маскировка:</strong> Для устойчивости к блокировкам перед соединением отправляются специальные мусорные пакеты (<code>Jc=4</code>, <code>Jmin=40</code>, <code>Jmax=70</code>).</li>
-            <li><strong>SIP I1/I2 (Аварийный резерв):</strong> Если оператор полностью глушит стандартные протоколы, модуль автоматически активирует маскировку соединения под телефонный звонок SIP VoIP.</li>
+            <li><strong>Маскировка:</strong> Для устойчивости к блокировкам перед соединением отправляются специальные мусорные пакеты (<code>Jc=5</code>, <code>Jmin=40</code>, <code>Jmax=70</code>).</li>
+            <li><strong>Адаптивная маскировка:</strong> Сначала модуль пробует BASIC без I1/I2: меняет официальные WARP-порты и несколько Jc/Jmin/Jmax-профилей. SIP I1/I2 включается только после полного провала BASIC, после чего перебор J-профилей продолжается уже с SIP.</li>
           </ul>
         </div>
       </details>
@@ -363,79 +364,64 @@ function isRealApiResponse(text){
 async function httpExec(command, args=[]){
   if(typeof fetch !== 'function') return null;
 
-  let action = '';
-  if(args && args.length){
-    action = args[0];
-  } else if(command){
-    const parts = command.trim().split(/\s+/);
-    action = parts[parts.length - 1].replace(/['"]/g, '');
-  }
+  // `args` are already the controller argv produced by control(...args).
+  // Never serialize a shell command string for the HTTP bridge.
+  const action = String((args && args.length) ? args[0] : '').trim();
+  if(!action) return null;
+  const argv = Array.from(args || []).slice(1).map(v=>String(v));
+  const readOnly = new Set([
+    'status','json-status','json-hotspot-settings','json-strategies','json-apps',
+    'json-app-lists','json-diagnostics','json-warp-status','app-state',
+    'module-version','auto-status','log','nfqws-log'
+  ]);
 
   const loc = window.location;
   const curPath = (loc && loc.pathname) ? loc.pathname.replace(/\/[^\/]*$/, '') : '';
 
   const candidates = [];
   if(workingApiEndpoint) candidates.push(workingApiEndpoint);
-
-  candidates.push('api.sh');
-  candidates.push('./api.sh');
-  if(curPath) {
-    candidates.push(curPath + '/api.sh');
-  }
-  candidates.push('/api.sh');
-  candidates.push('/zapret2-android/api.sh');
-  candidates.push('/zapret2-android/webroot/api.sh');
-  candidates.push('/modules/zapret2-android/webroot/api.sh');
-  candidates.push('/modules/zapret2-android/api.sh');
-
-  candidates.push('http://127.0.0.1:8080/api.sh');
-  candidates.push('http://localhost:8080/api.sh');
-  candidates.push('http://127.0.0.1:8088/api.sh');
-  candidates.push('http://localhost:8088/api.sh');
-  candidates.push('http://127.0.0.1:8088/modules/zapret2-android/webroot/api.sh');
-  candidates.push('http://localhost:8088/modules/zapret2-android/webroot/api.sh');
+  candidates.push('api.sh','./api.sh');
+  if(curPath) candidates.push(curPath + '/api.sh');
+  candidates.push('/api.sh','/zapret2-android/api.sh','/zapret2-android/webroot/api.sh',
+    '/modules/zapret2-android/webroot/api.sh','/modules/zapret2-android/api.sh');
+  // Direct browser/Magisk fallback. Cross-origin access is intentionally not
+  // opened with wildcard CORS; direct localhost UI remains same-origin.
+  candidates.push('http://127.0.0.1:8080/api.sh','http://localhost:8080/api.sh',
+    'http://127.0.0.1:8088/api.sh','http://localhost:8088/api.sh');
 
   const uniqueCandidates = [...new Set(candidates)];
+  const form = new URLSearchParams();
+  form.set('action', action);
+  form.set('argc', String(Math.min(argv.length, 12)));
+  argv.slice(0,12).forEach((v,i)=>form.set('arg'+(i+1),v));
 
   for(const ep of uniqueCandidates){
     try{
-      const getUrl = ep + (ep.includes('?') ? '&' : '?') + 'cmd=' + encodeURIComponent(command) + (action ? '&action=' + encodeURIComponent(action) : '');
       const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
-      const tId = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
-      
-      const respGet = await fetch(getUrl, {
-        method: 'GET',
-        signal: ctrl ? ctrl.signal : undefined
-      });
-      if(tId) clearTimeout(tId);
-      
-      if(respGet && respGet.ok){
-        const raw = await respGet.text();
-        const cleaned = cleanCgiOutput(raw);
-        if(isRealApiResponse(cleaned)){
-          workingApiEndpoint = ep;
-          return cleaned;
-        }
+      const tId = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
+      let resp;
+      if(readOnly.has(action)){
+        const sep=ep.includes('?')?'&':'?';
+        resp=await fetch(ep+sep+form.toString(), {
+          method:'GET',
+          credentials:'same-origin',
+          signal:ctrl?ctrl.signal:undefined
+        });
+      }else{
+        resp=await fetch(ep, {
+          method:'POST',
+          headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-Zapret2-WebUI':'1'},
+          body:form.toString(),
+          credentials:'same-origin',
+          signal:ctrl?ctrl.signal:undefined
+        });
       }
-    }catch(_){}
-
-    try{
-      const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
-      const tId = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
-      
-      const respPost = await fetch(ep, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({cmd: command, action: action, args: args}),
-        signal: ctrl ? ctrl.signal : undefined
-      });
       if(tId) clearTimeout(tId);
-      
-      if(respPost && respPost.ok){
-        const raw = await respPost.text();
-        const cleaned = cleanCgiOutput(raw);
+      if(resp && resp.ok){
+        const raw=await resp.text();
+        const cleaned=cleanCgiOutput(raw);
         if(isRealApiResponse(cleaned)){
-          workingApiEndpoint = ep;
+          workingApiEndpoint=ep;
           return cleaned;
         }
       }
@@ -1134,11 +1120,14 @@ async function loadWarp(options={}){
     if(enableEl&&document.activeElement!==enableEl){
       enableEl.value=data.enable_warp||'0';
     }
-    byId('warpStatusPill').textContent='Статус: '+(data.running?'Работает':'Отключен');
-    byId('warpStatusPill').className='pill '+(data.running?'ok':'warn');
+    const warpState=data.running?'Работает':((data.enable_warp==='1'&&data.interface_up)?'Поиск рабочего профиля':(data.enable_warp==='1'?'Ошибка запуска':'Отключен'));
+    byId('warpStatusPill').textContent='Статус: '+warpState;
+    byId('warpStatusPill').className='pill '+(data.running?'ok':(data.enable_warp==='1'?'warn':''));
     byId('warpIfacePill').textContent='Интерфейс: '+(data.warp_dev||'awg99');
-    byId('warpSipPill').textContent='SIP DPI: '+(data.sip_active?'Активен (I1/I2)':'Авто (Резерв)');
+    byId('warpSipPill').textContent='Маскировка: '+(data.sip_active?'SIP I1/I2':'BASIC (без I1/I2)');
     byId('warpSipPill').className='pill '+(data.sip_active?'warn':'ok');
+    const ajc=data.active_jc||data.jc||'5',ajmin=data.active_jmin||data.jmin||'40',ajmax=data.active_jmax||data.jmax||'70';
+    byId('warpProfilePill').textContent='Профиль: J='+ajc+' / '+ajmin+'–'+ajmax+' · step '+(data.adaptive_step??0);
 
     const activeId=document.activeElement?.id;
     if(activeId!=='warpEndpoint'&&activeId!=='warpPort'){
@@ -1146,7 +1135,7 @@ async function loadWarp(options={}){
       byId('warpEndpoint').value=ep[0]||'162.159.192.1';
       byId('warpPort').value=ep[1]||'500';
     }
-    if(activeId!=='warpJc')byId('warpJc').value=data.jc||'4';
+    if(activeId!=='warpJc')byId('warpJc').value=data.jc||'5';
     if(activeId!=='warpJmin')byId('warpJmin').value=data.jmin||'40';
     if(activeId!=='warpJmax')byId('warpJmax').value=data.jmax||'70';
     if(activeId!=='warpDns')byId('warpDns').value=data.dns||'1.1.1.1 1.0.0.1';
@@ -1172,10 +1161,10 @@ async function manualRefreshWarp(){
 async function saveWarp(){
   await busy('saveWarpBtn','Применение настроек WARP…');
   try{
-    const enabled=byId('enableWarp').value,ep=byId('warpEndpoint').value.trim()||'162.159.192.1',port=byId('warpPort').value.trim()||'500',jc=byId('warpJc').value.trim()||'10',jmin=byId('warpJmin').value.trim()||'800',jmax=byId('warpJmax').value.trim()||'1400',dns=byId('warpDns').value.trim()||'1.1.1.1 1.0.0.1';
+    const enabled=byId('enableWarp').value,ep=byId('warpEndpoint').value.trim()||'162.159.192.1',port=byId('warpPort').value.trim()||'500',jc=byId('warpJc').value.trim()||'5',jmin=byId('warpJmin').value.trim()||'40',jmax=byId('warpJmax').value.trim()||'70',dns=byId('warpDns').value.trim()||'1.1.1.1 1.0.0.1';
     await control('warp-save',enabled,ep,port,jc,jmin,jmax,'0','0',dns);
     await loadWarp({silent:true});
-    done('saveWarpBtn',enabled==='1'?'WARP запущен':'WARP отключен');
+    done('saveWarpBtn',enabled==='1'?(latestWarpRunning?'WARP работает':'WARP ищет рабочий профиль'):'WARP отключен');
   }catch(error){
     done('saveWarpBtn','Ошибка: '+error.message);
   }

@@ -18,11 +18,10 @@ pid_owned() {
     auto) pid_cmdline "$pid" | grep -Fq "$MODDIR/auto-select.sh" ;;
     service) pid_cmdline "$pid" | grep -Fq "$MODDIR/service.sh" ;;
     httpd) { [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = httpd ] || pid_cmdline "$pid" | grep -Fq "httpd"; } && pid_cmdline "$pid" | grep -Fq "$MODDIR/webroot" ;;
-    ai-router) pid_cmdline "$pid" | grep -Fq "ai-router" ;;
     *) return 1 ;;
   esac
 }
-for spec in "nfqws2.pid:nfqws2" "watcher.pid:config" "vpn-watcher.pid:vpn" "health-watcher.pid:health" "auto-probe.pid:auto" "late-start.pid:service" "httpd.pid:httpd" "ai-router.pid:ai-router"; do
+for spec in "nfqws2.pid:nfqws2" "watcher.pid:config" "vpn-watcher.pid:vpn" "health-watcher.pid:health" "auto-probe.pid:auto" "late-start.pid:service" "httpd.pid:httpd"; do
   pf=${spec%%:*}; kind=${spec#*:}; pid_file="$RUN_DIR/$pf"
   pid=$(cat "$pid_file" 2>/dev/null)
   pid_owned "$pid" "$kind" && kill -TERM "$pid" 2>/dev/null
@@ -36,9 +35,6 @@ for proc in /proc/[0-9]*; do
   fi
   cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
   if printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot" && printf '%s' "$cmd" | grep -Fq "httpd"; then
-    kill -TERM "${proc##*/}" 2>/dev/null
-  fi
-  if printf '%s' "$cmd" | grep -Fq "ai-router"; then
     kill -TERM "${proc##*/}" 2>/dev/null
   fi
 done

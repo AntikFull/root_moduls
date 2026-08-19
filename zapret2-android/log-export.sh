@@ -33,7 +33,7 @@ for name in zapret2_debug.log zapret2_nfqws.log zapret2_diagnostics_latest.txt; 
   [ -f "$INTERNAL_DIR/$name" ] || continue
   tmp="$EXPORT_DIR/.$name.tmp.$$"
   if cp -f "$INTERNAL_DIR/$name" "$tmp" 2>/dev/null; then
-    chmod 0644 "$tmp" 2>/dev/null || true
+    chmod 0600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$EXPORT_DIR/$name" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   fi
 done

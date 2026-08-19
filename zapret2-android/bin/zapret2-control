@@ -34,7 +34,12 @@ chmod 0700 "$RUN_DIR" "$LOG_DIR" 2>/dev/null || true
 
 load_conf() { [ -f "$CONF_FILE" ] && . "$CONF_FILE"; }
 reload_service() { sh "$MODDIR/service.sh" reload; }
-sync_apps() { sh "$MODDIR/app-sync.sh" apply || reload_service; }
+sync_apps() {
+  sh "$MODDIR/app-sync.sh" apply || { reload_service; return $?; }
+  if [ -x "$MODDIR/warp-tunnel.sh" ]; then
+    sh "$MODDIR/warp-tunnel.sh" sync || return 1
+  fi
+}
 
 validate_pkg() { case "$1" in *[!A-Za-z0-9_.]*|'') return 1 ;; *) return 0 ;; esac; }
 validate_switch() { [ "$1" = 0 ] || [ "$1" = 1 ]; }
@@ -78,9 +83,19 @@ pid_is_script() {
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g'; }
 
 mark_control_write() { mkdir -p "$RUN_DIR" 2>/dev/null; date +%s > "$CONTROL_WRITE_MARK" 2>/dev/null; }
+validate_conf_value() {
+  [ "${#1}" -le 8192 ] || return 1
+  case "$1" in *'
+'*|*'
+'*|*'"'*|*"'"*|*'`'*|*'$'*|*'\'*) return 1 ;; esac
+  # Reject ASCII control bytes except ordinary spaces/tabs.
+  printf '%s' "$1" | LC_ALL=C grep -q '[[:cntrl:]]' && return 1
+  return 0
+}
 set_conf() {
   local key="$1" value="$2"
   case "$key" in ''|*[!A-Za-z0-9_]*) return 1 ;; esac
+  validate_conf_value "$value" || { echo "Некорректное значение для $key" >&2; return 1; }
   mark_control_write
   local tmp="$CONF_FILE.tmp.$$"
   awk -v k="$key" -v v="$value" '
@@ -88,7 +103,7 @@ set_conf() {
     $0 ~ "^[[:space:]]*" k "=" { print k "=\"" v "\""; done=1; next }
     { print }
     END { if (!done) print k "=\"" v "\"" }
-  ' "$CONF_FILE" > "$tmp" && mv -f "$tmp" "$CONF_FILE"
+  ' "$CONF_FILE" > "$tmp" && mv -f "$tmp" "$CONF_FILE" || { rm -f "$tmp"; return 1; }
   chmod 0600 "$CONF_FILE" 2>/dev/null || true
 }
 
@@ -445,39 +460,62 @@ cmd_webui() { echo "WebUI открывается менеджером root из 
 
 cmd_json_warp_status() {
   load_conf
-  local dev="${WARP_DEV:-awg99}" enabled="${ENABLE_WARP:-0}" running=false endpoint="" rx_bytes=0 tx_bytes=0 last_handshake=0 apps_count=0 active_dns=""
-  local warp_apps_file="$LISTS_DIR/warp_apps.list"
+  local dev="${WARP_DEV:-awg99}" table="${WARP_ROUTE_TABLE:-11888}" enabled="${ENABLE_WARP:-0}"
+  local running=false interface_up=false routing_ok=false rules_ok=true endpoint="" rx_bytes=0 tx_bytes=0 last_handshake=0 apps_count=0 active_dns=""
+  local warp_apps_file="$LISTS_DIR/warp_apps.list" state_file="$RUN_DIR/warp-rules.state"
+  local warp_conf="$MODDIR/state/warp.conf" adapt_file="$MODDIR/state/warp-adapt.state"
+  local active_jc="${WARP_JC:-5}" active_jmin="${WARP_JMIN:-40}" active_jmax="${WARP_JMAX:-70}" adapt_step=0 adapt_mode=basic
   [ -f "$warp_apps_file" ] || warp_apps_file="$MODDIR/warp_apps.list"
-  if [ -f "$warp_apps_file" ]; then
-    apps_count=$(grep -cvE '^[[:space:]]*(#|$)' "$warp_apps_file" 2>/dev/null || echo 0)
-  fi
+  if [ -f "$warp_apps_file" ]; then apps_count=$(grep -cvE '^[[:space:]]*(#|$)' "$warp_apps_file" 2>/dev/null || echo 0); fi
+
   local dns_file="$LISTS_DIR/dns.list"
   [ -f "$dns_file" ] || dns_file="$MODDIR/dns.list"
-  if [ -f "$dns_file" ]; then
-    active_dns=$(grep -vE '^[[:space:]]*(#|$)' "$dns_file" 2>/dev/null | tr '\r\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//')
-  fi
+  if [ -f "$dns_file" ]; then active_dns=$(grep -vE '^[[:space:]]*(#|$)' "$dns_file" 2>/dev/null | tr '\r\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//'); fi
   [ -n "$active_dns" ] || active_dns="${WARP_DNS:-1.1.1.1 1.0.0.1}"
+
   if ip link show dev "$dev" >/dev/null 2>&1; then
-    running=true
+    interface_up=true
+    ip -4 route show table "$table" default 2>/dev/null | grep -q "default.*dev $dev" && routing_ok=true
+    if [ -f "$state_file" ]; then
+      while IFS='|' read -r fam pref uid rt; do
+        case "$fam" in
+          4) ip -4 rule show 2>/dev/null | grep -E "^[0-9]+:.*uidrange ${uid}-${uid}.*lookup ${rt}([[:space:]]|$)" >/dev/null || rules_ok=false ;;
+          6) ip -6 rule show 2>/dev/null | grep -E "^[0-9]+:.*uidrange ${uid}-${uid}.*lookup ${rt}([[:space:]]|$)" >/dev/null || rules_ok=false ;;
+        esac
+      done < "$state_file"
+    elif [ "$apps_count" -gt 0 ] 2>/dev/null; then
+      rules_ok=false
+    fi
+
     if [ -x "$MODDIR/bin/awg" ]; then
-      local awg_out
-      awg_out=$("$MODDIR/bin/awg" show "$dev" 2>/dev/null)
-      endpoint=$(echo "$awg_out" | sed -n 's/^endpoint=//p' | head -n1)
-      rx_bytes=$(echo "$awg_out" | sed -n 's/^rx_bytes=//p' | head -n1)
-      tx_bytes=$(echo "$awg_out" | sed -n 's/^tx_bytes=//p' | head -n1)
-      last_handshake=$(echo "$awg_out" | sed -n 's/^last_handshake_time_sec=//p' | head -n1)
+      endpoint=$("$MODDIR/bin/awg" show "$dev" endpoints 2>/dev/null | awk 'NF>=2{print $2; exit}')
+      last_handshake=$("$MODDIR/bin/awg" show "$dev" latest-handshakes 2>/dev/null | awk 'NF>=2 && $2+0>m{m=$2+0} END{print m+0}')
+      set -- $("$MODDIR/bin/awg" show "$dev" transfer 2>/dev/null | awk 'NF>=3{rx+=$2;tx+=$3} END{print rx+0,tx+0}')
+      rx_bytes="${1:-0}"; tx_bytes="${2:-0}"
     fi
   fi
   [ -n "$endpoint" ] || endpoint="${WARP_ENDPOINT:-162.159.192.1}:${WARP_PORT:-500}"
+  case "$last_handshake" in ''|*[!0-9]*) last_handshake=0 ;; esac
+  [ "$interface_up" = true ] && [ "$routing_ok" = true ] && [ "$rules_ok" = true ] && [ "$last_handshake" -gt 0 ] 2>/dev/null && running=true
+
   local sip_active=false
-  grep -q '^I1 =' "$MODDIR/state/warp.conf" 2>/dev/null && sip_active=true
-  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"endpoint":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"jc":"%s","jmin":"%s","jmax":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"apps_count":%s,"dns":"%s","dns_force":"%s"}\n' \
-    "$enabled" "$dev" "$running" "$(json_escape "$endpoint")" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "${WARP_JC:-5}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$apps_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
+  if [ -f "$warp_conf" ]; then
+    grep -q '^I1[[:space:]]*=' "$warp_conf" 2>/dev/null && sip_active=true
+    _v=$(sed -n 's/^Jc[[:space:]]*=[[:space:]]*//p' "$warp_conf" | head -n1); case "$_v" in ''|*[!0-9]*) ;; *) active_jc="$_v" ;; esac
+    _v=$(sed -n 's/^Jmin[[:space:]]*=[[:space:]]*//p' "$warp_conf" | head -n1); case "$_v" in ''|*[!0-9]*) ;; *) active_jmin="$_v" ;; esac
+    _v=$(sed -n 's/^Jmax[[:space:]]*=[[:space:]]*//p' "$warp_conf" | head -n1); case "$_v" in ''|*[!0-9]*) ;; *) active_jmax="$_v" ;; esac
+  fi
+  if [ -f "$adapt_file" ]; then
+    _v=$(sed -n 's/^step=//p' "$adapt_file" | head -n1); case "$_v" in ''|*[!0-9]*) ;; *) adapt_step="$_v" ;; esac
+  fi
+  [ "$sip_active" = true ] && adapt_mode=sip || adapt_mode=basic
+  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"interface_up":%s,"routing_ok":%s,"rules_ok":%s,"endpoint":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"jc":"%s","jmin":"%s","jmax":"%s","active_jc":"%s","active_jmin":"%s","active_jmax":"%s","adaptive_step":%s,"adaptive_mode":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"apps_count":%s,"dns":"%s","dns_force":"%s"}\n' \
+    "$enabled" "$dev" "$running" "$interface_up" "$routing_ok" "$rules_ok" "$(json_escape "$endpoint")" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "${WARP_JC:-5}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "$active_jc" "$active_jmin" "$active_jmax" "$adapt_step" "$adapt_mode" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$apps_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
 }
 
 cmd_warp_toggle() {
   validate_switch "$2" || return 1
-  set_conf ENABLE_WARP "$2"
+  set_conf ENABLE_WARP "$2" || return 1
   if [ "$2" = "1" ]; then
     sh "$MODDIR/warp-tunnel.sh" start
   else
@@ -507,16 +545,24 @@ cmd_warp_rekey() {
 cmd_warp_save() {
   local enabled="$2" endpoint="$3" port="$4" jc="$5" jmin="$6" jmax="$7" s1="$8" s2="$9" dns="${10}"
   validate_switch "$enabled" || return 1
-  set_conf ENABLE_WARP "$enabled"
-  case "$endpoint" in ''|*[!A-Za-z0-9.:_-]*) ;; *) set_conf WARP_ENDPOINT "$endpoint" ;; esac
-  case "$port" in ''|*[!0-9]*) ;; *) set_conf WARP_PORT "$port" ;; esac
-  case "$jc" in ''|*[!0-9]*) ;; *) set_conf WARP_JC "$jc" ;; esac
-  case "$jmin" in ''|*[!0-9]*) ;; *) set_conf WARP_JMIN "$jmin" ;; esac
-  case "$jmax" in ''|*[!0-9]*) ;; *) set_conf WARP_JMAX "$jmax" ;; esac
-  case "$s1" in ''|*[!0-9]*) ;; *) set_conf WARP_S1 "$s1" ;; esac
-  case "$s2" in ''|*[!0-9]*) ;; *) set_conf WARP_S2 "$s2" ;; esac
+  set_conf ENABLE_WARP "$enabled" || return 1
+  case "$endpoint" in ''|*[!A-Za-z0-9.:_-]*) echo "Некорректный endpoint" >&2; return 1 ;; *) set_conf WARP_ENDPOINT "$endpoint" || return 1 ;; esac
+  case "$port" in ''|*[!0-9]*) echo "Некорректный port" >&2; return 1 ;; *) [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1; set_conf WARP_PORT "$port" || return 1 ;; esac
+  for _kv in "$jc" "$jmin" "$jmax" "$s1" "$s2"; do case "$_kv" in ''|*[!0-9]*) echo "Некорректный числовой параметр WARP" >&2; return 1 ;; esac; done
+  [ "$jc" -ge 1 ] 2>/dev/null && [ "$jc" -le 128 ] 2>/dev/null || { echo "Jc должен быть 1..128" >&2; return 1; }
+  [ "$jmin" -ge 1 ] 2>/dev/null && [ "$jmin" -lt "$jmax" ] 2>/dev/null || { echo "Jmin должен быть меньше Jmax" >&2; return 1; }
+  # Ограничиваем junk ниже MTU модуля: большие junk-пакеты могут фрагментироваться.
+  [ "$jmax" -le 1200 ] 2>/dev/null || { echo "Jmax должен быть <= 1200" >&2; return 1; }
+  # Для Cloudflare WARP S/H должны оставаться WireGuard-совместимыми; WebUI их не меняет.
+  [ "$s1" = 0 ] && [ "$s2" = 0 ] || { echo "Для Cloudflare WARP S1/S2 должны быть 0" >&2; return 1; }
+  set_conf WARP_JC "$jc" || return 1
+  set_conf WARP_JMIN "$jmin" || return 1
+  set_conf WARP_JMAX "$jmax" || return 1
+  set_conf WARP_S1 0 || return 1
+  set_conf WARP_S2 0 || return 1
   if [ -n "$dns" ]; then
-    set_conf WARP_DNS "$dns"
+    validate_dns_servers "$dns" || { echo "Некорректный WARP DNS" >&2; return 1; }
+    set_conf WARP_DNS "$dns" || return 1
     local dns_target="$LISTS_DIR/dns.list"
     mkdir -p "$LISTS_DIR" 2>/dev/null
     printf "# dns.list — Список DNS серверов для туннеля WARP\n" > "$dns_target.tmp.$$"
@@ -525,6 +571,8 @@ cmd_warp_save() {
     done
     mv -f "$dns_target.tmp.$$" "$dns_target" 2>/dev/null
   fi
+  # Новые ручные baseline-настройки начинают adaptive state заново с BASIC.
+  rm -f "$MODDIR/state/warp-adapt.state" 2>/dev/null
   if [ "$enabled" = "1" ]; then
     sh "$MODDIR/warp-tunnel.sh" restart
   else

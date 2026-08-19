@@ -13,4 +13,4 @@ if [ -x "$CONTROL" ]; then
   echo ""
   echo "Если health не OK: открывать WebUI -> Диагностика -> Запустить диагностику."
 fi
-echo "WebUI открывается через страницу модуля в KernelSU Next; HTTP-сервер не требуется."
+echo "WebUI: KernelSU/APatch — через страницу модуля; Magisk/WebRoot — через webroot, прямой fallback: http://127.0.0.1:8080/."

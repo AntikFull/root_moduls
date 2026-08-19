@@ -18,7 +18,7 @@ flush_install_log() {
   mkdir -p "$INSTALL_LOG_DIR" 2>/dev/null
   if [ -d "$INSTALL_LOG_DIR" ]; then
     cp -f "$TMP_INSTALL_LOG" "$INSTALL_LOG" 2>/dev/null
-    chmod 0644 "$INSTALL_LOG" 2>/dev/null
+    chmod 0600 "$INSTALL_LOG" 2>/dev/null
   fi
 }
 
@@ -124,7 +124,12 @@ merge_previous_config() {
   [ -f "$old" ] && [ -f "$new" ] || return 0
   awk '
     NR==FNR {
-      if ($0 ~ /^[A-Z][A-Z0-9_]*=/) { key=$0; sub(/=.*/, "", key); old[key]=$0 }
+      # Upgrade migration accepts only the same simple quoted assignment format
+      # emitted by zapret2-control. This prevents a poisoned legacy config from
+      # becoming executable shell when the new module sources zapret2.conf.
+      if ($0 ~ /^[A-Z][A-Z0-9_]*="[^"]*"$/ && index($0,"`")==0 && index($0,"$")==0 && index($0,"\\")==0 && index($0,"\r")==0) {
+        key=$0; sub(/=.*/, "", key); old[key]=$0
+      }
       next
     }
     {
@@ -140,8 +145,9 @@ restore_upgrade_data() {
   merge_previous_config "$UPGRADE_BACKUP/zapret2.conf" "$MODPATH/zapret2.conf"
   mkdir -p "$MODPATH/lists" 2>/dev/null
 
-  # 1. Восстанавливаем пользовательские переопределения (*.user.list и сохранённые Wi-Fi SSID)
-  for keep in apps.user.list warp_apps.user.list dns.user.list wifi_direct_ssids.list; do
+  # 1. Восстанавливаем все списки, которые пользователь может менять через WebUI/CLI.
+  # Bundled defaults остаются обновляемыми только для файлов, которых пользователь не меняет.
+  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
     if [ -f "$UPGRADE_BACKUP/lists/$keep" ]; then
       cp -f "$UPGRADE_BACKUP/lists/$keep" "$MODPATH/lists/$keep" 2>/dev/null
     fi
@@ -245,6 +251,40 @@ ilog "selected_abi=$ABI_DIR"
 mkdir -p "$MODPATH/bin" 2>/dev/null || fail_install "Не удалось создать каталог bin"
 cp -f "$MODPATH/binaries/$ABI_DIR/"* "$MODPATH/bin/" 2>>"$TMP_INSTALL_LOG" || fail_install "Не удалось скопировать ABI-бинарники"
 cp -f "$MODPATH/binaries/"*.lua "$MODPATH/bin/" 2>>"$TMP_INSTALL_LOG" || fail_install "Не удалось скопировать Lua-скрипты zapret2"
+
+# Проверка целостности выбранных native binaries по release manifest.
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    return
+  fi
+  for bb in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox; do
+    if [ -x "$bb" ]; then "$bb" sha256sum "$1" 2>/dev/null | awk '{print $1}'; return; fi
+  done
+  return 1
+}
+verify_binary_manifest() {
+  [ -f "$MODPATH/BINARY_MANIFEST.txt" ] || fail_install "BINARY_MANIFEST.txt отсутствует"
+  manifest_rows=$(awk -v sec="[$ABI_DIR]" '
+    $0==sec {insec=1; next}
+    /^\[/ {if(insec) exit}
+    insec && length($1)==64 && $1 ~ /^[0-9a-fA-F]+$/ && NF>=2 {print $1 " " $2}
+  ' "$MODPATH/BINARY_MANIFEST.txt")
+  [ -n "$manifest_rows" ] || fail_install "В manifest нет секции $ABI_DIR"
+  count=0
+  while read -r expected name; do
+    [ -n "$name" ] || continue
+    [ -f "$MODPATH/bin/$name" ] || fail_install "После выбора ABI отсутствует $name"
+    actual=$(sha256_file "$MODPATH/bin/$name") || fail_install "SHA-256 недоступен для проверки $name"
+    [ "$actual" = "$expected" ] || fail_install "Checksum mismatch: $name ($ABI_DIR)"
+    count=$((count + 1))
+  done <<EOMANIFEST
+$manifest_rows
+EOMANIFEST
+  [ "$count" -ge 5 ] || fail_install "Manifest verification incomplete: $count binaries"
+  ilog "binary_manifest_verified=$ABI_DIR count=$count"
+}
+verify_binary_manifest
 rm -rf "$MODPATH/binaries" 2>/dev/null
 
 [ -s "$MODPATH/bin/nfqws2" ] || fail_install "nfqws2 отсутствует после установки"
@@ -262,16 +302,23 @@ do
 done
 chmod 0755 "$MODPATH/webroot" 2>/dev/null || true
 
-# Очистка устаревших файлов и процессов AI Router при обновлении модуля
+# Очистка устаревшего AI Router — только доказанно принадлежащий старому модулю PID.
+legacy_ai_pid=$(cat "$ACTIVE_MODDIR/run/ai-router.pid" 2>/dev/null)
+case "$legacy_ai_pid" in
+  ''|0|*[!0-9]*) ;;
+  *)
+    if kill -0 "$legacy_ai_pid" 2>/dev/null; then
+      legacy_cmd=$(tr '\000' ' ' < "/proc/$legacy_ai_pid/cmdline" 2>/dev/null)
+      legacy_exe=$(readlink "/proc/$legacy_ai_pid/exe" 2>/dev/null)
+      if printf '%s' "$legacy_cmd $legacy_exe" | grep -Fq "$ACTIVE_MODDIR/bin/ai-router"; then
+        kill -TERM "$legacy_ai_pid" 2>/dev/null || true
+      fi
+    fi
+    ;;
+esac
 rm -f "$MODPATH/bin/ai-router" "$MODPATH/lists/ai_apps.list" "$MODPATH/lists/ai_apps.user.list" "$MODPATH/ai_apps.list" 2>/dev/null
 rm -f "$ACTIVE_MODDIR/bin/ai-router" "$ACTIVE_MODDIR/lists/ai_apps.list" "$ACTIVE_MODDIR/lists/ai_apps.user.list" "$ACTIVE_MODDIR/ai_apps.list" 2>/dev/null
 rm -f "$ACTIVE_MODDIR/run/ai-router.pid" "$MODPATH/run/ai-router.pid" 2>/dev/null
-for proc in /proc/[0-9]*; do
-  cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
-  if printf '%s' "$cmd" | grep -Fq "ai-router"; then
-    kill -9 "${proc##*/}" 2>/dev/null || true
-  fi
-done
 iptables -w 2 -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports 15359 2>/dev/null || true
 
 volume_select() {

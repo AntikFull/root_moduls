@@ -23,6 +23,10 @@ IP_BIN=$(command -v ip 2>/dev/null); [ -n "$IP_BIN" ] || IP_BIN=/system/bin/ip
 IPT=$(command -v iptables 2>/dev/null); [ -n "$IPT" ] || IPT=/system/bin/iptables
 IP6T=$(command -v ip6tables 2>/dev/null); [ -n "$IP6T" ] || IP6T=/system/bin/ip6tables
 valid_number() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+ipv6_forwarding_active() {
+  [ "$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)" = "1" ] || return 1
+  return 0
+}
 
 normalize_fallback_mode() {
   case "${VPN_FALLBACK_MODE:-}" in
@@ -137,7 +141,7 @@ setup_private_route_table() {
   [ "$has4" = 1 ] || { log "VPN=$vpn_if не имеет IPv4-адреса; раздача IPv4 VPN недоступна"; return 1; }
   "$IP_BIN" -4 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || { log "Не удалось установить IPv4 default dev $vpn_if table $VPN_ROUTE_TABLE"; return 1; }
   if [ "$has6" = 1 ]; then
-    "$IP_BIN" -6 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || log "IPv6 default dev $vpn_if не доступен; leak guard оставлен стандартным"
+    "$IP_BIN" -6 route replace default dev "$vpn_if" table "$VPN_ROUTE_TABLE" 2>/dev/null || { log "IPv6 default route для VPN не установлен"; return 1; }
   fi
   return 0
 }
@@ -168,10 +172,11 @@ setup_guard_only() {
   "$IPT" -w 5 -t filter -N ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
   "$IPT" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
   for down in $downs; do "$IPT" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || return 1; done
-  if [ -x "$IP6T" ]; then
-    "$IP6T" -w 5 -t filter -N ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
-    "$IP6T" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
-    for down in $downs; do "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || true; done
+  if ipv6_forwarding_active; then
+    [ -x "$IP6T" ] || { log "IPv6 forwarding активен, но ip6tables отсутствует: fail-closed setup невозможен"; return 1; }
+    "$IP6T" -w 5 -t filter -N ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
+    "$IP6T" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
+    for down in $downs; do "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || return 1; done
   fi
   log "fallback=BLOCK: VPN разворован, раздача заблокирована"
 }
@@ -197,14 +202,22 @@ setup_vpn_nat_forward_guard() {
       log "MASQUERADE: downstream=$down subnet=$subnet -> $vpn_if"
     fi
   done
-  if [ -x "$IP6T" ]; then
-    "$IP6T" -w 5 -t filter -N ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
-    "$IP6T" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || true
-    for down in $downs; do
-      "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -o "$vpn_if" -j ACCEPT >/dev/null 2>&1 || true
-      "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$vpn_if" -o "$down" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || true
-      "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" ! -o "$vpn_if" -j REJECT >/dev/null 2>&1 || true
-    done
+  if ipv6_forwarding_active; then
+    [ -x "$IP6T" ] || { log "IPv6 forwarding активен, но ip6tables отсутствует"; return 1; }
+    "$IP6T" -w 5 -t filter -N ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
+    "$IP6T" -w 5 -t filter -I FORWARD 1 -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
+    if "$IP_BIN" -6 route show table "$VPN_ROUTE_TABLE" default 2>/dev/null | grep -q "default.*dev $vpn_if"; then
+      for down in $downs; do
+        "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -o "$vpn_if" -j ACCEPT >/dev/null 2>&1 || return 1
+        "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$vpn_if" -o "$down" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || return 1
+        "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" ! -o "$vpn_if" -j REJECT >/dev/null 2>&1 || return 1
+      done
+    else
+      for down in $downs; do
+        "$IP6T" -w 5 -t filter -A ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || return 1
+      done
+      log "VPN не имеет подтверждённого IPv6 default route: IPv6 tether заблокирован fail-closed"
+    fi
   fi
 }
 
@@ -229,6 +242,11 @@ verify_current_rules() {
       "$IPT" -w 5 -t filter -C FORWARD -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
       downs=$(printf '%s' "$sig" | sed -n 's/^down=\([^|]*\).*/\1/p' | tr ',' ' ')
       for down in $downs; do "$IPT" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || return 1; done
+      if ipv6_forwarding_active; then
+        [ -x "$IP6T" ] || return 1
+        "$IP6T" -w 5 -t filter -C FORWARD -j ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
+        for down in $downs; do "$IP6T" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || return 1; done
+      fi
     fi
     return 0 ;;
   esac
@@ -245,8 +263,11 @@ verify_current_rules() {
       subnet=$(subnet_for_iface "$down"); [ -n "$subnet" ] || return 1
       "$IPT" -w 5 -t nat -C ZAPRET2_VPN_NAT -s "$subnet" -o "$vpn_if" -j MASQUERADE >/dev/null 2>&1 || return 1
     fi
-    if [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -S ZAPRET2_VPN_FORWARD >/dev/null 2>&1; then
-      "$IP6T" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" ! -o "$vpn_if" -j REJECT >/dev/null 2>&1 || return 1
+    if ipv6_forwarding_active; then
+      [ -x "$IP6T" ] || return 1
+      "$IP6T" -w 5 -t filter -S ZAPRET2_VPN_FORWARD >/dev/null 2>&1 || return 1
+      # Either routed through VPN or explicitly rejected; both are fail-closed.
+      "$IP6T" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" ! -o "$vpn_if" -j REJECT >/dev/null 2>&1 ||       "$IP6T" -w 5 -t filter -C ZAPRET2_VPN_FORWARD -i "$down" -j REJECT >/dev/null 2>&1 || return 1
     fi
   done
   [ -f "$STATE_FILE" ] || return 1

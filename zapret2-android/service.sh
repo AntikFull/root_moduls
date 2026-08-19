@@ -963,10 +963,10 @@ else
   [ -n "$IP6T" ] && ipt6 -t filter -N ZAPRET2_FILTER || true
 
   # Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
-  ipt4 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
-  ipt4 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
-  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN 2>/dev/null || true
-  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN 2>/dev/null || true
+  ipt4 -t mangle -A ZAPRET2_MANGLE -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
+  ipt4 -t filter -A ZAPRET2_FILTER -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
+  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
+  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
 
   for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
     ipt4 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
@@ -1089,7 +1089,12 @@ if [ "$ENABLE_HOTSPOT" = "1" ]; then
     fi
   fi
 
-  "$MODDIR/tether-sync.sh" apply >/dev/null 2>&1 || health_error "Не удалось синхронизировать динамические tether AntiDPI правила"
+  if [ "$SMART_DIRECT" = "1" ]; then
+    "$MODDIR/tether-sync.sh" cleanup >/dev/null 2>&1 || true
+    log_i "DIRECT: tether AntiDPI/NFQUEUE rules отключены; VPN routing остаётся независимым"
+  else
+    "$MODDIR/tether-sync.sh" apply >/dev/null 2>&1 || health_error "Не удалось синхронизировать динамические tether AntiDPI правила"
+  fi
 
   "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
   if [ "${ENABLE_VPN_HOTSPOT:-0}" = "1" ]; then

@@ -387,7 +387,11 @@ prepare_probe_dns() {
     done < "$probe_file"
   else
     for group in GENERAL GOOGLE; do
-      eval "entries=\$AUTO_PROBE_HOSTS_$group"
+      case "$group" in
+        GENERAL) entries="$AUTO_PROBE_HOSTS_GENERAL" ;;
+        GOOGLE) entries="$AUTO_PROBE_HOSTS_GOOGLE" ;;
+        *) entries="" ;;
+      esac
       for entry in $entries; do
         parse_probe_entry "$entry" || { log "AUTO probe: parse error entry '$entry' in group $group"; continue; }
         total=$((total + 1))

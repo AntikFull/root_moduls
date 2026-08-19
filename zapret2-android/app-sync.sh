@@ -6,6 +6,7 @@ RUN_DIR="$MODDIR/run"
 CONF_FILE="$MODDIR/zapret2.conf"
 LISTS_DIR="$MODDIR/lists"
 [ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
+[ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
 APPS_LIST="$LISTS_DIR/apps.list"
 APPS_USER_LIST="$LISTS_DIR/apps.user.list"
 AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
@@ -73,7 +74,20 @@ acquire() {
   done
   echo $$ > "$LOCK/pid"
 }
-release() { [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; }
+release() {
+  # On a failed build, remove only temporary chains; the live policy stays intact.
+  if [ -n "${MCHAIN:-}" ]; then
+    "$IPT" -w 2 -t mangle -F "$MCHAIN" 2>/dev/null || true
+    "$IPT" -w 2 -t mangle -X "$MCHAIN" 2>/dev/null || true
+    command -v ip6tables >/dev/null 2>&1 && { ip6tables -w 2 -t mangle -F "$MCHAIN" 2>/dev/null || true; ip6tables -w 2 -t mangle -X "$MCHAIN" 2>/dev/null || true; }
+  fi
+  if [ -n "${FCHAIN:-}" ]; then
+    "$IPT" -w 2 -t filter -F "$FCHAIN" 2>/dev/null || true
+    "$IPT" -w 2 -t filter -X "$FCHAIN" 2>/dev/null || true
+    command -v ip6tables >/dev/null 2>&1 && { ip6tables -w 2 -t filter -F "$FCHAIN" 2>/dev/null || true; ip6tables -w 2 -t filter -X "$FCHAIN" 2>/dev/null || true; }
+  fi
+  [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK" 2>/dev/null
+}
 trap release EXIT HUP INT TERM
 acquire || exit 1
 
@@ -93,53 +107,67 @@ AUTO_APP_UIDS=""
 APP_UIDS=$(printf '%s\n%s\n' "$AUTO_APP_UIDS" "$MANUAL_APP_UIDS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
 EXCLUDE_UIDS=$(get_uids "$EXCLUDE_LIST" 0)
 
-"$IPT" -w 5 -t mangle -F ZAPRET2_MANGLE >/dev/null 2>&1 || exit 1
-"$IPT" -w 5 -t filter -F ZAPRET2_FILTER >/dev/null 2>&1 || exit 1
-[ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -S ZAPRET2_MANGLE >/dev/null 2>&1 && "$IP6T" -w 5 -t mangle -F ZAPRET2_MANGLE >/dev/null 2>&1 || true
-[ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -S ZAPRET2_FILTER >/dev/null 2>&1 && "$IP6T" -w 5 -t filter -F ZAPRET2_FILTER >/dev/null 2>&1 || true
+# Build new app policy in temporary chains. The live chains remain untouched until
+# the complete new policy has been constructed successfully.
+MCHAIN="ZAPRET2_MANGLE_NEW"
+FCHAIN="ZAPRET2_FILTER_NEW"
+"$IPT" -w 5 -t mangle -F "$MCHAIN" >/dev/null 2>&1 || true
+"$IPT" -w 5 -t mangle -X "$MCHAIN" >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -F "$FCHAIN" >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -X "$FCHAIN" >/dev/null 2>&1 || true
+"$IPT" -w 5 -t mangle -N "$MCHAIN" >/dev/null 2>&1 || exit 1
+"$IPT" -w 5 -t filter -N "$FCHAIN" >/dev/null 2>&1 || exit 1
+if [ -x "$IP6T" ]; then
+  "$IP6T" -w 5 -t mangle -F "$MCHAIN" >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t mangle -X "$MCHAIN" >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t filter -F "$FCHAIN" >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t filter -X "$FCHAIN" >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t mangle -N "$MCHAIN" >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t filter -N "$FCHAIN" >/dev/null 2>&1 || true
+fi
 
 WARP_UIDS=$(printf '%s\n%s\n' "$(get_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
 
 # Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
-"$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN >/dev/null 2>&1 || true
-"$IPT" -w 5 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN >/dev/null 2>&1 || true
-[ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -o awg99 -j RETURN >/dev/null 2>&1 || true
-[ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -o awg99 -j RETURN >/dev/null 2>&1 || true
+"$IPT" -w 5 -t mangle -A $MCHAIN -o "${WARP_DEV:-awg99}" -j RETURN >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -A $FCHAIN -o "${WARP_DEV:-awg99}" -j RETURN >/dev/null 2>&1 || true
+[ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A $MCHAIN -o "${WARP_DEV:-awg99}" -j RETURN >/dev/null 2>&1 || true
+[ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A $FCHAIN -o "${WARP_DEV:-awg99}" -j RETURN >/dev/null 2>&1 || true
 
 for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
-  "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN >/dev/null 2>&1 || true
-  "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+  "$IPT" -w 5 -t mangle -A $MCHAIN -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+  "$IPT" -w 5 -t filter -A $FCHAIN -d "$subnet" -j RETURN >/dev/null 2>&1 || true
 done
 for subnet in 2001:b28:f23d::/48 2001:67c:4e8::/48; do
-  [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN >/dev/null 2>&1 || true
-  [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A $MCHAIN -d "$subnet" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A $FCHAIN -d "$subnet" -j RETURN >/dev/null 2>&1 || true
 done
 
 for uid in $WARP_UIDS; do
   case "$uid" in ''|0|*[!0-9]*) continue ;; esac
-  "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
-  "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
-  [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
-  [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  "$IPT" -w 5 -t mangle -A $MCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  "$IPT" -w 5 -t filter -A $FCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A $MCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
+  [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A $FCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true
 done
 
-add4_nfq() { "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE "$@" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 >/dev/null 2>&1; }
+add4_nfq() { "$IPT" -w 5 -t mangle -A $MCHAIN "$@" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 >/dev/null 2>&1; }
 add4_mark() {
   [ "$STRATEGY_EFFECTIVE" = SMART_NATIVE ] || return 0
   [ "$CONNMARK4" = 1 ] || return 1
-  "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE "$@" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" >/dev/null 2>&1
+  "$IPT" -w 5 -t mangle -A $MCHAIN "$@" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" >/dev/null 2>&1
 }
-add6_nfq() { [ "$NFQ6" = 1 ] && [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE "$@" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 >/dev/null 2>&1 || true; }
-add6_mark() { [ "$STRATEGY_EFFECTIVE" = SMART_NATIVE ] && [ "$CONNMARK6" = 1 ] && [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE "$@" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" >/dev/null 2>&1 || true; }
+add6_nfq() { [ "$NFQ6" = 1 ] && [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A $MCHAIN "$@" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 >/dev/null 2>&1 || true; }
+add6_mark() { [ "$STRATEGY_EFFECTIVE" = SMART_NATIVE ] && [ "$CONNMARK6" = 1 ] && [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -A $MCHAIN "$@" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" >/dev/null 2>&1 || true; }
 
 case "$MODE" in
   GLOBAL)
     add4_mark || exit 1; add4_nfq || exit 1; add6_mark; add6_nfq ;;
   EXCLUDE)
     [ "$OWNER4" = 1 ] || exit 1
-    for uid in $EXCLUDE_UIDS; do "$IPT" -w 5 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || exit 1; done
+    for uid in $EXCLUDE_UIDS; do "$IPT" -w 5 -t mangle -A $MCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || exit 1; done
     add4_mark || exit 1; add4_nfq || exit 1
-    if [ "$OWNER6" = 1 ]; then for uid in $EXCLUDE_UIDS; do "$IP6T" -w 5 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true; done; add6_mark; add6_nfq; fi ;;
+    if [ "$OWNER6" = 1 ]; then for uid in $EXCLUDE_UIDS; do "$IP6T" -w 5 -t mangle -A $MCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true; done; add6_mark; add6_nfq; fi ;;
   INCLUDE)
     [ "$OWNER4" = 1 ] || exit 1
     for uid in $APP_UIDS; do add4_mark -m owner --uid-owner "$uid" || exit 1; add4_nfq -m owner --uid-owner "$uid" || exit 1; done
@@ -150,18 +178,46 @@ esac
 if [ "$FORCE_TCP" = 1 ] && [ "$QUIC_MODE" != OFF ]; then
   case "$QUIC_MODE:$MODE" in
     GLOBAL:*|SELECTED:GLOBAL)
-      "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT >/dev/null 2>&1 || exit 1
-      [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT >/dev/null 2>&1 || true ;;
+      "$IPT" -w 5 -t filter -A $FCHAIN -p udp --dport 443 -j REJECT >/dev/null 2>&1 || exit 1
+      [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -A $FCHAIN -p udp --dport 443 -j REJECT >/dev/null 2>&1 || true ;;
     SELECTED:INCLUDE)
       [ "$OWNER4" = 1 ] || exit 1
-      for uid in $APP_UIDS; do "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1 || exit 1; done
-      if [ "$OWNER6" = 1 ]; then for uid in $APP_UIDS; do "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1 || true; done; fi ;;
+      for uid in $APP_UIDS; do "$IPT" -w 5 -t filter -A $FCHAIN -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1 || exit 1; done
+      if [ "$OWNER6" = 1 ]; then for uid in $APP_UIDS; do "$IP6T" -w 5 -t filter -A $FCHAIN -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1 || true; done; fi ;;
     SELECTED:EXCLUDE)
       [ "$OWNER4" = 1 ] || exit 1
-      for uid in $EXCLUDE_UIDS; do "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || exit 1; done
-      "$IPT" -w 5 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT >/dev/null 2>&1 || exit 1
-      if [ "$OWNER6" = 1 ]; then for uid in $EXCLUDE_UIDS; do "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true; done; "$IP6T" -w 5 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT >/dev/null 2>&1 || true; fi ;;
+      for uid in $EXCLUDE_UIDS; do "$IPT" -w 5 -t filter -A $FCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || exit 1; done
+      "$IPT" -w 5 -t filter -A $FCHAIN -p udp --dport 443 -j REJECT >/dev/null 2>&1 || exit 1
+      if [ "$OWNER6" = 1 ]; then for uid in $EXCLUDE_UIDS; do "$IP6T" -w 5 -t filter -A $FCHAIN -m owner --uid-owner "$uid" -j RETURN >/dev/null 2>&1 || true; done; "$IP6T" -w 5 -t filter -A $FCHAIN -p udp --dport 443 -j REJECT >/dev/null 2>&1 || true; fi ;;
   esac
+fi
+
+# Commit the complete policy by swapping hooks/chains. On any build error above,
+# the script exited while the old live policy stayed intact.
+"$IPT" -w 5 -t mangle -I OUTPUT 1 -j "$MCHAIN" >/dev/null 2>&1 || exit 1
+"$IPT" -w 5 -t mangle -D OUTPUT -j ZAPRET2_MANGLE >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -I OUTPUT 1 -j "$FCHAIN" >/dev/null 2>&1 || exit 1
+"$IPT" -w 5 -t filter -D OUTPUT -j ZAPRET2_FILTER >/dev/null 2>&1 || true
+"$IPT" -w 5 -t mangle -F ZAPRET2_MANGLE >/dev/null 2>&1 || true
+"$IPT" -w 5 -t mangle -X ZAPRET2_MANGLE >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -F ZAPRET2_FILTER >/dev/null 2>&1 || true
+"$IPT" -w 5 -t filter -X ZAPRET2_FILTER >/dev/null 2>&1 || true
+"$IPT" -w 5 -t mangle -E "$MCHAIN" ZAPRET2_MANGLE >/dev/null 2>&1 || exit 1
+"$IPT" -w 5 -t filter -E "$FCHAIN" ZAPRET2_FILTER >/dev/null 2>&1 || exit 1
+
+if [ -x "$IP6T" ] && "$IP6T" -w 5 -t mangle -S "$MCHAIN" >/dev/null 2>&1; then
+  "$IP6T" -w 5 -t mangle -I OUTPUT 1 -j "$MCHAIN" >/dev/null 2>&1 || exit 1
+  "$IP6T" -w 5 -t mangle -D OUTPUT -j ZAPRET2_MANGLE >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t mangle -F ZAPRET2_MANGLE >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t mangle -X ZAPRET2_MANGLE >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t mangle -E "$MCHAIN" ZAPRET2_MANGLE >/dev/null 2>&1 || exit 1
+fi
+if [ -x "$IP6T" ] && "$IP6T" -w 5 -t filter -S "$FCHAIN" >/dev/null 2>&1; then
+  "$IP6T" -w 5 -t filter -I OUTPUT 1 -j "$FCHAIN" >/dev/null 2>&1 || exit 1
+  "$IP6T" -w 5 -t filter -D OUTPUT -j ZAPRET2_FILTER >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t filter -F ZAPRET2_FILTER >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t filter -X ZAPRET2_FILTER >/dev/null 2>&1 || true
+  "$IP6T" -w 5 -t filter -E "$FCHAIN" ZAPRET2_FILTER >/dev/null 2>&1 || exit 1
 fi
 
 shared_want="$RUN_DIR/.shared-want.$$"
