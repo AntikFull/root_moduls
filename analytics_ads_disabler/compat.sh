@@ -828,8 +828,10 @@ cap_exec_disable_candidate() {
 
     cmd_text=$(cap_action_text "$backend" "$verb" "$has_user" "$exec_mode" "$actual_user" "$target")
     command -v log_cmd_exec >/dev/null 2>&1 && log_cmd_exec "$cmd_text" "$out" "$rc"
-    command -v aad_package_dump_invalidate >/dev/null 2>&1 && aad_package_dump_invalidate "${target%%/*}"
     cap_action_ok "$rc" "$out" || return 1
+    case "$out" in
+        *"new state: disabled"*) return 0 ;;
+    esac
     cap_component_is_disabled "$user" "$target" || return 1
     cap_remember_disable_spec "$backend" "$verb" "$has_user" "$exec_mode" "$user_token"
     return 0
@@ -974,6 +976,9 @@ cap_exec_state_candidate() {
         return 1
     fi
     cap_action_ok "$rc" "$out" || return 1
+    case "$out" in
+        *"new state:"*) return 0 ;;
+    esac
     cap_component_state_matches "$user" "$target" "$expected" || return 1
     return 0
 }

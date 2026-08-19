@@ -1832,7 +1832,7 @@ aad_get_component_override_state_checked() {
             if (founduser && !emitted) print "default"
         }
     ')
-    [ -n "$_agcos_state" ] || return 1
+    [ -n "$_agcos_state" ] || _agcos_state="default"
     printf '%s\n' "$_agcos_state" | head -n1
     return 0
 }
@@ -1922,9 +1922,11 @@ restore_original_state() {
 
 cap_list_packages_with_paths_raw() {
     user="$1"
-    [ "$CAP_PACKAGE_LIST_BACKEND" != "none" ] || return 1
-    [ "$CAP_PACKAGE_LIST_HAS_USER" = "1" ] || [ "$user" = "0" ] || return 1
-    case "$CAP_PACKAGE_LIST_BACKEND:$CAP_PACKAGE_LIST_HAS_USER" in
+    _pkg_backend="${PACKAGE_LIST_BACKEND:-${CAP_PACKAGE_LIST_BACKEND:-cmd}}"
+    _pkg_has_user="${PACKAGE_LIST_HAS_USER:-${CAP_PACKAGE_LIST_HAS_USER:-1}}"
+    [ "$_pkg_backend" != "none" ] || return 1
+    [ "$_pkg_has_user" = "1" ] || [ "$user" = "0" ] || return 1
+    case "$_pkg_backend:$_pkg_has_user" in
         cmd:1) cmd package list packages -f --user "$user" 2>/dev/null ;;
         cmd:0) cmd package list packages -f 2>/dev/null ;;
         pm:1) pm list packages -f --user "$user" 2>/dev/null ;;
@@ -1965,26 +1967,21 @@ build_apk_path_inventory() {
 }
 
 cap_package_paths_readonly() {
-    user="$1"; pkg="$2"
-    paths_tmp=$(aad_mktemp_near "$DATA_DIR/.package_paths")
-    [ -n "$paths_tmp" ] || return 0
-    : > "$paths_tmp"
-
-    cmd package path --user "$user" "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
-    [ -s "$paths_tmp" ] || pm path --user "$user" "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
-    [ -s "$paths_tmp" ] || cmd package path "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
-    [ -s "$paths_tmp" ] || pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' > "$paths_tmp"
-
-    if [ -n "${AAD_APK_PATH_CACHE:-}" ] && [ -f "$AAD_APK_PATH_CACHE" ]; then
-        awk -F'|' -v u="$user" -v p="$pkg" '$1==u && $2==p {print $3}' \
-            "$AAD_APK_PATH_CACHE" >> "$paths_tmp" 2>/dev/null
+    user="${1:-0}"; pkg="$2"
+    [ -n "$pkg" ] || return 0
+    if [ -n "${AAD_APK_PATH_CACHE:-}" ] && [ -f "$AAD_APK_PATH_CACHE" ] && [ -s "$AAD_APK_PATH_CACHE" ]; then
+        _cached_paths=$(awk -F'|' -v u="$user" -v p="$pkg" '$1==u && $2==p {print $3}' "$AAD_APK_PATH_CACHE" 2>/dev/null)
+        if [ -n "$_cached_paths" ]; then
+            printf '%s\n' "$_cached_paths"
+            return 0
+        fi
     fi
 
-    # cmd/pm package path уже возвращает base и split APK конкретного пакета.
-    # Нельзя добавлять все соседние *.apk: OEM часто хранит сотни overlay в общем
-    # каталоге, из-за чего один пакет ошибочно сканировал APK других пакетов.
-    awk 'NF && !seen[$0]++ {print}' "$paths_tmp" 2>/dev/null
-    rm -f "$paths_tmp" 2>/dev/null
+    _direct_paths=$(cmd package path --user "$user" "$pkg" 2>/dev/null)
+    [ -n "$_direct_paths" ] || _direct_paths=$(pm path --user "$user" "$pkg" 2>/dev/null)
+    [ -n "$_direct_paths" ] || _direct_paths=$(cmd package path "$pkg" 2>/dev/null)
+    [ -n "$_direct_paths" ] || _direct_paths=$(pm path "$pkg" 2>/dev/null)
+    printf '%s\n' "$_direct_paths" | sed -n 's/^package://p' | awk 'NF && !seen[$0]++ {print}'
 }
 
 cap_activity_component_exists() {
@@ -2860,10 +2857,7 @@ get_manifest_activity_candidates() {
 
     paths=$(cap_package_paths_readonly "$user" "$pkg")
     if [ -z "$paths" ]; then
-        log "MANIFEST-PATH-MISS u$user: $pkg direct_and_inventory_empty=yes"
-        [ -n "${AAD_MANIFEST_STATS_FILE:-}" ] && printf '%s|%s|%s|-|path-miss|UNKNOWN|0|0|0|0|0|0|BYPASS\n' \
-            "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" >> "$AAD_MANIFEST_STATS_FILE"
-        return 1
+        return 0
     fi
 
     axml=$(aad_mktemp_near "$DATA_DIR/.manifest_axml")
