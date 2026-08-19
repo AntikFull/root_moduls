@@ -1,0 +1,5 @@
+# Формат: PACKAGE_OR_PROCESS|CURRENT_SIGNER_SHA256|AAD_CORE_DEX_SHA256
+# Все digest: 64 hex-символа без двоеточий. Legacy-строки только с именем пакета отклоняются.
+# Указывать только собственные QA/debug-приложения. Пустой список отключает in-process engine.
+# Текущий SHA-256 aad_core.dex: de6cfd2d7d97060ba59ecd4acd76657c7f118ee736879f91aba1faf9eff5d1f5
+# com.example.game.qa|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef|de6cfd2d7d97060ba59ecd4acd76657c7f118ee736879f91aba1faf9eff5d1f5

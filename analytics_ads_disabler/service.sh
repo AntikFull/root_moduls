@@ -1,5 +1,7 @@
 #!/system/bin/sh
 
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:/system/bin:/system/xbin:${PATH:-/system/bin}"
+
 MODDIR=${0%/*}
 DATA_DIR="/data/adb/analytics_ads_disabler"
 LOG_DIR="$DATA_DIR/logs"
@@ -9,7 +11,31 @@ trace() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$*" >> "$BOOT_TRACE" 2>/dev/null
 }
 
-trace "service.sh ENTER pid=$$ module=$MODDIR"
+trace "service.sh ENTER pid=$$ module=$MODDIR arg1=${1:-none}"
+
+# Диспетчеризация команд вне полного цикла boot
+if [ "$1" = "reconcile-rules" ] || [ "$1" = "reconcile" ]; then
+    trace "service.sh RECONCILE-RULES invoked pid=$$"
+    if [ -f "$MODDIR/common.sh" ]; then
+        . "$MODDIR/common.sh" || exit 1
+    else
+        exit 1
+    fi
+    log "RECONCILE-RULES triggered pid=$$"
+    ensure_capability_profile >/dev/null 2>&1
+    load_capabilities
+    reconcile_config_if_changed "service-dispatch:$1"
+    _rc_res=$?
+    log "RECONCILE-RULES finished rc=$_rc_res"
+    exit "$_rc_res"
+elif [ "$1" = "status" ]; then
+    if [ -f "$MODDIR/common.sh" ]; then
+        . "$MODDIR/common.sh" || exit 1
+    fi
+    printf "Status: %s\n" "${MODULE_VERSION_LABEL:-Active}"
+    exit 0
+fi
+
 trace "EARLY-WAIT begin"
 wait_loops=0
 wait_max=180
@@ -203,13 +229,19 @@ export LOGFILE LOG_DIR
 : > "$LOGFILE" 2>/dev/null
 trace "RUNTIME-LOG initialized path=$LOGFILE previous=$LOG_DIR/debug.previous.log"
 
-for f in settings.conf rules.conf whitelist.list white_ads.list white_analytics.list; do
+for f in settings.conf rules.vendor.conf rules.user.conf whitelist.list white_ads.list white_analytics.list smart_reward.list qa_targets.list il2cpp_hooks.conf; do
     if [ ! -f "$DATA_DIR/$f" ] && [ -f "$MODDIR/$f" ]; then
         cp "$MODDIR/$f" "$DATA_DIR/$f"
     fi
 done
 
-for f in settings.conf rules.conf whitelist.list white_ads.list white_analytics.list; do
+if ! rebuild_composite_rules; then
+    log "BOOT-CONFIG-FAILED: rules composite commit failed; aborting runtime start rather than using stale rules.conf"
+    trace "BOOT-CONFIG failed composite"
+    exit 1
+fi
+
+for f in settings.conf rules.vendor.conf rules.user.conf rules.conf whitelist.list white_ads.list white_analytics.list smart_reward.list qa_targets.list il2cpp_hooks.conf integrity.manifest; do
     [ -f "$DATA_DIR/$f" ] || continue
     if [ ! -L "$MODDIR/$f" ]; then
         rm -f "$MODDIR/$f" 2>/dev/null
@@ -236,13 +268,23 @@ load_capabilities
 log "CAPABILITY pm-disable=${CAP_PM_DISABLE_BACKEND}:${CAP_PM_DISABLE_VERB} user=${CAP_PM_DISABLE_HAS_USER} learned=${CAP_PM_LEARNED_DISABLE_BACKEND:-none}/${CAP_PM_LEARNED_DISABLE_EXEC:-direct} verified=${CAP_PM_LEARNED_DISABLE_VERIFIED:-0}"
 log "CAPABILITY pm-enable=${CAP_PM_ENABLE_BACKEND}:${CAP_PM_ENABLE_VERB} default=${CAP_PM_DEFAULT_BACKEND}:${CAP_PM_DEFAULT_VERB} restore-disabled=${CAP_PM_STATE_DISABLED_BACKEND}:${CAP_PM_STATE_DISABLED_VERB} exact=${CAP_PM_STATE_DISABLED_EXACT}"
 log "CAPABILITY users=${CAP_USER_LIST_BACKEND} packages=${CAP_PACKAGE_LIST_BACKEND} versionCode=${CAP_PACKAGE_LIST_HAS_VERSIONCODE} dump=${CAP_PACKAGE_DUMP_BACKEND} watch=${CAP_APP_WATCH_BACKEND}"
-log "POLICY component-mode=$(read_component_mode) backend=$(read_component_backend) activity-ifw=exact-rules provider-balanced=pm-only aggressive=exact-ad-providers-activities"
+log "POLICY component-mode=UNIVERSAL backend=PM per-user"
 
-for stale_lock in "$DATA_DIR/.operation.lock" "$DATA_DIR/.state_db.lock"                   "$DATA_DIR/.membership_db.lock" "$DATA_DIR/.surface_index.lock"                   "$DATA_DIR/.ad_killer.lock" "$DATA_DIR/.app_event.lock"; do
-    if [ -d "$stale_lock" ]; then
-        log "BOOT-LOCK-CLEANUP removing $stale_lock (owner pid=$(cat "$stale_lock/pid" 2>/dev/null))"
-        rm -rf "$stale_lock" 2>/dev/null
+clean_stale_lock() {
+    _csl_dir="$1"
+    [ -d "$_csl_dir" ] || return 0
+    if ! aad_lock_owner_alive "$_csl_dir"; then
+        log "BOOT-LOCK-CLEANUP removing stale $_csl_dir (dead or recycled pid)"
+        rm -rf "$_csl_dir" 2>/dev/null
+    else
+        log "BOOT-LOCK-PRESERVE keeping active $_csl_dir"
     fi
+}
+
+for stale_lock in "$DATA_DIR/.operation.lock" "$DATA_DIR/.state_db.lock" \
+                  "$DATA_DIR/.membership_db.lock" "$DATA_DIR/.surface_index.lock" \
+                  "$DATA_DIR/.ad_killer.lock" "$DATA_DIR/.app_event.lock"; do
+    clean_stale_lock "$stale_lock"
 done
 rm -f "$DATA_DIR/.surface_index.rerun" 2>/dev/null
 find "$DATA_DIR" -maxdepth 1 -name ".*.tmp.*" -mtime +1 -delete 2>/dev/null || true
@@ -256,47 +298,41 @@ aad_lower_priority() {
 aad_lower_priority
 log "PRIORITY lowered for boot reconciliation (nice=19, ionice=idle)"
 
-aad_enforce_zero_ad_id() {
-    [ "$(read_bool_setting ZERO_AD_ID 1)" = "1" ] || return 0
-    if command -v settings >/dev/null 2>&1; then
-        settings put global ad_id_zero 1 2>/dev/null || true
-        settings put global limit_ad_tracking 1 2>/dev/null || true
-        settings put secure limit_ad_tracking 1 2>/dev/null || true
-        log "AD-ID-ZERO applied global limit_ad_tracking=1 ad_id_zero=1"
+reconcile_side_effects "boot"
+
+# v6.0.5: normal boot reuses the persistent discovery cache. A multi-minute
+# deep scan is reserved for missing/stale discovery data or rule-schema changes.
+aad_candidate_cache_bootstrap_from_audit >/dev/null 2>&1 || true
+trace "BOOT-RECONCILE begin"
+if aad_candidate_cache_structural_valid; then
+    _boot_scope=$(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null)
+    log "BOOT-RECONCILE: warm candidate cache valid scope=${_boot_scope:-unknown}."
+    if [ "$(read_include_system_apps)" = "1" ] && [ "$_boot_scope" != "ALL" ]; then
+        log "BOOT-RECONCILE: SYSTEM scope requested but candidate coverage is USER-only; expanding scope before package delta."
+        reconcile_config_if_changed "boot-scope-expand"
+        boot_scan_rc=$?
+        if [ "$boot_scan_rc" -eq 0 ]; then
+            rescan_changed_packages
+            boot_delta_rc=$?
+            [ "$boot_delta_rc" -eq 0 ] || boot_scan_rc=$boot_delta_rc
+        fi
+    else
+        log "BOOT-RECONCILE: running package delta + config generation check."
+        rescan_changed_packages
+        boot_delta_rc=$?
+        reconcile_config_if_changed "boot"
+        boot_scan_rc=$?
+        [ "$boot_delta_rc" -eq 0 ] || boot_scan_rc=$boot_delta_rc
     fi
-    return 0
-}
-aad_enforce_zero_ad_id
-
-aad_enforce_webview_flags() {
-    [ "$(read_bool_setting BLOCK_WEBVIEW_ADS 1)" = "1" ] || return 0
-    _wv_cmd="/data/local/tmp/webview-command-line"
-    _wv_flags="_ --host-rules=\"MAP *.doubleclick.net 127.0.0.1, MAP *.an.yandex.ru 127.0.0.1, MAP *.googleads.g.doubleclick.net 127.0.0.1, MAP *.applovin.com 127.0.0.1, MAP *.unityads.unity3d.com 127.0.0.1, MAP *.vungle.com 127.0.0.1, MAP *.inmobi.com 127.0.0.1\""
-    printf '%s\n' "$_wv_flags" > "$_wv_cmd" 2>/dev/null || true
-    chmod 0644 "$_wv_cmd" 2>/dev/null || true
-    log "WEBVIEW-FLAGS applied to $_wv_cmd"
-    return 0
-}
-aad_enforce_webview_flags
-
-trace "BOOT-SCAN begin"
-log "BOOT-SCAN: starting full policy reconciliation. Users: $(list_user_ids | tr '\n' ' ')"
-full_rescan
-boot_scan_rc=$?
-log "BOOT-SCAN: finished rc=$boot_scan_rc"
-trace "BOOT-SCAN end rc=$boot_scan_rc"
-
-if [ "$boot_scan_rc" -eq 0 ]; then
-    trace "POST-BOOT-DELTA begin"
-    rescan_changed_packages
-    trace "POST-BOOT-DELTA end rc=$?"
+else
+    log "BOOT-RECONCILE: candidate cache missing/stale; one deep discovery is required. Users: $(list_user_ids | tr '\n' ' ')"
+    full_rescan
+    boot_scan_rc=$?
 fi
+log "BOOT-RECONCILE: finished rc=$boot_scan_rc mode=$(sed -n 's/^mode=//p' "$RECONCILE_STATUS_FILE" 2>/dev/null | head -n1)"
+trace "BOOT-RECONCILE end rc=$boot_scan_rc"
 
 refresh_policy_caches
-if [ "$boot_scan_rc" -eq 0 ]; then
-    compute_config_hash > "$CONFIG_HASH_FILE"
-    compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
-fi
 
 stop_owned_pidfile "$INOTIFY_PID_FILE" "on_app_installed.sh"
 stop_owned_pidfile "$DATA_DIR/category_watch.pid" "category_watch.sh"
@@ -337,11 +373,14 @@ else
 fi
 
 start_and_verify_bg "CONFIG-POLL" "$WATCH_PID_FILE" "$MODDIR/config_watch.sh"
-start_and_verify_bg "LOG-MIRROR" "$LOG_MIRROR_PID_FILE" "$MODDIR/log_mirror.sh"
-if [ "$(read_bool_setting AUTO_UPDATE_RULES 1)" = "1" ] && [ -f "$MODDIR/rule_updater.sh" ]; then
+if [ "$(read_bool_setting LOG_MIRROR 0)" = "1" ]; then
+    start_and_verify_bg "LOG-MIRROR" "$LOG_MIRROR_PID_FILE" "$MODDIR/log_mirror.sh"
+else
+    rm -f "$LOG_MIRROR_PID_FILE" 2>/dev/null
+fi
+if [ "$(read_bool_setting AUTO_UPDATE_RULES 0)" = "1" ] && [ -f "$MODDIR/rule_updater.sh" ]; then
     start_and_verify_bg "RULE-UPDATER" "$DATA_DIR/rule_updater.pid" "$MODDIR/rule_updater.sh"
 fi
 log "RUNTIME-READY: app_watch=$([ -f "$INOTIFY_PID_FILE" ] && echo yes || echo no) config_inotify=$([ -f "$CONFIG_INOTIFY_PID_FILE" ] && echo yes || echo no) config_poll=$([ -f "$WATCH_PID_FILE" ] && echo yes || echo no) log_mirror=$([ -f "$LOG_MIRROR_PID_FILE" ] && echo yes || echo no) rule_updater=$([ -f "$DATA_DIR/rule_updater.pid" ] && echo yes || echo no) interval=$(read_poll_interval)s"
 trace "service.sh RUNTIME_READY pid=$$"
-reconcile_ad_surface_killer "boot" >/dev/null 2>&1 || true
 launch_ad_surface_indexer_bg "boot" >/dev/null 2>&1 || true

@@ -1,5 +1,7 @@
 #!/system/bin/sh
 
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:/system/bin:/system/xbin:${PATH:-/system/bin}"
+
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
 CAPABILITIES_FILE="${CAPABILITIES_FILE:-$DATA_DIR/capabilities.conf}"
 CAP_PROFILE_VERSION=13
@@ -637,19 +639,21 @@ cap_run_profiled_action() {
 cap_current_user_id() {
     if command -v am >/dev/null 2>&1; then
         v=$(am get-current-user 2>/dev/null | tr -cd '0-9')
-        [ -n "$v" ] && { printf '%s\n' "$v"; return; }
+        [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
     fi
     if command -v cmd >/dev/null 2>&1; then
         v=$(cmd activity get-current-user 2>/dev/null | tr -cd '0-9')
-        [ -n "$v" ] && { printf '%s\n' "$v"; return; }
+        [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
     fi
-    echo 0
+    # UNKNOWN must never be guessed as user 0: a later --user current fallback
+    # could otherwise mutate a different foreground Android user.
+    return 1
 }
 
 cap_component_is_disabled() {
     user="$1"; target="$2"
-    if command -v get_component_override_state >/dev/null 2>&1; then
-        st=$(get_component_override_state "$user" "$target" 2>/dev/null)
+    if command -v aad_get_component_override_state_checked >/dev/null 2>&1; then
+        st=$(aad_get_component_override_state_checked "$user" "$target" 2>/dev/null) || return 1
         [ "$st" = "disabled" ] && return 0
     fi
     return 1
@@ -909,8 +913,8 @@ cap_disable_component() {
 
 cap_component_state_matches() {
     user="$1"; target="$2"; expected="$3"
-    command -v get_component_override_state >/dev/null 2>&1 || return 1
-    actual=$(get_component_override_state "$user" "$target" 2>/dev/null)
+    command -v aad_get_component_override_state_checked >/dev/null 2>&1 || return 1
+    actual=$(aad_get_component_override_state_checked "$user" "$target" 2>/dev/null) || return 1
     [ "$actual" = "$expected" ]
 }
 
@@ -1058,4 +1062,51 @@ cap_package_dump() {
     esac
 }
 
+cap_is_system_package() {
+    _cisp_user="${1:-0}"
+    _cisp_pkg="$2"
+    [ -n "$_cisp_pkg" ] || return 0
+
+    _cisp_paths=""
+    if command -v cmd >/dev/null 2>&1; then
+        _cisp_paths=$(cmd package path --user "$_cisp_user" "$_cisp_pkg" 2>/dev/null)
+        [ -z "$_cisp_paths" ] && _cisp_paths=$(cmd package path "$_cisp_pkg" 2>/dev/null)
+    elif command -v pm >/dev/null 2>&1; then
+        _cisp_paths=$(pm path --user "$_cisp_user" "$_cisp_pkg" 2>/dev/null)
+        [ -z "$_cisp_paths" ] && _cisp_paths=$(pm path "$_cisp_pkg" 2>/dev/null)
+    fi
+
+    if [ -n "$_cisp_paths" ]; then
+        case "$_cisp_paths" in
+            *"package:/system/"*|*"package:/vendor/"*|*"package:/product/"*|*"package:/system_ext/"*|*"package:/odm/"*|*"package:/oem/"*|*"package:/apex/"*)
+                return 0
+                ;;
+        esac
+    fi
+
+    # Проверка флагов пакета (включая обновленные системные приложения в /data/app)
+    _cisp_dump=$(cap_package_dump "$_cisp_pkg" 2>/dev/null)
+    if [ -n "$_cisp_dump" ]; then
+        if printf '%s\n' "$_cisp_dump" | grep -Eq '^[[:space:]]*(pkgFlags|flags)=.*(SYSTEM|UPDATED_SYSTEM_APP|FLAG_SYSTEM)'; then
+            return 0
+        fi
+        if printf '%s\n' "$_cisp_dump" | grep -Eq 'codePath=/(system|vendor|product|system_ext|odm|apex)/|resourcePath=/(system|vendor|product|system_ext|odm|apex)/'; then
+            return 0
+        fi
+        if printf '%s\n' "$_cisp_dump" | grep -Eq '^[[:space:]]*(pkgFlags|flags)='; then
+            return 1
+        fi
+    fi
+
+    if [ -n "$_cisp_paths" ]; then
+        case "$_cisp_paths" in
+            *"package:/data/app/"*|*"package:/data/user/"*) return 1 ;;
+        esac
+    fi
+
+    # Fail-safe: если статус пакета невозможно достоверно определить, считаем его системным (skip)
+    return 0
+}
+
 [ -f "$CAPABILITIES_FILE" ] && load_capabilities
+

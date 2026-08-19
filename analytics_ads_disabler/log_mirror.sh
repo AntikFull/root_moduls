@@ -37,7 +37,7 @@ while true; do
             ;;
     esac
 
-    if [ "$(read_conf LOG_MIRROR 1)" = "1" ]; then
+    if [ "$(read_conf LOG_MIRROR 0)" = "1" ]; then
         newest=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n1)
         changed=1
         if [ -n "$newest" ] && [ -f "$STAMP_FILE" ] && [ ! "$newest" -nt "$STAMP_FILE" ]; then

@@ -244,7 +244,7 @@ echo $$ > "$AD_SURFACE_PID_FILE" 2>/dev/null
 surface_status_write RUNNING
 rm -f "$DATA_DIR/.surface_index.rerun" 2>/dev/null
 
-if [ "$(read_bool_setting BLOCK_ADS 1)" != "1" ]; then
+if [ "$(read_bool_setting BLOCK_ADS 0)" != "1" ]; then
     _asi_terminal_state=SKIPPED
     surface_status_write SKIPPED 0 BLOCK_ADS_0
     log "AD-SURFACE-INDEX skipped BLOCK_ADS=0"
@@ -253,7 +253,13 @@ fi
 
 AAD_SURFACE_FINGERPRINT_FILE="$DATA_DIR/.surface_index.fingerprint"
 _asi_state_probe="$DATA_DIR/.surface_probe.$$"
-list_all_package_state > "$_asi_state_probe" 2>/dev/null
+if ! list_all_package_state > "$_asi_state_probe" 2>/dev/null; then
+    rm -f "$_asi_state_probe" 2>/dev/null
+    _asi_exit_reason=package_snapshot_unavailable
+    surface_status_write FAILED 0 package_snapshot_unavailable
+    log "AD-SURFACE-INDEX failed: authoritative package snapshot unavailable; previous completed index preserved"
+    exit 1
+fi
 _asi_fingerprint=$( { cat "$_asi_state_probe" 2>/dev/null; echo "rules=$(aad_surface_rules_hash)"; } | cksum 2>/dev/null | awk '{print $1 ":" $2}')
 rm -f "$_asi_state_probe" 2>/dev/null
 if [ -n "$_asi_fingerprint" ] && [ "$(cat "$AAD_SURFACE_FINGERPRINT_FILE" 2>/dev/null)" = "$_asi_fingerprint" ]    && [ -s "$AD_SURFACE_SCAN_FILE" ] && grep -q '|SUMMARY|.*|COMPLETE|' "$AD_SURFACE_SCAN_FILE" 2>/dev/null    && [ "${AAD_SURFACE_FORCE:-0}" != "1" ]; then
@@ -305,7 +311,11 @@ AAD_SURFACE_STATE_FILE="$DATA_DIR/.surface_state.$$"
 AAD_SURFACE_ORDER_FILE="$DATA_DIR/.surface_order.$$"
 AAD_SURFACE_PRIORITY_FILE="$DATA_DIR/.surface_priority.$$"
 export AAD_SURFACE_STATE_FILE AAD_SURFACE_ORDER_FILE AAD_SURFACE_PRIORITY_FILE
-list_all_package_state > "$AAD_SURFACE_STATE_FILE"
+if ! list_all_package_state > "$AAD_SURFACE_STATE_FILE"; then
+    _asi_exit_reason=package_snapshot_unavailable
+    log "AD-SURFACE-INDEX failed: package snapshot became unavailable before scan; previous completed index preserved"
+    exit 1
+fi
 
 {
     awk -F'|' 'NR>1 && $4=="ADS" && $2!="" && $3!="" {print $2 "|" $3}' "$COMPONENT_AUDIT_FILE" 2>/dev/null
@@ -482,7 +492,6 @@ surface_status_write COMPLETE 0 normal
 log "AD-SURFACE-SUMMARY $_asi_surface_summary priority_packages/users=$_asi_priority_count index_ms=$_asi_elapsed file=$AD_SURFACE_SCAN_FILE"
 log "AD-SURFACE-INDEX finished packages/users=$_asi_processed elapsed_ms=$_asi_elapsed"
 
-aad_export_xposed_targets >/dev/null 2>&1 || true
 
 if ad_killer_build_targets_from_surface; then
     _asi_killer_targets=$(grep -c . "$AD_KILLER_TARGET_FILE" 2>/dev/null); [ -n "$_asi_killer_targets" ] || _asi_killer_targets=0

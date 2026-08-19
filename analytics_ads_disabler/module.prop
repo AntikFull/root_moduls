@@ -1,8 +1,8 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v5.7.0
-versionCode=5700
+version=v6.0.8
+versionCode=6008
 author=eCubz (https://t.me/eCubz)
-description=Комплексная блокировка рекламы, аналитики и трекеров + нативный Zygisk Auto-Collapse, Unity IL2CPP Hooking, Pre-Load Spoofing (isReady=true) & Rewarded Ads Spoofing. Логи: /data/adb/analytics_ads_disabler/logs • Группа: https://t.me/module_ecubz
+description=Универсальная блокировка рекламы и аналитики (3 переключателя): PM per-user + Ad Surface Killer xtables + In-Memory View-Collapse без внешних APK и без LSPosed. Логи: /data/adb/analytics_ads_disabler/logs. Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/update.json
 minMagisk=20400

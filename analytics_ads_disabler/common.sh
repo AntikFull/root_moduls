@@ -1,5 +1,7 @@
 #!/system/bin/sh
 
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:/system/bin:/system/xbin:${PATH:-/system/bin}"
+
 DATA_DIR="${DATA_DIR:-/data/adb/analytics_ads_disabler}"
 LOG_DIR="${LOG_DIR:-$DATA_DIR/logs}"
 mkdir -p "$LOG_DIR" 2>/dev/null
@@ -35,7 +37,7 @@ aad_setup_applet_path() {
         chmod 700 "$AAD_APPLET_DIR" 2>/dev/null || true
     fi
     [ -x "$AAD_APPLET_DIR/awk" ] || return 1
-    PATH="$PATH:$AAD_APPLET_DIR"
+    PATH="$AAD_APPLET_DIR:$PATH"
     export PATH
     return 0
 }
@@ -68,6 +70,8 @@ LAST_FULL_VERIFY_FILE="$DATA_DIR/.last_full_verify"
 RULES_FILE="$DATA_DIR/rules.conf"
 SETTINGS_FILE="$DATA_DIR/settings.conf"
 WHITELIST_FILE="$DATA_DIR/whitelist.list"
+SMART_REWARD_FILE="$DATA_DIR/smart_reward.list"
+QA_TARGETS_FILE="$DATA_DIR/qa_targets.list"
 WHITE_ADS_FILE="$DATA_DIR/white_ads.list"
 WHITE_ANALYTICS_FILE="$DATA_DIR/white_analytics.list"
 CACHE_ADS="$DATA_DIR/.white_ads.cache"
@@ -75,6 +79,14 @@ CACHE_ANALYTICS="$DATA_DIR/.white_analytics.cache"
 CACHE_GLOBAL="$DATA_DIR/.whitelist.cache"
 CONFIG_HASH_FILE="$DATA_DIR/.config.hash"
 BASE_POLICY_HASH_FILE="$DATA_DIR/.base_policy.hash"
+DISCOVERY_HASH_FILE="$DATA_DIR/.discovery.hash"
+NON_PRIMARY_HASH_FILE="$DATA_DIR/.non_primary_settings.hash"
+CANDIDATE_FILE="$DATA_DIR/component_candidates.list"
+CANDIDATE_SCOPE_FILE="$DATA_DIR/.candidate_scope"
+PACKAGE_SCOPE_CACHE="$DATA_DIR/package_scope.list"          # user|package|USER|SYSTEM
+COMPONENT_VERIFY_PENDING="$DATA_DIR/.component_verify.pending"
+APPLIED_GENERATION_FILE="$DATA_DIR/.applied_generation"
+RECONCILE_STATUS_FILE="$DATA_DIR/reconcile.status"
 WATCH_PID_FILE="$DATA_DIR/config_watch.pid"
 INOTIFY_PID_FILE="$DATA_DIR/inotify.pid"
 CONFIG_INOTIFY_PID_FILE="$DATA_DIR/config_inotify.pid"
@@ -98,6 +110,7 @@ AD_KILLER_LOCK_DIR="$DATA_DIR/.ad_killer.lock"
 MANIFEST_CACHE_DIR="$DATA_DIR/manifest_cache/v1"
 IFW_DIR="${IFW_DIR:-/data/system/ifw}"
 IFW_RULE_FILE="$IFW_DIR/analytics_ads_disabler.xml"
+IFW_APPLIED_CKSUM="$DATA_DIR/.ifw_applied.cksum"
 
 AAD_LIB_DIR=""
 for _ald in "${MODDIR:-}" "${0%/*}" /data/adb/modules/analytics_ads_disabler "$DATA_DIR"; do
@@ -355,6 +368,18 @@ collect_deep_diagnostics() {
     [ -n "$_adk_diag4" ] && diag_capture "ad-killer-iptables-v4" "$_adk_diag4" -t filter -S "$AD_KILLER_CHAIN"
     [ -n "$_adk_diag6" ] && diag_capture "ad-killer-iptables-v6" "$_adk_diag6" -t filter -S "$AD_KILLER_CHAIN"
 
+    diag_line "===== policy generation / candidate cache ====="
+    diag_line "POLICY-APPLIED: $(cat "$APPLIED_GENERATION_FILE" 2>/dev/null || echo '<missing>')"
+    if [ -f "$RECONCILE_STATUS_FILE" ]; then
+        while IFS= read -r line; do diag_line "RECONCILE: $line"; done < "$RECONCILE_STATUS_FILE"
+    else
+        diag_line "RECONCILE: <missing>"
+    fi
+    diag_line "CANDIDATE-SCOPE: $(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null || echo '<missing>')"
+    diag_line "CANDIDATE-COUNT: $(grep -c . "$CANDIDATE_FILE" 2>/dev/null || echo 0)"
+    diag_line "DISCOVERY-HASH stored=$(cat "$DISCOVERY_HASH_FILE" 2>/dev/null) current=$(compute_discovery_policy_hash 2>/dev/null)"
+    diag_line "NONPRIMARY-HASH stored=$(cat "$NON_PRIMARY_HASH_FILE" 2>/dev/null) current=$(compute_non_primary_settings_hash 2>/dev/null)"
+
     diag_line "===== capability profile ====="
     if [ -f "$CAPABILITIES_FILE" ]; then
         while IFS= read -r line; do diag_line "CAP: $line"; done < "$CAPABILITIES_FILE"
@@ -372,18 +397,20 @@ read_setting() {
     key="$1"
     def="$2"
     val=""
-    if [ -f "$SETTINGS_FILE" ]; then
-        val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$SETTINGS_FILE" | head -n1 | tr -d '\r')
-    fi
-    if [ -z "$val" ] && [ -f "$RULES_FILE" ]; then
-        val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$RULES_FILE" | head -n1 | tr -d '\r')
+    _rs_file="${AAD_SETTINGS_SNAPSHOT:-$SETTINGS_FILE}"
+    if [ -f "$_rs_file" ]; then
+        val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$_rs_file" | head -n1 | tr -d '\r')
     fi
     [ -n "$val" ] && echo "$val" || echo "$def"
 }
 
 read_bool_setting() {
     val=$(read_setting "$1" "$2")
-    [ "$val" = "1" ] && echo 1 || echo 0
+    case "$val" in
+        1|true|TRUE|yes|YES) echo 1 ;;
+        0|false|FALSE|no|NO) echo 0 ;;
+        *) [ "$2" = "1" ] && echo 1 || echo 0 ;;
+    esac
 }
 
 read_poll_interval() {
@@ -447,46 +474,36 @@ read_aggressive_ads_max_matches() {
 }
 
 read_component_mode() {
-    val=$(read_setting COMPONENT_MODE SAFE | tr '[:lower:]' '[:upper:]')
-    case "$val" in
-        SAFE|BALANCED|AGGRESSIVE) echo "$val" ;;
-        *) echo SAFE ;;
-    esac
+    echo "UNIVERSAL"
 }
 
 read_component_backend() {
-    val=$(read_setting COMPONENT_BACKEND HYBRID | tr '[:lower:]' '[:upper:]')
-    case "$val" in
-        PM|HYBRID) echo "$val" ;;
-        *) echo HYBRID ;;
-    esac
+    echo "PM"
 }
 
 read_ifw_activity_limit() {
-    val=$(read_setting MAX_IFW_ACTIVITIES_PER_CATEGORY 256)
-    case "$val" in
-        ''|*[!0-9]*) echo 256 ;;
-        *)
-            [ "$val" -lt 1 ] 2>/dev/null && val=1
-            [ "$val" -gt 512 ] 2>/dev/null && val=512
-            echo "$val"
-            ;;
+    echo 5
+}
+
+read_include_system_apps() {
+    # Runtime has exactly one authoritative SYSTEM-scope switch. Legacy
+    # SCAN_SYSTEM_APPS is migrated by the installer only; a missing/corrupt
+    # v6 key must fail safe to OFF rather than resurrect a stale legacy value.
+    _val=$(read_setting INCLUDE_SYSTEM_APPS 0)
+    case "$_val" in
+        1|true|TRUE|yes|YES) echo 1 ;;
+        *) echo 0 ;;
     esac
 }
 
 probe_ifw_storage() {
-    [ -d "$IFW_DIR" ] || return 1
-    probe="$IFW_DIR/.analytics_ads_disabler.probe.$$"
-    (umask 022; printf '<rules/>\n' > "$probe") 2>/dev/null || return 1
-    chmod 0644 "$probe" 2>/dev/null || { rm -f "$probe" 2>/dev/null; return 1; }
-    rm -f "$probe" 2>/dev/null
-    [ ! -e "$probe" ]
+    return 1
 }
 
 category_enabled() {
     case "$1" in
-        ADS) [ "$(read_bool_setting BLOCK_ADS 1)" = "1" ] ;;
-        ANALYTICS) [ "$(read_bool_setting BLOCK_ANALYTICS 1)" = "1" ] ;;
+        ADS) [ "$(read_bool_setting BLOCK_ADS 0)" = "1" ] ;;
+        ANALYTICS) [ "$(read_bool_setting BLOCK_ANALYTICS 0)" = "1" ] ;;
         *) return 1 ;;
     esac
 }
@@ -507,15 +524,95 @@ get_cache_file_for_category() {
     esac
 }
 
+aad_dynamic_protected_packages() {
+    _adp_user="${1:-0}"
+    _adp_cache_file="$DATA_DIR/.dyn_prot_u${_adp_user}"
+    _adp_unknown_file="$DATA_DIR/.dyn_prot_unknown_u${_adp_user}"
+    if [ -f "$_adp_cache_file" ] && [ -n "${AAD_PROTECTED_CACHE_ACTIVE:-}" ]; then
+        cat "$_adp_cache_file" 2>/dev/null
+        return 0
+    fi
+
+    _adp_out=""
+    _adp_uncertain=0
+    # Per-user HOME. Do not silently substitute another user's role holder.
+    if command -v cmd >/dev/null 2>&1; then
+        _adp_home=$(cmd package resolve-activity --brief --user "$_adp_user" -c android.intent.category.HOME -a android.intent.action.MAIN 2>/dev/null | tail -n1 | cut -d/ -f1)
+        if [ -n "$_adp_home" ]; then
+            case "$_adp_home" in *[!a-zA-Z0-9._-]*) _adp_uncertain=1 ;; *) _adp_out="$_adp_out $_adp_home" ;; esac
+        else
+            _adp_uncertain=1
+        fi
+    else
+        _adp_uncertain=1
+    fi
+
+    # Per-user default IME. Missing/unreadable role is conservative uncertainty.
+    if command -v settings >/dev/null 2>&1; then
+        _adp_ime_raw=$(settings get secure --user "$_adp_user" default_input_method 2>/dev/null)
+        _adp_ime=$(printf '%s' "$_adp_ime_raw" | cut -d/ -f1)
+        case "$_adp_ime" in ''|null) _adp_uncertain=1 ;; *[!a-zA-Z0-9._-]*) _adp_uncertain=1 ;; *) _adp_out="$_adp_out $_adp_ime" ;; esac
+    else
+        _adp_uncertain=1
+    fi
+
+    # Active WebView provider is global, but still part of critical-role protection.
+    if command -v dumpsys >/dev/null 2>&1; then
+        _adp_wv=$(dumpsys webviewupdate 2>/dev/null | grep -E "Current WebView package|Current package" | head -n1 | sed -n "s/.*'\(.*\)'.*/\1/p")
+        [ -z "$_adp_wv" ] && _adp_wv=$(dumpsys webviewupdate 2>/dev/null | grep -i "current.*package" | head -n1 | awk -F'=' '{print $2}' | tr -d ' "\r')
+        if [ -n "$_adp_wv" ]; then
+            case "$_adp_wv" in *[!a-zA-Z0-9._-]*) _adp_uncertain=1 ;; *) _adp_out="$_adp_out $_adp_wv" ;; esac
+        else
+            _adp_uncertain=1
+        fi
+    else
+        _adp_uncertain=1
+    fi
+
+    if [ "$_adp_uncertain" = "1" ]; then : > "$_adp_unknown_file" 2>/dev/null || true; else rm -f "$_adp_unknown_file" 2>/dev/null; fi
+    if [ -n "${AAD_PROTECTED_CACHE_ACTIVE:-}" ]; then
+        printf '%s\n' "$_adp_out" > "$_adp_cache_file" 2>/dev/null || true
+    fi
+    printf '%s\n' "$_adp_out"
+}
+
 is_system_protected() {
+    _isp_pkg="$1"
+    _isp_user="${2:-0}"
+    [ -n "$_isp_pkg" ] || return 0
     for sys_pkg in $SYSTEM_PROTECTED; do
-        [ "$1" = "$sys_pkg" ] && return 0
+        [ "$_isp_pkg" = "$sys_pkg" ] && return 0
+    done
+    for dyn_pkg in $(aad_dynamic_protected_packages "$_isp_user" 2>/dev/null); do
+        [ "$_isp_pkg" = "$dyn_pkg" ] && return 0
     done
     return 1
 }
 
+is_smart_reward_pkg() {
+    [ -f "$SMART_REWARD_FILE" ] && trim_config_lines < "$SMART_REWARD_FILE" | grep -Fxq -- "$1" 2>/dev/null
+}
+
 is_globally_whitelisted() {
-    [ -f "$WHITELIST_FILE" ] && trim_config_lines < "$WHITELIST_FILE" | grep -Fxq -- "$1" 2>/dev/null
+    [ -f "$WHITELIST_FILE" ] && trim_config_lines < "$WHITELIST_FILE" | grep -Fxq -- "$1" 2>/dev/null && return 0
+    is_smart_reward_pkg "$1" && return 0
+    return 1
+}
+
+is_package_in_scope() {
+    _sc_pkg="$1"
+    _sc_user="${2:-0}"
+    _sc_is_sys="${3:-unknown}"
+    [ -n "$_sc_pkg" ] || return 1
+    is_system_protected "$_sc_pkg" "$_sc_user" && return 1
+    is_globally_whitelisted "$_sc_pkg" && return 1
+
+    if [ "$_sc_is_sys" = "1" ] || { [ "$_sc_is_sys" = "unknown" ] && cap_is_system_package "$_sc_user" "$_sc_pkg" 2>/dev/null; }; then
+        [ "$(read_include_system_apps)" = "1" ] || return 1
+        # If critical per-user roles could not be resolved, fail safe for system apps.
+        [ ! -f "$DATA_DIR/.dyn_prot_unknown_u${_sc_user}" ] || return 1
+    fi
+    return 0
 }
 
 is_category_whitelisted() {
@@ -529,7 +626,10 @@ read_category_list() {
 }
 
 read_global_list() {
-    [ -f "$WHITELIST_FILE" ] && trim_config_lines < "$WHITELIST_FILE" | sort -u
+    {
+        [ -f "$WHITELIST_FILE" ] && trim_config_lines < "$WHITELIST_FILE"
+        [ -f "$SMART_REWARD_FILE" ] && trim_config_lines < "$SMART_REWARD_FILE"
+    } | sort -u
 }
 
 aad_lock_write_owner() {
@@ -662,7 +762,7 @@ launch_ad_surface_indexer_bg() {
 }
 
 ad_killer_enabled() {
-    [ "$(read_bool_setting BLOCK_ADS 1)" = "1" ] || return 1
+    [ "$(read_bool_setting BLOCK_ADS 0)" = "1" ] || return 1
     [ "$(read_bool_setting AD_SURFACE_KILLER 1)" = "1" ] || return 1
     return 0
 }
@@ -703,102 +803,6 @@ ad_killer_extract_host_map() {
     ' "$RULES_FILE" | sort -u
 }
 
-XPOSED_TARGET_JSON="$DATA_DIR/xposed_targets.json"
-XPOSED_TARGET_LIST="$DATA_DIR/xposed_targets.list"
-
-aad_detect_xposed() {
-    for _adx in /data/adb/lspd \
-                /data/adb/modules/zygisk_lsposed \
-                /data/adb/modules/riru_lsposed \
-                /data/adb/modules/lsposed \
-                /data/adb/lspatch \
-                /data/adb/modules/riru_edxposed \
-                /data/adb/modules/xposed; do
-        [ -d "$_adx" ] && { printf 'LSPosed:%s\n' "$_adx"; return 0; }
-    done
-    [ -f /system/framework/XposedBridge.jar ] && { printf 'Xposed:/system/framework/XposedBridge.jar\n'; return 0; }
-    return 1
-}
-
-aad_xposed_bridge_enabled() {
-    _axb=$(read_setting XPOSED_BRIDGE auto | tr '[:upper:]' '[:lower:]')
-    case "$_axb" in
-        0|off|no) return 1 ;;
-        1|on|yes) return 0 ;;
-        *) aad_detect_xposed >/dev/null 2>&1 ;;
-    esac
-}
-
-aad_export_xposed_targets() {
-    [ -s "$AD_SURFACE_SCAN_FILE" ] || return 1
-    aad_xposed_bridge_enabled || {
-        rm -f "$XPOSED_TARGET_JSON" "$XPOSED_TARGET_LIST" 2>/dev/null
-        return 0
-    }
-    _axt_json=$(aad_mktemp_near "$XPOSED_TARGET_JSON")
-    _axt_list=$(aad_mktemp_near "$XPOSED_TARGET_LIST")
-    [ -n "$_axt_json" ] && [ -n "$_axt_list" ] || {
-        rm -f "$_axt_json" "$_axt_list" 2>/dev/null
-        return 1
-    }
-    _axt_env=$(aad_detect_xposed 2>/dev/null); [ -n "$_axt_env" ] || _axt_env="none"
-
-    awk -F'|' -v stamp="$(aad_epoch_ms)" -v version="$MODULE_VERSION" -v env="$_axt_env" \
-        -v listout="$_axt_list" '
-        function esc(v) {gsub(/\\/,"\\\\",v); gsub(/"/,"\\\"",v); return v}
-        function addval(arrname, key, val,   cur, sep) {
-            if (seen[arrname, key, val]) return
-            seen[arrname, key, val]=1
-            if (arrname=="sdk") {sdk[key]=sdk[key] (sdk[key]==""?"":"\034") val}
-            else {surf[key]=surf[key] (surf[key]==""?"":"\034") val}
-        }
-        function emitarr(v,   n,i,parts,out) {
-            n=split(v, parts, "\034"); out=""
-            for (i=1;i<=n;i++) out=out (i>1?",":"") "\"" esc(parts[i]) "\""
-            return out
-        }
-        BEGIN {rank["CAPABILITY"]=1; rank["LAYOUT_CONFIRMED"]=2; rank["MULTI_EVIDENCE"]=3
-               name[1]="CAPABILITY"; name[2]="LAYOUT_CONFIRMED"; name[3]="MULTI_EVIDENCE"}
-        NR>1 && $2=="HIT" && $3!="" && $4!="" && $7!="" && $8!="" {
-            key=$3 "\035" $4
-            if (!(key in known)) {known[key]=1; order[++n]=key}
-            addval("sdk", key, $8)
-            addval("surface", key, $7)
-            r=rank[$11]; if (r=="") r=1
-            if (r > best[key]) best[key]=r
-        }
-        END {
-            printf "{\n"
-            printf "  \"schema\": 1,\n"
-            printf "  \"generator\": \"analytics_ads_disabler %s\",\n", esc(version)
-            printf "  \"framework\": \"%s\",\n", esc(env)
-            printf "  \"generated_ms\": %s,\n", stamp
-            printf "  \"note\": \"Read-only evidence export. Consumed by a companion Xposed module; this module performs no hooking.\",\n"
-            printf "  \"targets\": [\n"
-            for (i=1;i<=n;i++) {
-                split(order[i], k, "\035")
-                b=best[order[i]]; if (b<1) b=1
-                printf "    {\"user\": %s, \"package\": \"%s\", \"sdks\": [%s], \"surfaces\": [%s], \"confidence\": \"%s\"}%s\n", \
-                    k[1], esc(k[2]), emitarr(sdk[order[i]]), emitarr(surf[order[i]]), name[b], (i<n ? "," : "")
-                gsub(/\034/, ",", sdk[order[i]])
-                gsub(/\034/, ",", surf[order[i]])
-                print k[1] "|" k[2] "|" sdk[order[i]] "|" surf[order[i]] "|" name[b] > listout
-            }
-            printf "  ]\n}\n"
-            close(listout)
-        }
-    ' "$AD_SURFACE_SCAN_FILE" > "$_axt_json" 2>/dev/null
-
-    [ -s "$_axt_json" ] || { rm -f "$_axt_json" "$_axt_list" 2>/dev/null; return 1; }
-    [ -f "$_axt_list" ] || : > "$_axt_list"
-    chmod 640 "$_axt_json" "$_axt_list" 2>/dev/null || true
-    mv -f "$_axt_json" "$XPOSED_TARGET_JSON" 2>/dev/null || { rm -f "$_axt_json" "$_axt_list" 2>/dev/null; return 1; }
-    mv -f "$_axt_list" "$XPOSED_TARGET_LIST" 2>/dev/null || rm -f "$_axt_list" 2>/dev/null
-    _axt_count=$(grep -c . "$XPOSED_TARGET_LIST" 2>/dev/null); [ -n "$_axt_count" ] || _axt_count=0
-    log "XPOSED-BRIDGE exported targets=$_axt_count framework=$_axt_env json=$XPOSED_TARGET_JSON list=$XPOSED_TARGET_LIST"
-    return 0
-}
-
 ad_killer_min_confidence() {
     _akmc=$(read_setting AD_KILLER_MIN_CONFIDENCE CAPABILITY | tr '[:lower:]' '[:upper:]')
     case "$_akmc" in
@@ -836,14 +840,10 @@ ad_killer_build_targets_from_surface() {
     : > "$_ak_tmp"
     while IFS='|' read -r _ak_user _ak_pkg _ak_sdk _ak_host; do
         [ -n "$_ak_pkg" ] && [ -n "$_ak_host" ] || continue
-        is_system_protected "$_ak_pkg" && continue
-        is_globally_whitelisted "$_ak_pkg" && continue
+        is_package_in_scope "$_ak_pkg" "$_ak_user" || continue
         is_category_whitelisted "$_ak_pkg" ADS && continue
         printf '%s|%s|%s|%s\n' "$_ak_user" "$_ak_pkg" "$_ak_sdk" "$_ak_host" >> "$_ak_tmp"
     done < "$_ak_joined"
-    for _ak_spec_user in $(list_user_ids); do
-        awk -F'|' -v u="$_ak_spec_user" '$1 ~ /RuStore|myTarget/ {print u "|ru.vk.store|" $1 "|" $2}' "$_ak_hostmap" >> "$_ak_tmp" 2>/dev/null || true
-    done
     sort -u "$_ak_tmp" -o "$_ak_tmp" 2>/dev/null || true
     chmod 600 "$_ak_tmp" 2>/dev/null || true
     mv -f "$_ak_tmp" "$AD_KILLER_TARGET_FILE" 2>/dev/null || { rm -f "$_ak_tmp" 2>/dev/null; rm -f "$_ak_hostmap" "$_ak_surfaces" "$_ak_joined" 2>/dev/null; return 1; }
@@ -852,23 +852,91 @@ ad_killer_build_targets_from_surface() {
 }
 
 ad_killer_uid_inventory() {
-    for _aku_user in $(list_user_ids); do
+    _akui_users=$(list_user_ids_checked) || return 1
+    _akui_tmp=$(aad_mktemp_near "$DATA_DIR/.uid_inventory")
+    [ -n "$_akui_tmp" ] || return 1
+    : > "$_akui_tmp" 2>/dev/null || { rm -f "$_akui_tmp"; return 1; }
+    _akui_failed=0
+    for _aku_user in $_akui_users; do
+        _akui_raw=$(aad_mktemp_near "$DATA_DIR/.uid_raw_u${_aku_user}")
+        [ -n "$_akui_raw" ] || { _akui_failed=1; continue; }
         if command -v cmd >/dev/null 2>&1; then
-            cmd package list packages -U --user "$_aku_user" 2>/dev/null | awk -v u="$_aku_user" '
-                /^package:/ {
-                    pkg=$1; sub(/^package:/,"",pkg); uid=""
-                    for(i=2;i<=NF;i++) if($i ~ /^uid:/){uid=$i; sub(/^uid:/,"",uid)}
-                    if(pkg!="" && uid ~ /^[0-9]+$/) print u "|" pkg "|" uid
-                }'
+            cmd package list packages -U --user "$_aku_user" > "$_akui_raw" 2>/dev/null || _akui_failed=1
         elif [ -x /system/bin/cmd ]; then
-            /system/bin/cmd package list packages -U --user "$_aku_user" 2>/dev/null | awk -v u="$_aku_user" '
+            /system/bin/cmd package list packages -U --user "$_aku_user" > "$_akui_raw" 2>/dev/null || _akui_failed=1
+        else
+            _akui_failed=1
+        fi
+        if [ "$_akui_failed" -eq 0 ] || [ -s "$_akui_raw" ]; then
+            awk -v u="$_aku_user" '
                 /^package:/ {
                     pkg=$1; sub(/^package:/,"",pkg); uid=""
                     for(i=2;i<=NF;i++) if($i ~ /^uid:/){uid=$i; sub(/^uid:/,"",uid)}
                     if(pkg!="" && uid ~ /^[0-9]+$/) print u "|" pkg "|" uid
-                }'
+                }' "$_akui_raw" >> "$_akui_tmp"
         fi
-    done | sort -u
+        rm -f "$_akui_raw" 2>/dev/null
+    done
+    [ "$_akui_failed" -eq 0 ] || { rm -f "$_akui_tmp" 2>/dev/null; return 1; }
+    sort -u "$_akui_tmp"
+    _akui_rc=$?
+    rm -f "$_akui_tmp" 2>/dev/null
+    return "$_akui_rc"
+}
+
+AAD_IPTABLES_WAIT=""
+aad_init_iptables_wait() {
+    [ -n "$AAD_IPTABLES_WAIT" ] && return 0
+    _probe_bin=$(command -v iptables 2>/dev/null || [ ! -x /system/bin/iptables ] || echo /system/bin/iptables)
+    if [ -n "$_probe_bin" ] && "$_probe_bin" -w 2 -L OUTPUT >/dev/null 2>&1; then
+        AAD_IPTABLES_WAIT="-w 2"
+    else
+        AAD_IPTABLES_WAIT="none"
+    fi
+}
+
+aad_iptables() {
+    aad_init_iptables_wait
+    _bin=$(ad_killer_iptables_bin 4)
+    [ -n "$_bin" ] || return 1
+    if [ "$AAD_IPTABLES_WAIT" = "-w 2" ]; then
+        "$_bin" -w 2 "$@"
+    else
+        "$_bin" "$@"
+    fi
+}
+
+aad_ip6tables() {
+    aad_init_iptables_wait
+    _bin=$(ad_killer_iptables_bin 6)
+    [ -n "$_bin" ] || return 1
+    if [ "$AAD_IPTABLES_WAIT" = "-w 2" ]; then
+        "$_bin" -w 2 "$@"
+    else
+        "$_bin" "$@"
+    fi
+}
+
+aad_iptables_restore() {
+    aad_init_iptables_wait
+    _bin=$(ad_killer_restore_bin 4)
+    [ -n "$_bin" ] || return 1
+    if [ "$AAD_IPTABLES_WAIT" = "-w 2" ]; then
+        "$_bin" -w 2 "$@"
+    else
+        "$_bin" "$@"
+    fi
+}
+
+aad_ip6tables_restore() {
+    aad_init_iptables_wait
+    _bin=$(ad_killer_restore_bin 6)
+    [ -n "$_bin" ] || return 1
+    if [ "$AAD_IPTABLES_WAIT" = "-w 2" ]; then
+        "$_bin" -w 2 "$@"
+    else
+        "$_bin" "$@"
+    fi
 }
 
 ad_killer_iptables_bin() {
@@ -881,33 +949,48 @@ ad_killer_iptables_bin() {
 ad_killer_chain_cleanup_family() {
     _akc_bin="$1"
     [ -n "$_akc_bin" ] || return 0
-    while "$_akc_bin" -t filter -D OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1; do :; done
-    "$_akc_bin" -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
-    "$_akc_bin" -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
-    _akc_subs=$("$_akc_bin" -t filter -S 2>/dev/null | sed -n "s/^-N \(${AD_KILLER_CHAIN}_[0-9][0-9]*\)$/\1/p")
-    [ -n "$_akc_subs" ] || return 0
+    command -v "$_akc_bin" >/dev/null 2>&1 || [ -x "$_akc_bin" ] || return 0
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+
+    _akc_before=$("$_akc_bin" $_w_flag -t filter -S 2>/dev/null) || return 1
+    _akc_subs=$(printf '%s\n' "$_akc_before" | sed -n "s/^-N \\(${AD_KILLER_CHAIN}_[0-9][0-9]*\\)$/\\1/p")
+
+    while "$_akc_bin" $_w_flag -t filter -D OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1; do :; done
+    "$_akc_bin" $_w_flag -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
     for _akc_sub in $_akc_subs; do
-        "$_akc_bin" -t filter -F "$_akc_sub" >/dev/null 2>&1 || true
+        "$_akc_bin" $_w_flag -t filter -F "$_akc_sub" >/dev/null 2>&1 || true
     done
     for _akc_sub in $_akc_subs; do
-        "$_akc_bin" -t filter -X "$_akc_sub" >/dev/null 2>&1 || true
+        "$_akc_bin" $_w_flag -t filter -X "$_akc_sub" >/dev/null 2>&1 || true
     done
+    "$_akc_bin" $_w_flag -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+
+    _akc_after=$("$_akc_bin" $_w_flag -t filter -S 2>/dev/null) || return 1
+    if printf '%s\n' "$_akc_after" | grep -Eq "(^-N ${AD_KILLER_CHAIN}($|_)|^-A OUTPUT .* -j ${AD_KILLER_CHAIN}($| ))"; then
+        log "AD-KILLER cleanup verification failed bin=$_akc_bin"
+        return 1
+    fi
     return 0
 }
 
 ad_killer_reject_target() {
     _akrt_bin="$1"; _akrt_chain="${AD_KILLER_CHAIN}R"
-    "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
-    "$_akrt_bin" -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
-    if "$_akrt_bin" -t filter -N "$_akrt_chain" >/dev/null 2>&1; then
-        if "$_akrt_bin" -t filter -A "$_akrt_chain" -p tcp -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
-            "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
-            "$_akrt_bin" -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    "$_akrt_bin" $_w_flag -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
+    "$_akrt_bin" $_w_flag -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
+    if "$_akrt_bin" $_w_flag -t filter -N "$_akrt_chain" >/dev/null 2>&1; then
+        if "$_akrt_bin" $_w_flag -t filter -A "$_akrt_chain" -p tcp -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
+            "$_akrt_bin" $_w_flag -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
+            "$_akrt_bin" $_w_flag -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
             printf 'REJECT --reject-with tcp-reset\n'
             return 0
         fi
-        "$_akrt_bin" -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
-        "$_akrt_bin" -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
+        "$_akrt_bin" $_w_flag -t filter -F "$_akrt_chain" >/dev/null 2>&1 || true
+        "$_akrt_bin" $_w_flag -t filter -X "$_akrt_chain" >/dev/null 2>&1 || true
     fi
     printf 'DROP\n'
 }
@@ -942,7 +1025,11 @@ ad_killer_apply_batch() {
         printf 'COMMIT\n'
     } > "$_akab_file" 2>/dev/null || { rm -f "$_akab_file" 2>/dev/null; return 1; }
 
-    if ! "$_akab_restore" -n "$_akab_file" >/dev/null 2>&1; then
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+
+    if ! "$_akab_restore" $_w_flag -n "$_akab_file" >/dev/null 2>&1; then
         log "AD-KILLER batch restore failed bin=$_akab_restore file=$_akab_file; falling back to per-rule mode"
         rm -f "$_akab_file" 2>/dev/null
         return 1
@@ -952,11 +1039,13 @@ ad_killer_apply_batch() {
 }
 
 ad_killer_status_write() {
-    _aks_state="$1"; _aks_reason="${2:-}"
+    _aks_state="$1"; _aks_reason="${2:-}"; _aks_v4="${3:-0}"; _aks_v6="${4:-0}"
     _aks_tmp="$AD_KILLER_STATUS_FILE.tmp.$$"
     {
         printf 'state=%s\n' "$_aks_state"
         [ -n "$_aks_reason" ] && printf 'reason=%s\n' "$_aks_reason"
+        printf 'ipv4_active=%s\n' "$_aks_v4"
+        printf 'ipv6_active=%s\n' "$_aks_v6"
         printf 'updated_ms=%s\n' "$(aad_now_ms)"
     } > "$_aks_tmp" 2>/dev/null || return 0
     chmod 600 "$_aks_tmp" 2>/dev/null || true
@@ -965,35 +1054,60 @@ ad_killer_status_write() {
 
 ad_killer_cleanup() {
     _akc_state="${1:-DISABLED}"; _akc_reason="${2:-}"
+    _akc_prev4=$(sed -n 's/^ipv4_active=//p' "$AD_KILLER_STATUS_FILE" 2>/dev/null | head -n1)
+    _akc_prev6=$(sed -n 's/^ipv6_active=//p' "$AD_KILLER_STATUS_FILE" 2>/dev/null | head -n1)
+    case "$_akc_prev4" in 1) ;; *) _akc_prev4=0 ;; esac
+    case "$_akc_prev6" in 1) ;; *) _akc_prev6=0 ;; esac
     _akc4=$(ad_killer_iptables_bin 4); _akc6=$(ad_killer_iptables_bin 6)
-    ad_killer_chain_cleanup_family "$_akc4"
-    ad_killer_chain_cleanup_family "$_akc6"
-    ad_killer_status_write "$_akc_state" "$_akc_reason"
+    _akc_failed=0
+    if [ -n "$_akc4" ]; then
+        ad_killer_chain_cleanup_family "$_akc4" || _akc_failed=1
+    elif [ "$_akc_prev4" = "1" ]; then
+        log "AD-KILLER cleanup pending: IPv4 backend unavailable while previous rules were active"
+        _akc_failed=1
+    fi
+    if [ -n "$_akc6" ]; then
+        ad_killer_chain_cleanup_family "$_akc6" || _akc_failed=1
+    elif [ "$_akc_prev6" = "1" ]; then
+        log "AD-KILLER cleanup pending: IPv6 backend unavailable while previous rules were active"
+        _akc_failed=1
+    fi
+    if [ "$_akc_failed" -ne 0 ]; then
+        # Preserve previous active-family evidence so a later retry cannot
+        # mistake an unavailable backend for a clean terminal state.
+        ad_killer_status_write PENDING "cleanup_failed:$_akc_reason" "$_akc_prev4" "$_akc_prev6"
+        return 1
+    fi
+    ad_killer_status_write "$_akc_state" "$_akc_reason" 0 0
+    return 0
 }
 
 ad_killer_probe_match() {
     _akpm_bin="$1"; _akpm_kind="$2"; _akpm_chain="${AD_KILLER_CHAIN}P"
     [ -n "$_akpm_bin" ] || return 1
-    while "$_akpm_bin" -t filter -D OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; do :; done
-    "$_akpm_bin" -t filter -F "$_akpm_chain" >/dev/null 2>&1 || true
-    "$_akpm_bin" -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
-    "$_akpm_bin" -t filter -N "$_akpm_chain" >/dev/null 2>&1 || return 1
-    if ! "$_akpm_bin" -t filter -I OUTPUT 1 -j "$_akpm_chain" >/dev/null 2>&1; then
-        "$_akpm_bin" -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    while "$_akpm_bin" $_w_flag -t filter -D OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; do :; done
+    "$_akpm_bin" $_w_flag -t filter -F "$_akpm_chain" >/dev/null 2>&1 || true
+    "$_akpm_bin" $_w_flag -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
+    "$_akpm_bin" $_w_flag -t filter -N "$_akpm_chain" >/dev/null 2>&1 || return 1
+    if ! "$_akpm_bin" $_w_flag -t filter -A OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; then
+        "$_akpm_bin" $_w_flag -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
         return 1
     fi
     _akpm_rc=1
     case "$_akpm_kind" in
         owner)
-            "$_akpm_bin" -t filter -A "$_akpm_chain" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN >/dev/null 2>&1 && _akpm_rc=0
+            "$_akpm_bin" $_w_flag -t filter -A "$_akpm_chain" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN >/dev/null 2>&1 && _akpm_rc=0
             ;;
         string)
-            "$_akpm_bin" -t filter -A "$_akpm_chain" -m owner --uid-owner 0 -p tcp --dport 443 -m string --algo bm --string aad.invalid.test -j RETURN >/dev/null 2>&1 && _akpm_rc=0
+            "$_akpm_bin" $_w_flag -t filter -A "$_akpm_chain" -m owner --uid-owner 0 -p tcp --dport 443 -m string --algo bm --string aad.invalid.test -j RETURN >/dev/null 2>&1 && _akpm_rc=0
             ;;
     esac
-    while "$_akpm_bin" -t filter -D OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; do :; done
-    "$_akpm_bin" -t filter -F "$_akpm_chain" >/dev/null 2>&1 || true
-    "$_akpm_bin" -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
+    while "$_akpm_bin" $_w_flag -t filter -D OUTPUT -j "$_akpm_chain" >/dev/null 2>&1; do :; done
+    "$_akpm_bin" $_w_flag -t filter -F "$_akpm_chain" >/dev/null 2>&1 || true
+    "$_akpm_bin" $_w_flag -t filter -X "$_akpm_chain" >/dev/null 2>&1 || true
     return "$_akpm_rc"
 }
 
@@ -1012,38 +1126,65 @@ ad_killer_resolve_host() {
 
 ad_killer_add_ip_rule() {
     _akir_bin="$1"; _akir_uid="$2"; _akir_ip="$3"
-    if "$_akir_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    if "$_akir_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
         return 0
     fi
-    "$_akir_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j DROP >/dev/null 2>&1
+    "$_akir_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akir_uid" -d "$_akir_ip" -j DROP >/dev/null 2>&1
 }
 
 ad_killer_chain_alive() {
-    _akca_bin=$(ad_killer_iptables_bin 4)
-    [ -n "$_akca_bin" ] || return 0
-    "$_akca_bin" -t filter -C OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1
+    [ -f "$AD_KILLER_STATUS_FILE" ] || return 1
+    _aks_state=$(sed -n 's/^state=//p' "$AD_KILLER_STATUS_FILE" | head -n1)
+    [ "$_aks_state" = "ACTIVE" ] || return 0
+    _ak_v4_active=$(sed -n 's/^ipv4_active=//p' "$AD_KILLER_STATUS_FILE" | head -n1)
+    _ak_v6_active=$(sed -n 's/^ipv6_active=//p' "$AD_KILLER_STATUS_FILE" | head -n1)
+    
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+
+    if [ "$_ak_v4_active" = "1" ]; then
+        _akca_bin4=$(ad_killer_iptables_bin 4)
+        [ -n "$_akca_bin4" ] || return 1
+        "$_akca_bin4" $_w_flag -t filter -C OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1 || return 1
+    fi
+    if [ "$_ak_v6_active" = "1" ]; then
+        _akca_bin6=$(ad_killer_iptables_bin 6)
+        [ -n "$_akca_bin6" ] || return 1
+        "$_akca_bin6" $_w_flag -t filter -C OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1 || return 1
+    fi
+    return 0
 }
 
 ad_killer_add_tcp_rule() {
     _akar_bin="$1"; _akar_uid="$2"; _akar_host="$3"
-    if "$_akar_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    if "$_akar_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j REJECT --reject-with tcp-reset >/dev/null 2>&1; then
         return 0
     fi
-    "$_akar_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j DROP >/dev/null 2>&1
+    "$_akar_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akar_uid" -p tcp --dport 443 -m string --algo bm --string "$_akar_host" -j DROP >/dev/null 2>&1
 }
 
 ad_killer_add_quic_rule() {
     _akq_bin="$1"; _akq_uid="$2"
-    if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    if "$_akq_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
         return 0
     fi
-    if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1; then
+    if "$_akq_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1; then
         return 0
     fi
-    if "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1; then
+    if "$_akq_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j REJECT >/dev/null 2>&1; then
         return 0
     fi
-    "$_akq_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j DROP >/dev/null 2>&1
+    "$_akq_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akq_uid" -p udp --dport 443 -j DROP >/dev/null 2>&1
 }
 
 AD_KILLER_DOH_IPV4="8.8.8.8 8.8.4.4 1.1.1.1 1.0.0.1 77.88.8.8 77.88.8.1 77.88.8.88 9.9.9.9 149.112.112.112 94.140.14.14 94.140.15.15"
@@ -1051,43 +1192,69 @@ AD_KILLER_DOH_IPV6="2001:4860:4860::8888 2001:4860:4860::8844 2606:4700:4700::11
 
 ad_killer_add_doh_bypass_rules() {
     _akd_bin="$1"; _akd_uid="$2"; _akd_family="${3:-4}"
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    _akd_failed=0
     if [ "$_akd_family" = "6" ]; then
         for _akd_ip in $AD_KILLER_DOH_IPV6; do
             for _akd_port in 443 853; do
-                if ! "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1; then
-                    "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j DROP >/dev/null 2>&1 || true
+                if ! "$_akd_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j REJECT --reject-with icmp6-port-unreachable >/dev/null 2>&1; then
+                    "$_akd_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j DROP >/dev/null 2>&1 || _akd_failed=1
                 fi
             done
         done
     else
         for _akd_ip in $AD_KILLER_DOH_IPV4; do
             for _akd_port in 443 853; do
-                if ! "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
-                    "$_akd_bin" -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j DROP >/dev/null 2>&1 || true
+                if ! "$_akd_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1; then
+                    "$_akd_bin" $_w_flag -t filter -A "$AD_KILLER_CHAIN" -m owner --uid-owner "$_akd_uid" -d "$_akd_ip" -p tcp --dport "$_akd_port" -j DROP >/dev/null 2>&1 || _akd_failed=1
                 fi
             done
         done
     fi
-    return 0
+    [ "$_akd_failed" -eq 0 ]
 }
 
 ad_killer_prepare_chain() {
     _akpc_bin="$1"
-    ad_killer_chain_cleanup_family "$_akpc_bin"
-    "$_akpc_bin" -t filter -N "$AD_KILLER_CHAIN" >/dev/null 2>&1 || return 1
-    "$_akpc_bin" -t filter -I OUTPUT 1 -j "$AD_KILLER_CHAIN" >/dev/null 2>&1 || {
-        "$_akpc_bin" -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
-        "$_akpc_bin" -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
-        return 1
-    }
+    aad_init_iptables_wait
+    _w_flag=""
+    [ "$AAD_IPTABLES_WAIT" = "-w 2" ] && _w_flag="-w 2"
+    [ -n "$_akpc_bin" ] || return 1
+
+    if "$_akpc_bin" $_w_flag -t filter -S "$AD_KILLER_CHAIN" >/dev/null 2>&1; then
+        "$_akpc_bin" $_w_flag -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || return 1
+    else
+        "$_akpc_bin" $_w_flag -t filter -N "$AD_KILLER_CHAIN" >/dev/null 2>&1 || return 1
+    fi
+    # iptables-restore -n appends to existing user chains; clear our owned UID chains first.
+    _akpc_subs=$("$_akpc_bin" $_w_flag -t filter -S 2>/dev/null | sed -n "s/^-N \(${AD_KILLER_CHAIN}_[0-9][0-9]*\)$/\1/p") || return 1
+    for _akpc_sub in $_akpc_subs; do
+        "$_akpc_bin" $_w_flag -t filter -F "$_akpc_sub" >/dev/null 2>&1 || return 1
+    done
+    # Remove old UID chains completely. Master is already empty, so there are
+    # no AAD-owned references; iptables-restore -n will recreate only the
+    # currently desired child chains. This prevents stale/duplicate chains.
+    for _akpc_sub in $_akpc_subs; do
+        "$_akpc_bin" $_w_flag -t filter -X "$_akpc_sub" >/dev/null 2>&1 || return 1
+    done
+    if ! "$_akpc_bin" $_w_flag -t filter -C OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1; then
+        # Append once instead of constantly taking position 1 from other firewall modules.
+        "$_akpc_bin" $_w_flag -t filter -A OUTPUT -j "$AD_KILLER_CHAIN" >/dev/null 2>&1 || {
+            "$_akpc_bin" $_w_flag -t filter -F "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+            "$_akpc_bin" $_w_flag -t filter -X "$AD_KILLER_CHAIN" >/dev/null 2>&1 || true
+            return 1
+        }
+    fi
     return 0
 }
 
 _reconcile_ad_surface_killer_unlocked() {
     _akr_reason="${1:-manual}"
     if ! ad_killer_enabled; then
-        ad_killer_cleanup DISABLED "$_akr_reason"
-        log "AD-KILLER disabled reason=$_akr_reason mode=$(read_component_mode) block_ads=$(read_bool_setting BLOCK_ADS 1) setting=$(read_bool_setting AD_SURFACE_KILLER 1)"
+        ad_killer_cleanup DISABLED "$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
+        log "AD-KILLER disabled reason=$_akr_reason mode=$(read_component_mode) block_ads=$(read_bool_setting BLOCK_ADS 0) setting=$(read_bool_setting AD_SURFACE_KILLER 1)"
         return 0
     fi
     if [ ! -s "$AD_KILLER_TARGET_FILE" ]; then
@@ -1100,7 +1267,7 @@ _reconcile_ad_surface_killer_unlocked() {
         fi
     fi
     [ -s "$AD_KILLER_TARGET_FILE" ] || {
-        ad_killer_cleanup WAITING "no_targets:$_akr_reason"
+        ad_killer_cleanup WAITING "no_targets:$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
         log "AD-KILLER waiting-targets reason=$_akr_reason file=$AD_KILLER_TARGET_FILE"
         return 0
     }
@@ -1108,7 +1275,11 @@ _reconcile_ad_surface_killer_unlocked() {
     _akr_uidmap=$(aad_mktemp_near "$DATA_DIR/.adkiller_uidmap")
     _akr_active=$(aad_mktemp_near "$DATA_DIR/.adkiller_active")
     [ -n "$_akr_uidmap" ] && [ -n "$_akr_active" ] || { rm -f "$_akr_uidmap" "$_akr_active" 2>/dev/null; return 1; }
-    ad_killer_uid_inventory > "$_akr_uidmap"
+    if ! ad_killer_uid_inventory > "$_akr_uidmap"; then
+        log "AD-KILLER pending reason=$_akr_reason cause=uid_inventory_failed; existing firewall state preserved"
+        rm -f "$_akr_uidmap" "$_akr_active" 2>/dev/null
+        return 1
+    fi
     awk -F'|' '
         FNR==NR {uid[$1 SUBSEP $2]=$3; next}
         {
@@ -1125,15 +1296,14 @@ _reconcile_ad_surface_killer_unlocked() {
     while IFS='|' read -r _akr_user _akr_pkg _akr_uid _akr_sdk _akr_host; do
         [ -n "$_akr_uid" ] || continue
         grep -Fxq -- "$_akr_sdk|$_akr_host" "$_akr_hostmap" 2>/dev/null || continue
-        is_system_protected "$_akr_pkg" && continue
-        is_globally_whitelisted "$_akr_pkg" && continue
+        is_package_in_scope "$_akr_pkg" "$_akr_user" || continue
         is_category_whitelisted "$_akr_pkg" ADS && continue
         printf '%s|%s|%s|%s|%s\n' "$_akr_user" "$_akr_pkg" "$_akr_uid" "$_akr_sdk" "$_akr_host" >> "$_akr_filtered"
     done < "$_akr_active"
     sort -u "$_akr_filtered" -o "$_akr_filtered" 2>/dev/null || true
     _akr_targets=$(grep -c . "$_akr_filtered" 2>/dev/null); [ -n "$_akr_targets" ] || _akr_targets=0
     if [ "$_akr_targets" -eq 0 ]; then
-        ad_killer_cleanup WAITING "no_active_targets:$_akr_reason"
+        ad_killer_cleanup WAITING "no_active_targets:$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
         log "AD-KILLER waiting-active-targets reason=$_akr_reason"
         rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
         return 0
@@ -1141,7 +1311,7 @@ _reconcile_ad_surface_killer_unlocked() {
 
     _akr4=$(ad_killer_iptables_bin 4); _akr6=$(ad_killer_iptables_bin 6)
     if [ -z "$_akr4" ] && [ -z "$_akr6" ]; then
-        ad_killer_cleanup UNAVAILABLE "no_iptables:$_akr_reason"
+        ad_killer_cleanup UNAVAILABLE "no_iptables:$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
         log "AD-KILLER unavailable reason=$_akr_reason cause=iptables_binary_missing"
         rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
         return 0
@@ -1160,7 +1330,7 @@ _reconcile_ad_surface_killer_unlocked() {
     fi
 
     if [ "$_akr_owner_ok" != "1" ]; then
-        ad_killer_cleanup UNAVAILABLE "xt_owner_missing:$_akr_reason"
+        ad_killer_cleanup UNAVAILABLE "xt_owner_missing:$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
         log "AD-KILLER unavailable reason=$_akr_reason cause=xt_owner_unsupported (kernel lacks CONFIG_NETFILTER_XT_MATCH_OWNER)"
         rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
         return 0
@@ -1180,7 +1350,7 @@ _reconcile_ad_surface_killer_unlocked() {
     esac
 
     if [ -z "$_akr_active_mode" ]; then
-        ad_killer_cleanup UNAVAILABLE "xt_string_missing:$_akr_reason"
+        ad_killer_cleanup UNAVAILABLE "xt_string_missing:$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
         log "AD-KILLER unavailable reason=$_akr_reason cause=xt_string_unsupported mode=$_akr_mode ip_fallback=$_akr_ip_optin (kernel lacks CONFIG_NETFILTER_XT_MATCH_STRING; set AD_KILLER_IP_FALLBACK=1 to use resolved-IP mode instead)"
         rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
         return 0
@@ -1192,7 +1362,7 @@ _reconcile_ad_surface_killer_unlocked() {
         [ -n "$_akr6" ] && ad_killer_prepare_chain "$_akr6" && _akr6ok=1
     fi
     if [ "$_akr4ok" != "1" ] && [ "$_akr6ok" != "1" ]; then
-        ad_killer_cleanup UNAVAILABLE "chain_setup_failed:$_akr_reason"
+        ad_killer_cleanup UNAVAILABLE "chain_setup_failed:$_akr_reason" || { log "AD-KILLER cleanup pending reason=$_akr_reason"; return 1; }
         log "AD-KILLER unavailable reason=$_akr_reason cause=chain_setup_failed mode=$_akr_active_mode"
         rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" 2>/dev/null
         return 0
@@ -1293,8 +1463,12 @@ _reconcile_ad_surface_killer_unlocked() {
     _akr_quic=0
     if [ "$_akr_force_tcp" = "1" ]; then
         for _akr_uid in $_akr_quic_uids; do
-            if { [ "$_akr4ok" = "1" ] || [ "$_akr_batch4" = "1" ]; } && ad_killer_add_quic_rule "$_akr4" "$_akr_uid"; then _akr_rules4=$((_akr_rules4 + 1)); fi
-            if { [ "$_akr6ok" = "1" ] || [ "$_akr_batch6" = "1" ]; } && ad_killer_add_quic_rule "$_akr6" "$_akr_uid"; then _akr_rules6=$((_akr_rules6 + 1)); fi
+            if [ "$_akr4ok" = "1" ] || [ "$_akr_batch4" = "1" ]; then
+                if ad_killer_add_quic_rule "$_akr4" "$_akr_uid"; then _akr_rules4=$((_akr_rules4 + 1)); else _akr_failed=$((_akr_failed + 1)); fi
+            fi
+            if [ "$_akr6ok" = "1" ] || [ "$_akr_batch6" = "1" ]; then
+                if ad_killer_add_quic_rule "$_akr6" "$_akr_uid"; then _akr_rules6=$((_akr_rules6 + 1)); else _akr_failed=$((_akr_failed + 1)); fi
+            fi
             _akr_quic=$((_akr_quic + 1))
         done
     fi
@@ -1303,18 +1477,21 @@ _reconcile_ad_surface_killer_unlocked() {
     if [ "$_akr_block_doh" = "1" ]; then
         for _akr_uid in $_akr_quic_uids; do
             if [ "$_akr4ok" = "1" ] || [ "$_akr_batch4" = "1" ]; then
-                ad_killer_add_doh_bypass_rules "$_akr4" "$_akr_uid" 4
+                ad_killer_add_doh_bypass_rules "$_akr4" "$_akr_uid" 4 || _akr_failed=$((_akr_failed + 1))
             fi
             if [ "$_akr6ok" = "1" ] || [ "$_akr_batch6" = "1" ]; then
-                ad_killer_add_doh_bypass_rules "$_akr6" "$_akr_uid" 6
+                ad_killer_add_doh_bypass_rules "$_akr6" "$_akr_uid" 6 || _akr_failed=$((_akr_failed + 1))
             fi
         done
-        log "AD-KILLER anti-doh rules applied for $(printf '%s\n' "$_akr_quic_uids" | wc -w | tr -d ' ') target UIDs"
+        log "AD-KILLER anti-doh rules attempted for $(printf '%s\n' "$_akr_quic_uids" | wc -w | tr -d ' ') target UIDs failures=$_akr_failed"
     fi
     _akr_pkgs=$(awk -F'|' '{k=$1 "|" $2; if(!seen[k]++) n++} END{print n+0}' "$_akr_filtered" 2>/dev/null); [ -n "$_akr_pkgs" ] || _akr_pkgs=0
+    _ak_v4_active=0; _ak_v6_active=0
+    [ "$_akr_rules4" -gt 0 ] 2>/dev/null && _ak_v4_active=1
+    [ "$_akr_rules6" -gt 0 ] 2>/dev/null && _ak_v6_active=1
     _akr_status_tmp="$AD_KILLER_STATUS_FILE.tmp.$$"
     {
-        printf 'state=ACTIVE\n'
+        if [ "$_akr_failed" -gt 0 ] 2>/dev/null; then printf 'state=PENDING\n'; else printf 'state=ACTIVE\n'; fi
         printf 'reason=%s\n' "$_akr_reason"
         printf 'mode=%s\n' "$_akr_active_mode"
         printf 'min_confidence=%s\n' "$(ad_killer_min_confidence)"
@@ -1323,6 +1500,8 @@ _reconcile_ad_surface_killer_unlocked() {
         printf 'packages_users=%s\n' "$_akr_pkgs"
         printf 'ipv4_rules=%s\n' "$_akr_rules4"
         printf 'ipv6_rules=%s\n' "$_akr_rules6"
+        printf 'ipv4_active=%s\n' "$_ak_v4_active"
+        printf 'ipv6_active=%s\n' "$_ak_v6_active"
         printf 'force_tcp=%s\n' "$_akr_force_tcp"
         printf 'quic_uids=%s\n' "$_akr_quic"
         printf 'failed=%s\n' "$_akr_failed"
@@ -1332,6 +1511,7 @@ _reconcile_ad_surface_killer_unlocked() {
     mv -f "$_akr_status_tmp" "$AD_KILLER_STATUS_FILE" 2>/dev/null || rm -f "$_akr_status_tmp" 2>/dev/null
     log "AD-KILLER-SUMMARY reason=$_akr_reason mode=$_akr_active_mode targets=$_akr_targets unique_uid_hosts=$_akr_unique packages/users=$_akr_pkgs ipv4_rules=$_akr_rules4 ipv6_rules=$_akr_rules6 force_tcp=$_akr_force_tcp quic_uids=$_akr_quic failed=$_akr_failed target_file=$AD_KILLER_TARGET_FILE"
     rm -f "$_akr_uidmap" "$_akr_active" "$_akr_filtered" "$_akr_hostmap" "$_akr_rules" 2>/dev/null
+    [ "$_akr_failed" -eq 0 ] || return 1
     return 0
 }
 
@@ -1404,20 +1584,19 @@ cap_multiuser_ready() {
     return 0
 }
 
-list_user_ids() {
+list_user_ids_checked() {
     if [ "$(read_bool_setting SCAN_ALL_USERS 1)" != "1" ]; then
-        echo 0
-        return
+        printf '0\n'
+        return 0
     fi
 
-    if ! cap_multiuser_ready; then
-        log "CAPABILITY: multi-user requested but selected package-manager commands lack --user; using user 0 only."
-        echo 0
-        return
-    fi
-
-    raw=$(cap_list_users_raw 2>/dev/null)
-    ids=$(printf '%s\n' "$raw" | awk '
+    _luic_raw=$(cap_list_users_raw 2>/dev/null)
+    _luic_rc=$?
+    [ "$_luic_rc" -eq 0 ] && [ -n "$_luic_raw" ] || {
+        log "USER-LIST-FAILED: backend unavailable; preserving previous multi-user state"
+        return 1
+    }
+    _luic_ids=$(printf '%s\n' "$_luic_raw" | awk '
         /UserInfo\{[0-9]+/ {
             match($0, /UserInfo\{[0-9]+/)
             val=substr($0, RSTART+9, RLENGTH-9)
@@ -1434,55 +1613,143 @@ list_user_ids() {
             print val
         }
     ' | sort -nu)
-    if [ -n "$ids" ]; then
-        echo "$ids"
-    else
-        echo 0
+    [ -n "$_luic_ids" ] || {
+        log "USER-LIST-FAILED: successful command produced no parseable user IDs"
+        return 1
+    }
+
+    if ! cap_multiuser_ready; then
+        _luic_count=$(printf '%s\n' "$_luic_ids" | grep -c . 2>/dev/null)
+        if [ "$_luic_count" -eq 1 ] && [ "$_luic_ids" = "0" ]; then
+            printf '0\n'
+            return 0
+        fi
+        log "CAPABILITY: secondary users exist but selected package-manager commands lack --user; refusing incomplete scan"
+        return 1
     fi
+    printf '%s\n' "$_luic_ids"
+    return 0
+}
+
+list_user_ids() {
+    list_user_ids_checked
+}
+
+aad_capture_packages_for_user() {
+    _acpfu_user="$1"; _acpfu_third="$2"; _acpfu_want_vc="$3"; _acpfu_out="$4"
+    [ -n "$_acpfu_out" ] || return 1
+    : > "$_acpfu_out" 2>/dev/null || return 1
+
+    _acpfu_raw=$(cap_list_packages_raw "$_acpfu_user" "$_acpfu_third" "$_acpfu_want_vc" "" 2>/dev/null)
+    _acpfu_rc=$?
+    if [ "$_acpfu_rc" -ne 0 ] && [ "$_acpfu_want_vc" = "1" ]; then
+        _acpfu_raw=$(cap_list_packages_raw "$_acpfu_user" "$_acpfu_third" 0 "" 2>/dev/null)
+        _acpfu_rc=$?
+        _acpfu_want_vc=0
+    fi
+    [ "$_acpfu_rc" -eq 0 ] || { rm -f "$_acpfu_out" 2>/dev/null; return 1; }
+
+    if [ "$_acpfu_want_vc" = "1" ]; then
+        printf '%s\n' "$_acpfu_raw" | awk '
+            /^package:/ {
+                p=$1; sub(/^package:/,"",p); v="0";
+                for(i=2;i<=NF;i++) if($i ~ /^versionCode:/){v=$i; sub(/^versionCode:/,"",v)}
+                if (p!="") print p "|" v
+            }' > "$_acpfu_out" 2>/dev/null || { rm -f "$_acpfu_out"; return 1; }
+    else
+        printf '%s\n' "$_acpfu_raw" | sed 's/^package://; s/[[:space:]].*$//; /^$/d; s/$/|0/' > "$_acpfu_out" 2>/dev/null || { rm -f "$_acpfu_out"; return 1; }
+    fi
+    return 0
 }
 
 list_packages_for_user() {
     user="$1"
     third=0
-    [ "$(read_bool_setting SCAN_SYSTEM_APPS 0)" != "1" ] && third=1
-
-    out=$(cap_list_packages_raw "$user" "$third" 1 "")
-    if echo "$out" | grep -q '^package:'; then
-        echo "$out" | awk '
-            /^package:/ {
-                p=$1; sub(/^package:/,"",p); v="0";
-                for(i=2;i<=NF;i++) if($i ~ /^versionCode:/){v=$i; sub(/^versionCode:/,"",v)}
-                print p "|" v
-            }'
-        return
+    [ "$(read_include_system_apps)" != "1" ] && third=1
+    _lpfu_tmp=$(aad_mktemp_near "$DATA_DIR/.packages_u${user}")
+    [ -n "$_lpfu_tmp" ] || return 1
+    if aad_capture_packages_for_user "$user" "$third" 1 "$_lpfu_tmp"; then
+        cat "$_lpfu_tmp" 2>/dev/null
+        rm -f "$_lpfu_tmp" 2>/dev/null
+        return 0
     fi
-
-    cap_list_packages_raw "$user" "$third" 0 "" | sed 's/^package://; s/[[:space:]].*$//; s/$/|0/'
+    rm -f "$_lpfu_tmp" 2>/dev/null
+    return 1
 }
 
 list_all_package_state() {
-    for user in $(list_user_ids); do
-        list_packages_for_user "$user" | while IFS='|' read -r pkg vc; do
-            [ -n "$pkg" ] && echo "$user|$pkg|${vc:-0}"
-        done
-    done | awk -F'|' '!seen[$1,$2]++'
+    _laps_ok_users="$DATA_DIR/.users_desired_snapshot_ok"
+    _laps_out=$(aad_mktemp_near "$DATA_DIR/.all_desired")
+    [ -n "$_laps_out" ] || return 1
+    : > "$_laps_ok_users" 2>/dev/null || { rm -f "$_laps_out"; return 1; }
+    : > "$_laps_out" 2>/dev/null || { rm -f "$_laps_out"; return 1; }
+    _laps_users=$(list_user_ids_checked) || { rm -f "$_laps_out"; log "SNAPSHOT-DESIRED-FAILED: user enumeration unavailable"; return 1; }
+    _laps_failed=0
+    for user in $_laps_users; do
+        _laps_tmp=$(aad_mktemp_near "$DATA_DIR/.desired_u${user}")
+        [ -n "$_laps_tmp" ] || { _laps_failed=1; continue; }
+        _laps_third=0
+        [ "$(read_include_system_apps)" != "1" ] && _laps_third=1
+        if aad_capture_packages_for_user "$user" "$_laps_third" 1 "$_laps_tmp"; then
+            echo "$user" >> "$_laps_ok_users" 2>/dev/null || _laps_failed=1
+            while IFS='|' read -r pkg vc; do
+                [ -n "$pkg" ] && echo "$user|$pkg|${vc:-0}" >> "$_laps_out"
+            done < "$_laps_tmp"
+        else
+            _laps_failed=1
+            log "SNAPSHOT-DESIRED-FAILED user=$user; previous candidate/ownership generation must be preserved"
+        fi
+        rm -f "$_laps_tmp" 2>/dev/null
+    done
+    if [ "$_laps_failed" -ne 0 ]; then
+        rm -f "$_laps_out" 2>/dev/null
+        return 1
+    fi
+    awk -F'|' '!seen[$1,$2]++' "$_laps_out"
+    _laps_rc=$?
+    rm -f "$_laps_out" 2>/dev/null
+    return "$_laps_rc"
 }
 
 list_all_installed_package_keys() {
-    for user in $(list_user_ids); do
-        cap_list_packages_raw "$user" 0 0 "" 2>/dev/null \
-            | sed 's/^package://; s/[[:space:]].*$//' \
-            | while IFS= read -r pkg; do
-                [ -n "$pkg" ] && echo "$user|$pkg"
-            done
-    done | sort -u
+    _lapk_ok_users="$DATA_DIR/.users_snapshot_ok"
+    _lapk_out=$(aad_mktemp_near "$DATA_DIR/.all_installed")
+    [ -n "$_lapk_out" ] || return 1
+    : > "$_lapk_ok_users" 2>/dev/null || { rm -f "$_lapk_out"; return 1; }
+    : > "$_lapk_out" 2>/dev/null || { rm -f "$_lapk_out"; return 1; }
+    _lapk_users=$(list_user_ids_checked) || { rm -f "$_lapk_out"; log "SNAPSHOT-INSTALLED-FAILED: user enumeration unavailable"; return 1; }
+    _lapk_failed=0
+    for user in $_lapk_users; do
+        _lapk_tmp=$(aad_mktemp_near "$DATA_DIR/.installed_u${user}")
+        [ -n "$_lapk_tmp" ] || { _lapk_failed=1; continue; }
+        if aad_capture_packages_for_user "$user" 0 0 "$_lapk_tmp"; then
+            echo "$user" >> "$_lapk_ok_users" 2>/dev/null || _lapk_failed=1
+            while IFS='|' read -r pkg _vc; do
+                [ -n "$pkg" ] && echo "$user|$pkg" >> "$_lapk_out"
+            done < "$_lapk_tmp"
+        else
+            _lapk_failed=1
+            log "SNAPSHOT-INSTALLED-FAILED user=$user; previous candidate/ownership generation must be preserved"
+        fi
+        rm -f "$_lapk_tmp" 2>/dev/null
+    done
+    if [ "$_lapk_failed" -ne 0 ]; then
+        rm -f "$_lapk_out" 2>/dev/null
+        return 1
+    fi
+    sort -u "$_lapk_out"
+    _lapk_rc=$?
+    rm -f "$_lapk_out" 2>/dev/null
+    return "$_lapk_rc"
 }
 
 disable_component_smart() {
     user="$1"
     comp="$2"
     preserve_state=$(get_saved_original_state "$user" "$comp")
-    [ -n "$preserve_state" ] || preserve_state=$(get_component_override_state "$user" "$comp")
+    if [ -z "$preserve_state" ]; then
+        preserve_state=$(aad_get_component_override_state_checked "$user" "$comp" 2>/dev/null) || return 1
+    fi
     cap_disable_component "$user" "$comp" "$preserve_state" >/dev/null 2>&1
 }
 
@@ -1532,21 +1799,25 @@ aad_package_dump_cached() {
     cap_package_dump "$_apd_pkg"
 }
 
-get_component_override_state() {
-    user="$1"
-    comp="$2"
-    pkg=${comp%%/*}
-    cls=${comp#*/}
-    case "$cls" in
-        .*) full_cls="$pkg$cls" ;;
-        *) full_cls="$cls" ;;
+aad_get_component_override_state_checked() {
+    _agcos_user="$1"
+    _agcos_comp="$2"
+    _agcos_pkg=${_agcos_comp%%/*}
+    _agcos_cls=${_agcos_comp#*/}
+    case "$_agcos_cls" in
+        .*) _agcos_full="$_agcos_pkg$_agcos_cls" ;;
+        *) _agcos_full="$_agcos_cls" ;;
     esac
 
-    state=$(aad_package_dump_cached "$pkg" | awk -v uid="$user" -v full="$full_cls" -v short="$cls" '
+    _agcos_dump=$(aad_package_dump_cached "$_agcos_pkg" 2>/dev/null)
+    _agcos_rc=$?
+    [ "$_agcos_rc" -eq 0 ] && [ -n "$_agcos_dump" ] || return 1
+
+    _agcos_state=$(printf '%s\n' "$_agcos_dump" | awk -v uid="$_agcos_user" -v full="$_agcos_full" -v short="$_agcos_cls" '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/,"",s); return s}
         /^[ \t]*User [0-9]+:/ {
             line=$0; gsub(/^[ \t]*/,"",line)
-            if (line ~ ("^User " uid ":")) {inuser=1; sec=""; next}
+            if (line ~ ("^User " uid ":")) {inuser=1; founduser=1; sec=""; next}
             if (inuser) exit
         }
         !inuser {next}
@@ -1555,10 +1826,15 @@ get_component_override_state() {
         /^[ \t]*[A-Za-z][A-Za-z0-9_-]*:/ {sec=""}
         sec!="" {
             x=trim($0)
-            if (x==full || x==short) {print sec; exit}
+            if (x==full || x==short) {state=sec; print state; emitted=1; exit}
+        }
+        END {
+            if (founduser && !emitted) print "default"
         }
     ')
-    [ -n "$state" ] && echo "$state" || echo default
+    [ -n "$_agcos_state" ] || return 1
+    printf '%s\n' "$_agcos_state" | head -n1
+    return 0
 }
 
 state_record_exists() {
@@ -1569,10 +1845,13 @@ state_record_exists() {
 ensure_original_state() {
     user="$1"; comp="$2"
     state_record_exists "$user" "$comp" && return 0
-    original=$(get_component_override_state "$user" "$comp")
+    original=$(aad_get_component_override_state_checked "$user" "$comp" 2>/dev/null) || {
+        log "STATE-SAVE-PENDING u$user: $comp reason=original_state_read_failed"
+        return 1
+    }
     aad_db_lock "$STATE_DB_LOCK" || { log "STATE-LOCK-FAILED save u$user: $comp"; return 1; }
     if ! state_record_exists "$user" "$comp"; then
-        printf '%s|%s|%s\n' "$user" "$comp" "$original" >> "$COMPONENT_STATE"
+        printf '%s|%s|%s|disabled\n' "$user" "$comp" "$original" >> "$COMPONENT_STATE"
         log "STATE-SAVE u$user: $comp -> $original"
     fi
     aad_db_unlock "$STATE_DB_LOCK"
@@ -1582,6 +1861,12 @@ get_saved_original_state() {
     user="$1"; comp="$2"
     [ -f "$COMPONENT_STATE" ] || return
     awk -F'|' -v u="$user" -v c="$comp" '$1==u && $2==c {print $3; exit}' "$COMPONENT_STATE"
+}
+
+get_saved_applied_state() {
+    user="$1"; comp="$2"
+    [ -f "$COMPONENT_STATE" ] || return
+    awk -F'|' -v u="$user" -v c="$comp" '$1==u && $2==c {print ($4!=""?$4:"disabled"); exit}' "$COMPONENT_STATE"
 }
 
 remove_state_record() {
@@ -1610,6 +1895,17 @@ restore_original_state() {
     user="$1"; comp="$2"
     original=$(get_saved_original_state "$user" "$comp")
     [ -z "$original" ] && original=default
+    applied=$(get_saved_applied_state "$user" "$comp")
+    [ -n "$applied" ] || applied=disabled
+    current=$(aad_get_component_override_state_checked "$user" "$comp" 2>/dev/null) || {
+        log "RESTORE-PENDING u$user: $comp reason=current_state_read_failed"
+        return 1
+    }
+    if [ "$current" != "$applied" ]; then
+        log "RESTORE-PRESERVE u$user: $comp current=$current differs_from_module=$applied"
+        remove_state_record "$user" "$comp"
+        return 0
+    fi
     if set_component_state_smart "$user" "$comp" "$original"; then
         log "RESTORE u$user: $comp -> $original"
         remove_state_record "$user" "$comp"
@@ -1640,8 +1936,17 @@ cap_list_packages_with_paths_raw() {
 build_apk_path_inventory() {
     out_file="$1"
     : > "$out_file" || return 1
-    for inv_user in $(list_user_ids); do
-        cap_list_packages_with_paths_raw "$inv_user" | while IFS= read -r line; do
+    _bapi_users=$(list_user_ids_checked) || return 1
+    _bapi_failed=0
+    for inv_user in $_bapi_users; do
+        _bapi_raw=$(aad_mktemp_near "$DATA_DIR/.path_inventory_u${inv_user}")
+        [ -n "$_bapi_raw" ] || { _bapi_failed=1; continue; }
+        if ! cap_list_packages_with_paths_raw "$inv_user" > "$_bapi_raw" 2>/dev/null; then
+            _bapi_failed=1
+            rm -f "$_bapi_raw" 2>/dev/null
+            continue
+        fi
+        while IFS= read -r line; do
             case "$line" in
                 package:*=*)
                     body=${line#package:}
@@ -1651,9 +1956,11 @@ build_apk_path_inventory() {
                     [ -n "$inv_pkg" ] && [ -n "$inv_apk" ] && printf '%s|%s|%s\n' "$inv_user" "$inv_pkg" "$inv_apk"
                     ;;
             esac
-        done >> "$out_file"
+        done < "$_bapi_raw" >> "$out_file"
+        rm -f "$_bapi_raw" 2>/dev/null
     done
-    sort -u "$out_file" -o "$out_file" 2>/dev/null || true
+    [ "$_bapi_failed" -eq 0 ] || return 1
+    sort -u "$out_file" -o "$out_file" 2>/dev/null || return 1
     return 0
 }
 
@@ -2390,7 +2697,7 @@ scan_ad_surfaces_for_apk() {
 record_ad_surface_scan_package() {
     user="$1"; pkg="$2"
     [ "${AAD_AD_SURFACE_SCAN_ACTIVE:-0}" = "1" ] || return 0
-    [ "$(read_bool_setting BLOCK_ADS 1)" = "1" ] || return 0
+    [ "$(read_bool_setting BLOCK_ADS 0)" = "1" ] || return 0
     paths=$(cap_package_paths_readonly "$user" "$pkg")
     [ -n "$paths" ] || return 0
     vc="${AAD_CURRENT_VERSION_CODE:-unknown}"
@@ -2549,16 +2856,14 @@ aad_manifest_cache_gc() {
 
 get_manifest_activity_candidates() {
     user="$1"; pkg="$2"
-    mode=$(read_component_mode)
-    backend=$(read_component_backend)
-    [ "$mode" = "AGGRESSIVE" ] || [ "$backend" = "HYBRID" ] || return 0
+    _gmac_failed=0
 
     paths=$(cap_package_paths_readonly "$user" "$pkg")
     if [ -z "$paths" ]; then
         log "MANIFEST-PATH-MISS u$user: $pkg direct_and_inventory_empty=yes"
         [ -n "${AAD_MANIFEST_STATS_FILE:-}" ] && printf '%s|%s|%s|-|path-miss|UNKNOWN|0|0|0|0|0|0|BYPASS\n' \
             "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" >> "$AAD_MANIFEST_STATS_FILE"
-        return 0
+        return 1
     fi
 
     axml=$(aad_mktemp_near "$DATA_DIR/.manifest_axml")
@@ -2570,12 +2875,13 @@ get_manifest_activity_candidates() {
         [ -n "$classes" ] && rm -f "$classes" 2>/dev/null
         [ -n "$meta" ] && rm -f "$meta" 2>/dev/null
         [ -n "$verified_tmp" ] && rm -f "$verified_tmp" 2>/dev/null
-        return 0
+        return 1
     }
 
     while IFS= read -r apk; do
         [ -n "$apk" ] || continue
         if [ ! -f "$apk" ]; then
+            _gmac_failed=1
             log "MANIFEST-PATH-INACCESSIBLE u$user: $pkg apk=$apk"
             [ -n "${AAD_MANIFEST_STATS_FILE:-}" ] && printf '%s|%s|%s|%s|path-inaccessible|UNKNOWN|0|0|0|0|0|0|BYPASS\n' \
                 "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" "$apk" >> "$AAD_MANIFEST_STATS_FILE"
@@ -2606,6 +2912,7 @@ get_manifest_activity_candidates() {
 
         if [ "$cache_state" = "MISS" ]; then
             if ! extract_compiled_manifest_readonly "$apk" "$axml"; then
+                _gmac_failed=1
                 [ -n "$AAD_MANIFEST_STATS_FILE" ] && printf '%s|%s|%s|%s|extract-failed|UNKNOWN|0|0|0|0|0|0|MISS\n' \
                     "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)" "$user" "$pkg" "$apk" >> "$AAD_MANIFEST_STATS_FILE"
                 continue
@@ -2637,6 +2944,7 @@ get_manifest_activity_candidates() {
         [ -n "$string_count" ] || string_count=0
         [ -n "$token_count" ] || token_count=0
         [ -n "$valid" ] || valid=0
+        [ "$valid" = "1" ] || _gmac_failed=1
 
         manifest_sdk_fingerprints "$classes"
 
@@ -2687,6 +2995,7 @@ get_manifest_activity_candidates() {
             : > "$verified_tmp"
 
             while IFS='|' read -r hit cls; do
+                [ "$hit" = "EXACT" ] || continue
                 [ -n "$cls" ] || continue
                 comp="$pkg/$cls"
                 echo "ACTIVITY|$comp"
@@ -2716,36 +3025,62 @@ $paths
 EOF
 
     rm -f "$axml" "$classes" "$meta" "$verified_tmp" 2>/dev/null
+    [ "$_gmac_failed" -eq 0 ]
 }
 
 get_typed_component_candidates() {
     user="$1"; pkg="$2"
-    {
-        aad_package_dump_cached "$pkg" | awk -v p="$pkg" '
-            function emit(line, kind,    rest, token, parts) {
-                rest=line
-                while (match(rest, /[A-Za-z0-9._$-]+\/[A-Za-z0-9._$-]+/)) {
-                    token=substr(rest,RSTART,RLENGTH)
-                    split(token,parts,"/")
-                    if (parts[1]==p) print kind "|" token
-                    rest=substr(rest,RSTART+RLENGTH)
-                }
+    _gtcc_dump=$(aad_mktemp_near "$DATA_DIR/.typed_dump")
+    _gtcc_pm=$(aad_mktemp_near "$DATA_DIR/.typed_pm")
+    _gtcc_manifest=$(aad_mktemp_near "$DATA_DIR/.typed_manifest")
+    _gtcc_out=$(aad_mktemp_near "$DATA_DIR/.typed_out")
+    [ -n "$_gtcc_dump" ] && [ -n "$_gtcc_pm" ] && [ -n "$_gtcc_manifest" ] && [ -n "$_gtcc_out" ] || {
+        rm -f "$_gtcc_dump" "$_gtcc_pm" "$_gtcc_manifest" "$_gtcc_out" 2>/dev/null
+        return 1
+    }
+    if ! aad_package_dump_cached "$pkg" > "$_gtcc_dump" 2>/dev/null || [ ! -s "$_gtcc_dump" ]; then
+        rm -f "$_gtcc_dump" "$_gtcc_pm" "$_gtcc_manifest" "$_gtcc_out" 2>/dev/null
+        log "DISCOVERY-FAILED u$user package=$pkg source=package_dump"
+        return 1
+    fi
+    awk -v p="$pkg" '
+        function emit(line, kind,    rest, token, parts) {
+            rest=line
+            while (match(rest, /[A-Za-z0-9._$-]+\/[A-Za-z0-9._$-]+/)) {
+                token=substr(rest,RSTART,RLENGTH)
+                split(token,parts,"/")
+                if (parts[1]==p) print kind "|" token
+                rest=substr(rest,RSTART+RLENGTH)
             }
-            /^[[:space:]]*Activity Resolver Table:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
-            /^[[:space:]]*Receiver Resolver Table:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
-            /^[[:space:]]*Service Resolver Table:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
-            /^[[:space:]]*Provider Resolver Table:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
-            /^[[:space:]]*Activities:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
-            /^[[:space:]]*Receivers:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
-            /^[[:space:]]*Services:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
-            /^[[:space:]]*Providers:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
-            /^[[:space:]]*Registered ContentProviders:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
-            /^[[:space:]]*ContentProvider Authorities:[[:space:]]*$/ {capture=0; next}
-            /^[[:space:]]*(Packages|Shared users|Queries|Dexopt state|Compiler stats):[[:space:]]*$/ {capture=0; next}
-            capture {emit($0,kind)}
-        '
-        get_manifest_activity_candidates "$user" "$pkg"
-    } | sort -u
+        }
+        /^[[:space:]]*Activity Resolver Table:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
+        /^[[:space:]]*Receiver Resolver Table:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
+        /^[[:space:]]*Service Resolver Table:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
+        /^[[:space:]]*Provider Resolver Table:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
+        /^[[:space:]]*Activities:[[:space:]]*$/ {kind="ACTIVITY"; capture=1; next}
+        /^[[:space:]]*Receivers:[[:space:]]*$/ {kind="RECEIVER"; capture=1; next}
+        /^[[:space:]]*Services:[[:space:]]*$/ {kind="SERVICE"; capture=1; next}
+        /^[[:space:]]*Providers:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
+        /^[[:space:]]*Registered ContentProviders:[[:space:]]*$/ {kind="PROVIDER"; capture=1; next}
+        /^[[:space:]]*ContentProvider Authorities:[[:space:]]*$/ {capture=0; next}
+        /^[[:space:]]*(Packages|Shared users|Queries|Dexopt state|Compiler stats):[[:space:]]*$/ {capture=0; next}
+        capture {emit($0,kind)}
+    ' "$_gtcc_dump" > "$_gtcc_pm" 2>/dev/null || {
+        rm -f "$_gtcc_dump" "$_gtcc_pm" "$_gtcc_manifest" "$_gtcc_out" 2>/dev/null
+        return 1
+    }
+    if ! get_manifest_activity_candidates "$user" "$pkg" > "$_gtcc_manifest"; then
+        rm -f "$_gtcc_dump" "$_gtcc_pm" "$_gtcc_manifest" "$_gtcc_out" 2>/dev/null
+        log "DISCOVERY-FAILED u$user package=$pkg source=manifest"
+        return 1
+    fi
+    cat "$_gtcc_pm" "$_gtcc_manifest" | sort -u > "$_gtcc_out" 2>/dev/null || {
+        rm -f "$_gtcc_dump" "$_gtcc_pm" "$_gtcc_manifest" "$_gtcc_out" 2>/dev/null
+        return 1
+    }
+    cat "$_gtcc_out"
+    rm -f "$_gtcc_dump" "$_gtcc_pm" "$_gtcc_manifest" "$_gtcc_out" 2>/dev/null
+    return 0
 }
 
 get_typed_component_candidates_cached() {
@@ -2755,12 +3090,16 @@ get_typed_component_candidates_cached() {
         [ -n "$key" ] || key=$(printf '%s' "$user|$pkg" | tr '/ :|' '____')
         cache="$SCAN_CANDIDATE_CACHE_DIR/$key"
         if [ ! -f "$cache" ]; then
-            get_typed_component_candidates "$user" "$pkg" > "$cache.tmp.$$"
-            mv "$cache.tmp.$$" "$cache" 2>/dev/null || cp "$cache.tmp.$$" "$cache" 2>/dev/null
-            rm -f "$cache.tmp.$$"
+            _gtccc_tmp="$cache.tmp.$$"
+            if ! get_typed_component_candidates "$user" "$pkg" > "$_gtccc_tmp"; then
+                rm -f "$_gtccc_tmp" 2>/dev/null
+                return 1
+            fi
+            chmod 600 "$_gtccc_tmp" 2>/dev/null || true
+            mv -f "$_gtccc_tmp" "$cache" 2>/dev/null || { rm -f "$_gtccc_tmp" 2>/dev/null; return 1; }
         fi
         cat "$cache" 2>/dev/null
-        return
+        return $?
     fi
     get_typed_component_candidates "$user" "$pkg"
 }
@@ -2805,7 +3144,7 @@ component_matches_rule_section() {
 }
 
 component_matches_disable_rule() {
-    comp="$1"; cat="$2"; kind="$3"; mode="$4"
+    comp="$1"; cat="$2"; kind="$3"
     case "$kind" in
         SERVICE|RECEIVER)
             component_matches_rule_section "$comp" "${cat}_${kind}" && return 0
@@ -2814,17 +3153,13 @@ component_matches_disable_rule() {
             component_matches_rule_section "$comp" "${cat}_PUSH_RISK"
             ;;
         PROVIDER)
-            case "$mode" in
-                BALANCED|AGGRESSIVE)
-                    component_matches_rule_section "$comp" "${cat}_PROVIDER_SAFE" && return 0
-                    ;;
-            esac
-            [ "$mode" = "AGGRESSIVE" ] || return 1
-            component_matches_rule_section "$comp" "${cat}_PROVIDER_AGGRESSIVE"
+            component_matches_rule_section "$comp" "${cat}_PROVIDER_SAFE" && return 0
+            component_matches_rule_section "$comp" "${cat}_PROVIDER_AGGRESSIVE" && return 0
+            return 1
             ;;
         ACTIVITY)
-            [ "$mode" = "AGGRESSIVE" ] || return 1
-            component_matches_rule_section "$comp" "${cat}_ACTIVITY_IFW"
+            component_matches_rule_section "$comp" "${cat}_ACTIVITY_IFW" && return 0
+            return 1
             ;;
         *) return 1 ;;
     esac
@@ -2843,7 +3178,10 @@ component_matches_audit_rule() {
             component_matches_rule_section "$comp" "${cat}_PROVIDER_AGGRESSIVE" && return 0
             component_matches_rule_section "$comp" "${cat}_PROVIDER_AUDIT"
             ;;
-        ACTIVITY) component_matches_rule_section "$comp" "${cat}_ACTIVITY_AUDIT" ;;
+        ACTIVITY)
+            component_matches_rule_section "$comp" "${cat}_ACTIVITY_IFW" && return 0
+            component_matches_rule_section "$comp" "${cat}_ACTIVITY_AUDIT"
+            ;;
         *) return 1 ;;
     esac
 }
@@ -2856,10 +3194,9 @@ get_components_for_category() {
         awk -F'|' -v u="$user" -v p="$pkg" -v k="$cat" '$2==u && $3==p && $4==k && $7=="DISABLE" {print $8}' "$COMPONENT_AUDIT_FILE" | sort -u
         return
     fi
-    mode=$(read_component_mode)
     get_typed_component_candidates_cached "$user" "$pkg" | while IFS='|' read -r kind comp; do
         [ -z "$comp" ] && continue
-        component_matches_disable_rule "$comp" "$cat" "$kind" "$mode" && echo "$comp"
+        component_matches_disable_rule "$comp" "$cat" "$kind" && echo "$comp"
     done
 }
 
@@ -2919,8 +3256,21 @@ record_package_sdk_fingerprints() {
 }
 
 record_package_audit() {
-    user="$1"; pkg="$2"; mode=$(read_component_mode)
+    user="$1"; pkg="$2"
     [ -n "$COMPONENT_AUDIT_FILE" ] || return 0
+    candidates=$(aad_mktemp_near "$DATA_DIR/.audit_candidates")
+    [ -n "$candidates" ] || return 1
+    if ! get_typed_component_candidates_cached "$user" "$pkg" > "$candidates"; then
+        log "DISCOVERY-FAILED u$user package=$pkg state=PRESERVE_PREVIOUS"
+        rm -f "$candidates" 2>/dev/null
+        [ -n "${AAD_DISCOVERY_FAILED_FILE:-}" ] && : > "$AAD_DISCOVERY_FAILED_FILE" 2>/dev/null || true
+        if [ "${AAD_AUDIT_FULL_SCAN:-0}" = "1" ] && [ -s "${AAD_AUDIT_CARRY:-}" ]; then
+            awk -F'|' -v u="$user" -v p="$pkg" 'NR>1 && $2==u && $3==p {print}' "$AAD_AUDIT_CARRY" >> "$COMPONENT_AUDIT_FILE" 2>/dev/null || true
+            [ -s "${AAD_SDK_CARRY:-}" ] && awk -F'|' -v u="$user" -v p="$pkg" 'NR>1 && $2==u && $3==p {print}' "$AAD_SDK_CARRY" >> "$SDK_FINGERPRINT_FILE" 2>/dev/null || true
+        fi
+        return 1
+    fi
+    # Replace package audit rows only after discovery is authoritative (DATA or EMPTY).
     if [ "${AAD_AUDIT_FULL_SCAN:-0}" != "1" ] && [ "${AAD_AUDIT_ROWS_PRECLEANED:-0}" != "1" ] && [ -f "$COMPONENT_AUDIT_FILE" ]; then
         audit_clean=$(aad_mktemp_near "$COMPONENT_AUDIT_FILE")
         if [ -n "$audit_clean" ]; then
@@ -2928,20 +3278,16 @@ record_package_audit() {
             [ -f "$audit_clean" ] && rm -f "$audit_clean" 2>/dev/null
         fi
     fi
-    candidates=$(aad_mktemp_near "$DATA_DIR/.audit_candidates")
-    [ -n "$candidates" ] || return 1
-    get_typed_component_candidates_cached "$user" "$pkg" > "$candidates"
-    block_ads=$(read_bool_setting BLOCK_ADS 1)
-    block_analytics=$(read_bool_setting BLOCK_ANALYTICS 1)
+    block_ads=$(read_bool_setting BLOCK_ADS 0)
+    block_analytics=$(read_bool_setting BLOCK_ANALYTICS 0)
     global_white=0; ads_white=0; analytics_white=0
     is_globally_whitelisted "$pkg" && global_white=1
     is_category_whitelisted "$pkg" ADS && ads_white=1
     is_category_whitelisted "$pkg" ANALYTICS && analytics_white=1
     audit_time=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
 
-    backend=$(read_component_backend)
     block_push=$(read_bool_setting BLOCK_PUSH_SDK 0)
-    awk -F'|' -v user="$user" -v pkg="$pkg" -v mode="$mode" -v backend="$backend" -v stamp="$audit_time" \
+    awk -F'|' -v user="$user" -v pkg="$pkg" -v stamp="$audit_time" \
         -v block_ads="$block_ads" -v block_analytics="$block_analytics" -v block_push="$block_push" \
         -v global_white="$global_white" -v ads_white="$ads_white" -v analytics_white="$analytics_white" '
         BEGIN {OFS="|"}
@@ -2997,24 +3343,16 @@ record_package_audit() {
             } else if (kind=="PROVIDER") {
                 for (ci=1; ci<=2; ci++) {
                     category=(ci==1 ? "ADS" : "ANALYTICS")
-                    if (section_match(category "_PROVIDER_SAFE",component))
-                        emit(category,kind,component,"BALANCED",((mode=="BALANCED" || mode=="AGGRESSIVE") ? "DISABLE" : "REPORT_ONLY"))
-                    else if (section_match(category "_PROVIDER_AGGRESSIVE",component))
-                        emit(category,kind,component,"AGGRESSIVE",(mode=="AGGRESSIVE" ? "DISABLE" : "REPORT_ONLY"))
+                    if (section_match(category "_PROVIDER_SAFE",component) || section_match(category "_PROVIDER_AGGRESSIVE",component))
+                        emit(category,kind,component,"EXACT_PROVIDER","DISABLE")
                     else if (section_match(category "_PROVIDER_AUDIT",component))
                         emit(category,kind,component,"AUDIT","REPORT_ONLY")
                 }
             } else if (kind=="ACTIVITY") {
                 for (ci=1; ci<=2; ci++) {
                     category=(ci==1 ? "ADS" : "ANALYTICS")
-                    if (section_match(category "_ACTIVITY_IFW",component)) {
-                        if (backend=="HYBRID" && mode=="AGGRESSIVE")
-                            emit(category,kind,component,"HYBRID","DISABLE")
-                        else if (backend=="HYBRID")
-                            emit(category,kind,component,"HYBRID","IFW_BLOCK")
-                        else
-                            emit(category,kind,component,"AGGRESSIVE",(mode=="AGGRESSIVE" ? "DISABLE" : "REPORT_ONLY"))
-                    }
+                    if (section_match(category "_ACTIVITY_IFW",component))
+                        emit(category,kind,component,"EXACT_ACTIVITY","DISABLE")
                     else if (section_match(category "_ACTIVITY_AUDIT",component))
                         emit(category,kind,component,"AUDIT","REPORT_ONLY")
                 }
@@ -3042,137 +3380,22 @@ ifw_filter_global_candidates() {
 }
 
 reconcile_owned_ifw_rules() {
-    backend=$(read_component_backend)
-    if [ "$backend" != "HYBRID" ]; then
-        if [ -e "$IFW_RULE_FILE" ]; then
-            rm -f "$IFW_RULE_FILE" 2>/dev/null || {
-                log "IFW-REMOVE-FAILED file=$IFW_RULE_FILE"
-                return 1
-            }
-            log "IFW removed: backend=$backend file=$IFW_RULE_FILE"
+    # v6 runtime is PM-only. IFW is handled only as one-shot legacy cleanup.
+    if [ -e "$IFW_RULE_FILE" ]; then
+        _lifw_expected=$(cat "$IFW_APPLIED_CKSUM" 2>/dev/null)
+        _lifw_current=$(cksum "$IFW_RULE_FILE" 2>/dev/null | awk '{print $1 ":" $2}')
+        if [ -n "$_lifw_expected" ] && [ "$_lifw_current" = "$_lifw_expected" ]; then
+            if rm -f "$IFW_RULE_FILE" 2>/dev/null; then
+                log "LEGACY-IFW removed owned file=$IFW_RULE_FILE"
+            else
+                log "LEGACY-IFW remove failed; PM runtime continues and will retry later"
+                return 0
+            fi
+        else
+            log "LEGACY-IFW relinquished: file changed externally or ownership unknown"
         fi
-        return 0
     fi
-
-    if ! probe_ifw_storage; then
-        log "IFW-UNAVAILABLE: directory is absent or not writable: $IFW_DIR"
-        return 1
-    fi
-
-    work_base="$DATA_DIR/.ifw_build.$$"
-    managed="$work_base.managed"
-    managed_pairs="$work_base.managed_pairs"
-    installed="$work_base.installed"
-    activity_pairs="$work_base.activity_pairs"
-    activities_raw="$work_base.activities.raw"
-    receivers_raw="$work_base.receivers.raw"
-    services_raw="$work_base.services.raw"
-    activities="$work_base.activities"
-    receivers="$work_base.receivers"
-    services="$work_base.services"
-    ifw_work_files="$managed $managed_pairs $installed $activity_pairs $activities_raw $receivers_raw $services_raw $activities $receivers $services"
-    disabled_source="$DISABLED_LIST"
-    [ -f "$disabled_source" ] || disabled_source="/dev/null"
-
-    awk -F'|' 'NF>=3 && $2!="" {print $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed"
-    awk -F'|' 'NF>=3 && $1!="" && $2!="" {print $1 "|" $2}' "$disabled_source" 2>/dev/null | sort -u > "$managed_pairs"
-    printf '#\n' >> "$managed"
-
-    list_all_installed_package_keys > "$installed" 2>/dev/null
-    if [ ! -s "$installed" ]; then
-        rm -f "$IFW_RULE_FILE" "$managed" "$managed_pairs" "$installed" \
-            "$activity_pairs" "$activities_raw" "$receivers_raw" "$services_raw" \
-            "$activities" "$receivers" "$services" 2>/dev/null || true
-        log "IFW-SAFETY-SKIP reason=installed_user_snapshot_unavailable"
-        return 1
-    fi
-
-    awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="RECEIVER" && owned[$8] {print $8}' \
-        "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$receivers_raw"
-    awk -F'|' 'NR==FNR {owned[$1]=1; next} FNR>1 && $7=="DISABLE" && $5=="SERVICE" && owned[$8] {print $8}' \
-        "$managed" "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$services_raw"
-    ifw_filter_global_candidates "$receivers_raw" "$managed_pairs" "$installed" "$receivers"
-    ifw_filter_global_candidates "$services_raw" "$managed_pairs" "$installed" "$services"
-
-    awk -F'|' 'FNR>1 && $2!="" && $5=="ACTIVITY" && ($7=="IFW_BLOCK" || ($7=="DISABLE" && $6=="HYBRID")) {print $2 "|" $8}' \
-        "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activity_pairs"
-    ifw_limit=$(read_ifw_activity_limit)
-    awk -F'|' -v limit="$ifw_limit" '
-        FNR>1 && $5=="ACTIVITY" && ($7=="IFW_BLOCK" || ($7=="DISABLE" && $6=="HYBRID")) {
-            group=$3 "|" $4
-            pair=group "|" $8
-            if (!seen[pair]++) {
-                count[group]++
-                component[pair]=$8
-            }
-        }
-        END {
-            for (pair in component) {
-                split(pair,parts,"|")
-                group=parts[1] "|" parts[2]
-                if (++taken[group] <= limit) print component[pair]
-            }
-        }
-    ' "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$activities_raw"
-    ifw_filter_global_candidates "$activities_raw" "$activity_pairs" "$installed" "$activities"
-
-    activity_count=$(grep -c . "$activities" 2>/dev/null); [ -n "$activity_count" ] || activity_count=0
-    receiver_count=$(grep -c . "$receivers" 2>/dev/null); [ -n "$receiver_count" ] || receiver_count=0
-    service_count=$(grep -c . "$services" 2>/dev/null); [ -n "$service_count" ] || service_count=0
-    total_ifw=$((activity_count + receiver_count + service_count))
-
-    if [ "$total_ifw" -eq 0 ]; then
-        rm -f "$IFW_RULE_FILE" 2>/dev/null || true
-        rm -f $ifw_work_files 2>/dev/null
-        log "IFW reconciled: no owned rules"
-        return 0
-    fi
-
-    tmp="$IFW_RULE_FILE.tmp.$$"
-    {
-        echo '<rules>'
-        if [ "$activity_count" -gt 0 ]; then
-            echo '  <activity block="true" log="false">'
-            while IFS= read -r comp; do
-                [ -n "$comp" ] && printf '    <component-filter name="%s"/>\n' "$comp"
-            done < "$activities"
-            echo '  </activity>'
-        fi
-        if [ "$service_count" -gt 0 ]; then
-            echo '  <service block="true" log="false">'
-            while IFS= read -r comp; do
-                [ -n "$comp" ] && printf '    <component-filter name="%s"/>\n' "$comp"
-            done < "$services"
-            echo '  </service>'
-        fi
-        if [ "$receiver_count" -gt 0 ]; then
-            echo '  <broadcast block="true" log="false">'
-            while IFS= read -r comp; do
-                [ -n "$comp" ] && printf '    <component-filter name="%s"/>\n' "$comp"
-            done < "$receivers"
-            echo '  </broadcast>'
-        fi
-        echo '</rules>'
-    } > "$tmp" 2>/dev/null || {
-        rm -f "$tmp" $ifw_work_files 2>/dev/null
-        log "IFW-WRITE-FAILED temp=$tmp"
-        return 1
-    }
-
-    chmod 0644 "$tmp" 2>/dev/null || {
-        rm -f "$tmp" $ifw_work_files 2>/dev/null
-        log "IFW-CHMOD-FAILED temp=$tmp"
-        return 1
-    }
-    command -v restorecon >/dev/null 2>&1 && restorecon "$tmp" >/dev/null 2>&1 || true
-    mv -f "$tmp" "$IFW_RULE_FILE" 2>/dev/null || {
-        rm -f "$tmp" $ifw_work_files 2>/dev/null
-        log "IFW-COMMIT-FAILED file=$IFW_RULE_FILE"
-        return 1
-    }
-    command -v restorecon >/dev/null 2>&1 && restorecon "$IFW_RULE_FILE" >/dev/null 2>&1 || true
-    rm -f $ifw_work_files 2>/dev/null
-    log "IFW reconciled: activity=$activity_count receiver=$receiver_count service=$service_count total=$total_ifw file=$IFW_RULE_FILE"
+    rm -f "$IFW_APPLIED_CKSUM" 2>/dev/null
     return 0
 }
 
@@ -3293,7 +3516,10 @@ add_membership_and_disable() {
         case $? in
             0) _amd_disabled=1 ;;
             1) _amd_disabled=0 ;;
-            *) [ "$(get_component_override_state "$user" "$comp")" = "disabled" ] && _amd_disabled=1 || _amd_disabled=0 ;;
+            *)
+                _amd_state=$(aad_get_component_override_state_checked "$user" "$comp" 2>/dev/null) || { log "COMPONENT-STATE-UNKNOWN u$user: $comp"; return 1; }
+                [ "$_amd_state" = "disabled" ] && _amd_disabled=1 || _amd_disabled=0
+                ;;
         esac
         if [ "$_amd_disabled" = "1" ]; then
             aad_fail_fast_reset
@@ -3301,7 +3527,40 @@ add_membership_and_disable() {
             return 0
         fi
     else
-        ensure_original_state "$user" "$comp"
+        # Category hand-off: when the same component is already owned and
+        # disabled for another active category, adding the new membership must
+        # not restore/re-disable it or recapture a stale "original" state.
+        if has_any_membership "$user" "$comp" && state_record_exists "$user" "$comp"; then
+            aad_pkg_component_disabled "$user" "$comp"
+            case $? in
+                0) _amd_owned_disabled=1 ;;
+                1) _amd_owned_disabled=0 ;;
+                *)
+                    _amd_state=$(aad_get_component_override_state_checked "$user" "$comp" 2>/dev/null) || { log "COMPONENT-STATE-UNKNOWN handoff u$user: $comp"; return 1; }
+                    [ "$_amd_state" = "disabled" ] && _amd_owned_disabled=1 || _amd_owned_disabled=0
+                    ;;
+            esac
+            if [ "$_amd_owned_disabled" = "1" ]; then
+                if aad_db_lock "$MEMBERSHIP_DB_LOCK"; then
+                    membership_exists "$user" "$comp" "$cat" || printf '%s|%s|%s
+' "$user" "$comp" "$cat" >> "$DISABLED_LIST"
+                    aad_db_unlock "$MEMBERSHIP_DB_LOCK"
+                    if [ "${AAD_PKG_SNAPSHOT_KEY:-}" = "$user|${comp%%/*}" ]; then
+                        AAD_PKG_MEMBERSHIPS="$AAD_PKG_MEMBERSHIPS
+|$user|$comp|$cat|"
+                    fi
+                    aad_fail_fast_reset
+                    log "MEMBERSHIP-HANDOFF ($cat) u$user: $comp (already module-disabled)"
+                    return 0
+                fi
+                log "MEMBERSHIP-LOCK-FAILED handoff ($cat) u$user: $comp"
+                return 1
+            fi
+        fi
+        if ! ensure_original_state "$user" "$comp"; then
+            log "DISABLE-SKIP ($cat) u$user: $comp reason=original_state_unavailable"
+            return 1
+        fi
     fi
 
     if disable_component_smart "$user" "$comp"; then
@@ -3385,29 +3644,229 @@ restore_all_for_package() {
     done
 }
 
-aad_restore_appops_overlay_control() {
-    _roc_user="$1"; _roc_pkg="$2"
-    if command -v cmd >/dev/null 2>&1; then
-        cmd appops set --user "$_roc_user" "$_roc_pkg" SYSTEM_ALERT_WINDOW default 2>/dev/null || true
-        cmd appops set --user "$_roc_user" "$_roc_pkg" TOAST_WINDOW default 2>/dev/null || true
+aad_package_presence_authoritative() {
+    _ppa_user="$1"; _ppa_pkg="$2"
+    _ppa_raw=$(cap_list_packages_raw "$_ppa_user" 0 0 "$_ppa_pkg" 2>/dev/null); _ppa_rc=$?
+    [ "$_ppa_rc" -eq 0 ] || return 2
+    printf '%s\n' "$_ppa_raw" | sed 's/^package://; s/[[:space:]].*$//' | grep -Fxq -- "$_ppa_pkg" && return 0
+    return 1
+}
+
+aad_user_presence_authoritative() {
+    _upa_user="$1"
+    _upa_raw=$(cap_list_users_raw 2>/dev/null); _upa_rc=$?
+    [ "$_upa_rc" -eq 0 ] || return 2
+    _upa_ids=$(printf '%s\n' "$_upa_raw" | awk '
+        /UserInfo\{[0-9]+/ {match($0,/UserInfo\{[0-9]+/); print substr($0,RSTART+9,RLENGTH-9)}
+        /id=[0-9]+/ {match($0,/id=[0-9]+/); print substr($0,RSTART+3,RLENGTH-3)}
+        /^[[:space:]]*User [0-9]+:/ {match($0,/User [0-9]+/); print substr($0,RSTART+5,RLENGTH-5)}
+    ' | sort -nu)
+    [ -n "$_upa_ids" ] || return 2
+    printf '%s\n' "$_upa_ids" | grep -Fxq -- "$_upa_user" && return 0
+    return 1
+}
+
+
+aad_restore_component_state_db() {
+    _rcsd_db="$1"
+    [ -n "$_rcsd_db" ] || return 1
+    [ -s "$_rcsd_db" ] || { rm -f "$_rcsd_db" 2>/dev/null || true; return 0; }
+    _rcsd_tmp=$(aad_mktemp_near "$_rcsd_db")
+    [ -n "$_rcsd_tmp" ] || return 1
+    : > "$_rcsd_tmp" 2>/dev/null || { rm -f "$_rcsd_tmp" 2>/dev/null; return 1; }
+    _rcsd_failed=0
+    _rcsd_total=0
+    aad_package_dump_cache_reset
+    while IFS='|' read -r _u _comp _orig _applied; do
+        [ -n "$_comp" ] || continue
+        _rcsd_total=$((_rcsd_total + 1))
+        [ -n "$_applied" ] || _applied=disabled
+        _pkg=${_comp%%/*}
+        _cur=$(aad_get_component_override_state_checked "$_u" "$_comp" 2>/dev/null)
+        _cur_rc=$?
+        if [ "$_cur_rc" -ne 0 ]; then
+            aad_package_presence_authoritative "$_u" "$_pkg"; _pkg_rc=$?
+            if [ "$_pkg_rc" -eq 1 ]; then
+                log "COMPONENT-RESTORE-RETIRED u$_u $_comp reason=package_absent"
+                continue
+            fi
+            aad_user_presence_authoritative "$_u"; _usr_rc=$?
+            if [ "$_usr_rc" -eq 1 ]; then
+                log "COMPONENT-RESTORE-RETIRED u$_u $_comp reason=user_absent"
+                continue
+            fi
+            printf '%s|%s|%s|%s\n' "$_u" "$_comp" "$_orig" "$_applied" >> "$_rcsd_tmp"
+            _rcsd_failed=1
+            log "COMPONENT-RESTORE-PENDING u$_u $_comp reason=current_state_unknown"
+            continue
+        fi
+
+        if [ "$_cur" != "$_applied" ]; then
+            log "COMPONENT-RESTORE-PRESERVE u$_u $_comp external=$_cur module_applied=$_applied"
+            continue
+        fi
+
+        _want="${_orig:-default}"
+        if ! set_component_state_smart "$_u" "$_comp" "$_want"; then
+            printf '%s|%s|%s|%s\n' "$_u" "$_comp" "$_orig" "$_applied" >> "$_rcsd_tmp"
+            _rcsd_failed=1
+            log "COMPONENT-RESTORE-PENDING u$_u $_comp reason=set_failed wanted=$_want"
+            continue
+        fi
+        aad_package_dump_invalidate "$_pkg"
+        _verify=$(aad_get_component_override_state_checked "$_u" "$_comp" 2>/dev/null)
+        _verify_rc=$?
+        if [ "$_verify_rc" -ne 0 ] || [ "$_verify" != "$_want" ]; then
+            printf '%s|%s|%s|%s\n' "$_u" "$_comp" "$_orig" "$_applied" >> "$_rcsd_tmp"
+            _rcsd_failed=1
+            log "COMPONENT-RESTORE-PENDING u$_u $_comp reason=verify_failed current=${_verify:-unknown} expected=$_want"
+        else
+            log "COMPONENT-RESTORED u$_u $_comp -> $_want"
+        fi
+    done < "$_rcsd_db"
+    aad_package_dump_cache_reset
+    chmod 600 "$_rcsd_tmp" 2>/dev/null || true
+    if [ -s "$_rcsd_tmp" ]; then
+        mv -f "$_rcsd_tmp" "$_rcsd_db" 2>/dev/null || { rm -f "$_rcsd_tmp" 2>/dev/null; return 1; }
+    else
+        rm -f "$_rcsd_tmp" "$_rcsd_db" 2>/dev/null
     fi
-    return 0
+    log "COMPONENT-RESTORE-SUMMARY total=$_rcsd_total failed=$_rcsd_failed db=$_rcsd_db"
+    [ "$_rcsd_failed" -eq 0 ]
+}
+
+aad_parse_appops_mode() {
+    _ap_raw="$1"
+    [ -n "$_ap_raw" ] || return 1
+    _ap_norm=$(printf '%s\n' "$_ap_raw" | awk '
+        tolower($0) ~ /(allow|ignore|deny|default|foreground)/ {
+            for (i=1; i<=NF; i++) {
+                t=tolower($i)
+                gsub(/[^a-z]/, "", t)
+                if (t ~ /^(allow|ignore|deny|default|foreground)$/) {
+                    print t
+                    exit
+                }
+            }
+        }
+    ')
+    [ -n "$_ap_norm" ] && echo "$_ap_norm" || return 1
+}
+
+aad_restore_appops_state() {
+    _ras_user_filter="${1:-}"; _ras_pkg_filter="${2:-}"
+    _ras_db="$DATA_DIR/.appops_state"
+    [ -f "$_ras_db" ] || return 0
+    command -v cmd >/dev/null 2>&1 || return 1
+
+    _ras_tmp=$(aad_mktemp_near "$_ras_db")
+    [ -n "$_ras_tmp" ] || return 1
+    : > "$_ras_tmp" 2>/dev/null || { rm -f "$_ras_tmp"; return 1; }
+    _ras_failed=0
+
+    while IFS='|' read -r _u _p _op _orig _appl; do
+        [ -n "$_p" ] || continue
+        [ -n "$_appl" ] || _appl="ignore"
+        if { [ -n "$_ras_user_filter" ] && [ "$_u" != "$_ras_user_filter" ]; } || { [ -n "$_ras_pkg_filter" ] && [ "$_p" != "$_ras_pkg_filter" ]; }; then
+            printf '%s|%s|%s|%s|%s\n' "$_u" "$_p" "$_op" "$_orig" "$_appl" >> "$_ras_tmp"
+            continue
+        fi
+
+        _out=$(cmd appops get --user "$_u" "$_p" "$_op" 2>/dev/null); _get_rc=$?
+        _cur=$(aad_parse_appops_mode "$_out" 2>/dev/null); _parse_rc=$?
+        if [ "$_get_rc" -ne 0 ] || [ "$_parse_rc" -ne 0 ] || [ -z "$_cur" ]; then
+            aad_package_presence_authoritative "$_u" "$_p"; _ppa_rc=$?
+            if [ "$_ppa_rc" -eq 1 ]; then
+                log "APPOPS-RESTORE-RETIRED u$_u $_p $_op reason=package_absent"
+                continue
+            fi
+            printf '%s|%s|%s|%s|%s\n' "$_u" "$_p" "$_op" "$_orig" "$_appl" >> "$_ras_tmp"
+            _ras_failed=1
+            log "APPOPS-RESTORE-PENDING u$_u $_p $_op reason=read_failed"
+            continue
+        fi
+
+        if [ "$_cur" != "$_appl" ]; then
+            log "APPOPS-RESTORE-PRESERVE u$_u $_p $_op external=$_cur module_applied=$_appl"
+            continue
+        fi
+
+        _want="${_orig:-default}"
+        if ! cmd appops set --user "$_u" "$_p" "$_op" "$_want" >/dev/null 2>&1; then
+            printf '%s|%s|%s|%s|%s\n' "$_u" "$_p" "$_op" "$_orig" "$_appl" >> "$_ras_tmp"
+            _ras_failed=1
+            log "APPOPS-RESTORE-PENDING u$_u $_p $_op reason=set_failed"
+            continue
+        fi
+        _verify_out=$(cmd appops get --user "$_u" "$_p" "$_op" 2>/dev/null); _verify_rc=$?
+        _verify=$(aad_parse_appops_mode "$_verify_out" 2>/dev/null)
+        if [ "$_verify_rc" -ne 0 ] || [ "$_verify" != "$_want" ]; then
+            printf '%s|%s|%s|%s|%s\n' "$_u" "$_p" "$_op" "$_orig" "$_appl" >> "$_ras_tmp"
+            _ras_failed=1
+            log "APPOPS-RESTORE-PENDING u$_u $_p $_op reason=verify_failed current=${_verify:-unknown} expected=$_want"
+        else
+            log "APPOPS-RESTORED u$_u $_p $_op -> $_want"
+        fi
+    done < "$_ras_db"
+
+    chmod 600 "$_ras_tmp" 2>/dev/null || true
+    if [ -s "$_ras_tmp" ]; then
+        mv -f "$_ras_tmp" "$_ras_db" 2>/dev/null || { rm -f "$_ras_tmp"; return 1; }
+    else
+        rm -f "$_ras_tmp" "$_ras_db" 2>/dev/null
+    fi
+    [ "$_ras_failed" -eq 0 ]
+}
+
+aad_restore_appops_overlay_control() {
+    aad_restore_appops_state "$1" "$2"
 }
 
 aad_apply_appops_overlay_control() {
-    [ "$(read_bool_setting BLOCK_OVERLAY_ADS 1)" = "1" ] || return 0
-    _aoc_user="$1"; _aoc_pkg="$2"
-    is_system_protected "$_aoc_pkg" && return 0
-    is_globally_whitelisted "$_aoc_pkg" && return 0
-    if command -v cmd >/dev/null 2>&1; then
-        _aoc_cur=$(cmd appops get --user "$_aoc_user" "$_aoc_pkg" SYSTEM_ALERT_WINDOW 2>/dev/null)
+    [ "$(read_bool_setting BLOCK_ADS 0)" = "1" ] || return 0
+    [ "$(read_bool_setting BLOCK_OVERLAY_ADS 0)" = "1" ] || return 0
+    _aoc_user="$1"; _aoc_pkg="$2"; _aoc_scope_hint="${3:-}"
+    [ "$_aoc_scope_hint" = "scope-ok" ] || is_package_in_scope "$_aoc_pkg" "$_aoc_user" || return 0
+    command -v cmd >/dev/null 2>&1 || return 1
+
+    _appops_db="$DATA_DIR/.appops_state"
+    _aoc_failed=0
+    for _op in SYSTEM_ALERT_WINDOW TOAST_WINDOW; do
+        _aoc_out=$(cmd appops get --user "$_aoc_user" "$_aoc_pkg" "$_op" 2>/dev/null); _aoc_get_rc=$?
+        _aoc_cur=$(aad_parse_appops_mode "$_aoc_out" 2>/dev/null); _aoc_parse_rc=$?
+        if [ "$_aoc_get_rc" -ne 0 ] || [ "$_aoc_parse_rc" -ne 0 ] || [ -z "$_aoc_cur" ]; then
+            _aoc_failed=1
+            log "APPOPS-APPLY-PENDING u$_aoc_user $_aoc_pkg $_op reason=read_failed"
+            continue
+        fi
         case "$_aoc_cur" in
-            *allow*|*default*)
-                cmd appops set --user "$_aoc_user" "$_aoc_pkg" SYSTEM_ALERT_WINDOW ignore 2>/dev/null || true
-                cmd appops set --user "$_aoc_user" "$_aoc_pkg" TOAST_WINDOW ignore 2>/dev/null || true
-                log "APPOPS-OVERLAY-BLOCKED user=$_aoc_user pkg=$_aoc_pkg SYSTEM_ALERT_WINDOW=ignore"
+            allow|default)
+                if ! grep -q "^${_aoc_user}|${_aoc_pkg}|${_op}|" "$_appops_db" 2>/dev/null; then
+                    _aoc_tmp=$(aad_mktemp_near "$_appops_db")
+                    [ -n "$_aoc_tmp" ] || return 1
+                    { [ -f "$_appops_db" ] && cat "$_appops_db"; printf '%s|%s|%s|%s|ignore\n' "$_aoc_user" "$_aoc_pkg" "$_op" "$_aoc_cur"; } > "$_aoc_tmp" 2>/dev/null || { rm -f "$_aoc_tmp"; return 1; }
+                    chmod 600 "$_aoc_tmp" 2>/dev/null || true
+                    mv -f "$_aoc_tmp" "$_appops_db" 2>/dev/null || { rm -f "$_aoc_tmp"; return 1; }
+                fi
+                if ! cmd appops set --user "$_aoc_user" "$_aoc_pkg" "$_op" ignore >/dev/null 2>&1; then
+                    _aoc_failed=1
+                    log "APPOPS-APPLY-PENDING user=$_aoc_user pkg=$_aoc_pkg op=$_op reason=set_failed"
+                    continue
+                fi
+                _aoc_verify_out=$(cmd appops get --user "$_aoc_user" "$_aoc_pkg" "$_op" 2>/dev/null); _aoc_verify_rc=$?
+                _aoc_verify=$(aad_parse_appops_mode "$_aoc_verify_out" 2>/dev/null)
+                if [ "$_aoc_verify_rc" -eq 0 ] && [ "$_aoc_verify" = "ignore" ]; then
+                    log "APPOPS-OVERLAY-BLOCKED user=$_aoc_user pkg=$_aoc_pkg op=$_op (orig=$_aoc_cur -> ignore)"
+                else
+                    _aoc_failed=1
+                    log "APPOPS-APPLY-PENDING user=$_aoc_user pkg=$_aoc_pkg op=$_op verify=${_aoc_verify:-unknown}"
+                fi
                 ;;
         esac
+    done
+    if [ "$_aoc_failed" -ne 0 ]; then
+        printf '%s\n' "$(date +%s 2>/dev/null)|appops-apply" > "$DATA_DIR/.side_effects.pending" 2>/dev/null || true
+        return 1
     fi
     return 0
 }
@@ -3428,12 +3887,17 @@ process_package_user() {
     aad_pkg_snapshot_load "$user" "$pkg"
     AAD_ALREADY_DISABLED_COUNT=0
     AAD_PACKAGE_AUDIT_READY=0
-    record_package_audit "$user" "$pkg" && AAD_PACKAGE_AUDIT_READY=1
+    if record_package_audit "$user" "$pkg"; then
+        AAD_PACKAGE_AUDIT_READY=1
+    else
+        log "PACKAGE-RECONCILE-PENDING u$user: $pkg reason=discovery_failed previous_candidates_and_memberships_preserved"
+        rm -f "$desired" "$existing" 2>/dev/null
+        aad_pkg_snapshot_clear
+        return 1
+    fi
 
-    if is_system_protected "$pkg"; then
-        log "POLICY-SKIP protected u$user: $pkg"
-    elif is_globally_whitelisted "$pkg"; then
-        log "WHITELIST-SKIP global u$user: $pkg"
+    if ! is_package_in_scope "$pkg" "$user"; then
+        log "SCOPE-SKIP u$user: $pkg (protected, whitelisted, or system app with INCLUDE_SYSTEM_APPS=0)"
     else
         for cat in $CATEGORIES; do
             category_enabled "$cat" || continue
@@ -3446,10 +3910,6 @@ process_package_user() {
             [ -z "$comps" ] && continue
             count=$(printf '%s\n' "$comps" | grep -c .)
             max=$(read_max_matches)
-            mode_now=$(read_component_mode)
-            if [ "$cat" = "ADS" ] && [ "$mode_now" = "AGGRESSIVE" ]; then
-                max=$(read_aggressive_ads_max_matches)
-            fi
             if [ "$count" -gt "$max" ]; then
                 frozen=$(awk -F'|' -v u="$user" -v p="$pkg/" -v k="$cat" '$1==u && $3==k && index($2,p)==1 {print $1 "|" $2 "|" $3}' "$DISABLED_LIST" 2>/dev/null)
                 [ -n "$frozen" ] && printf '%s\n' "$frozen" >> "$desired"
@@ -3467,46 +3927,64 @@ process_package_user() {
 
     awk -F'|' -v u="$user" -v p="$pkg/" '$1==u && index($2,p)==1' "$DISABLED_LIST" 2>/dev/null > "$existing"
     log "PACKAGE-RECONCILE u$user: $pkg existing_memberships=$(grep -c . "$existing" 2>/dev/null) desired_memberships=$(grep -c . "$desired" 2>/dev/null)"
-    while IFS='|' read -r eu ec ek; do
-        [ -z "$ec" ] && continue
-        if ! grep -Fxq -- "$eu|$ec|$ek" "$desired" 2>/dev/null; then
-            remove_membership "$eu" "$ec" "$ek"
-            log "POLICY-REMOVE ($ek) u$eu: $ec"
-            if ! has_any_membership "$eu" "$ec"; then
-                if is_globally_whitelisted "$pkg"; then
-                    log "WHITELIST-RESTORE global ($ek) u$eu: $ec"
-                elif is_category_whitelisted "$pkg" "$ek"; then
-                    log "WHITELIST-RESTORE ($ek) u$eu: $ec"
-                fi
-                restore_original_state "$eu" "$ec"
-            fi
-        fi
-    done < "$existing"
 
+    # Add desired memberships first. This keeps a component continuously owned
+    # when policy hands it from ADS to ANALYTICS (or vice versa), avoiding a
+    # transient restore/re-disable cycle and preserving the original state.
     disabled_now=0
     while IFS='|' read -r du dc dk; do
         [ -z "$dc" ] && continue
         if add_membership_and_disable "$du" "$dc" "$dk"; then
-            disabled_now=$((disabled_now + 1))
+            if ! grep -Fxq -- "$du|$dc|$dk" "$existing" 2>/dev/null; then
+                disabled_now=$((disabled_now + 1))
+            fi
         fi
         if [ -n "$AAD_FAIL_FAST_ABORT" ] && [ -f "$AAD_FAIL_FAST_ABORT" ]; then
             break
         fi
     done < "$desired"
 
+    if [ -z "$AAD_FAIL_FAST_ABORT" ] || [ ! -f "$AAD_FAIL_FAST_ABORT" ]; then
+        while IFS='|' read -r eu ec ek; do
+            [ -z "$ec" ] && continue
+            if ! grep -Fxq -- "$eu|$ec|$ek" "$desired" 2>/dev/null; then
+                remove_membership "$eu" "$ec" "$ek"
+                log "POLICY-REMOVE ($ek) u$eu: $ec"
+                if ! has_any_membership "$eu" "$ec"; then
+                    if is_globally_whitelisted "$pkg"; then
+                        log "WHITELIST-RESTORE global ($ek) u$eu: $ec"
+                    elif is_category_whitelisted "$pkg" "$ek"; then
+                        log "WHITELIST-RESTORE ($ek) u$eu: $ec"
+                    fi
+                    restore_original_state "$eu" "$ec"
+                fi
+            fi
+        done < "$existing"
+    fi
+
     [ "${AAD_ALREADY_DISABLED_COUNT:-0}" -gt 0 ] && \
         log "ALREADY-DISABLED u$user: $pkg components=$AAD_ALREADY_DISABLED_COUNT"
 
-    if [ "$disabled_now" -gt 0 ] || [ -s "$existing" ]; then
-        aad_apply_appops_overlay_control "$user" "$pkg"
+    # Overlay AppOps is an ADS-only side effect. A package that only has
+    # ANALYTICS memberships must not receive ADS overlay restrictions merely
+    # because BLOCK_ADS is globally enabled for other packages.
+    _ppu_side_failed=0
+    if grep -q '|ADS$' "$desired" 2>/dev/null; then
+        aad_apply_appops_overlay_control "$user" "$pkg" || _ppu_side_failed=1
+    else
+        aad_restore_appops_overlay_control "$user" "$pkg" >/dev/null 2>&1 || _ppu_side_failed=1
     fi
+    [ "$_ppu_side_failed" -eq 0 ] || printf '%s
+' "$(date +%s 2>/dev/null)|package-appops" > "$DATA_DIR/.side_effects.pending" 2>/dev/null || true
 
+    [ "${AAD_AUDIT_FULL_SCAN:-0}" = "1" ] || aad_candidate_cache_update_package "$user" "$pkg" >/dev/null 2>&1 || true
     aad_pkg_snapshot_clear
     rm -f "$desired" "$existing"
     echo "$disabled_now"
     if [ -n "$AAD_FAIL_FAST_ABORT" ] && [ -f "$AAD_FAIL_FAST_ABORT" ]; then
         return 2
     fi
+    [ "${_ppu_side_failed:-0}" -eq 0 ] || return 1
     return 0
 }
 
@@ -3522,12 +4000,16 @@ process_package_all_users() {
     if [ -z "$snapshot" ] || [ ! -f "$snapshot" ]; then
         snapshot=$(aad_mktemp_near "$DATA_DIR/.installed_keys.delta")
         [ -n "$snapshot" ] || return 1
-        list_all_installed_package_keys > "$snapshot"
+        if ! list_all_installed_package_keys > "$snapshot"; then
+            rm -f "$snapshot" 2>/dev/null
+            log "CONFIG-DELTA failed: authoritative installed-package snapshot unavailable"
+            return 1
+        fi
         own_snapshot=1
     fi
 
     total=0
-    users=$(list_user_ids)
+    users=$(list_user_ids_checked) || { [ "$own_snapshot" -eq 1 ] && rm -f "$snapshot" 2>/dev/null; return 1; }
     for user in $users; do
         log "CONFIG-DELTA user=$user package=$pkg begin"
         if package_installed_in_snapshot "$snapshot" "$user" "$pkg"; then
@@ -3538,9 +4020,15 @@ process_package_all_users() {
             log "CONFIG-DELTA user=$user package=$pkg end installed=yes rc=$rc ops=$n"
             [ "$rc" -eq 2 ] && { [ "$own_snapshot" -eq 1 ] && rm -f "$snapshot" 2>/dev/null; return 2; }
         else
-            restore_all_for_package_user "$user" "$pkg"
-            rc=$?
-            log "CONFIG-DELTA user=$user package=$pkg end installed=no restore_rc=${rc:-0}"
+            _ppau_ok_users="$DATA_DIR/.users_snapshot_ok"
+            if [ -f "$_ppau_ok_users" ] && grep -Fxq "$user" "$_ppau_ok_users" 2>/dev/null; then
+                restore_all_for_package_user "$user" "$pkg"
+                rc=$?
+                log "CONFIG-DELTA user=$user package=$pkg end installed=no restore_rc=${rc:-0}"
+            else
+                rc=0
+                log "CONFIG-DELTA user=$user package=$pkg snapshot=unknown; ownership preserved for retry"
+            fi
         fi
     done
     [ "$own_snapshot" -eq 1 ] && rm -f "$snapshot" 2>/dev/null
@@ -3554,7 +4042,11 @@ cleanup_stale_records() {
     own_snapshot=0
     if [ -z "$installed_keys" ] || [ ! -f "$installed_keys" ]; then
         installed_keys="$DATA_DIR/.installed_keys.$$"
-        list_all_installed_package_keys > "$installed_keys"
+        if ! list_all_installed_package_keys > "$installed_keys"; then
+            rm -f "$installed_keys" 2>/dev/null
+            log "STALE-SKIP: authoritative installed-package snapshot unavailable; state preserved"
+            return 1
+        fi
         own_snapshot=1
     fi
 
@@ -3563,6 +4055,8 @@ cleanup_stale_records() {
         [ "$own_snapshot" -eq 1 ] && rm -f "$installed_keys" 2>/dev/null
         return 0
     fi
+
+    _ok_users_file="$DATA_DIR/.users_snapshot_ok"
 
     aad_db_lock "$MEMBERSHIP_DB_LOCK" || {
         log "MEMBERSHIP-LOCK-FAILED stale-cleanup"
@@ -3589,10 +4083,16 @@ cleanup_stale_records() {
         cat=${rest#*|}
         [ -n "$comp" ] || continue
         pkg=${comp%%/*}
+
+        if [ -f "$_ok_users_file" ] && ! grep -Fxq "$user" "$_ok_users_file" 2>/dev/null; then
+            printf '%s|%s|%s\n' "$user" "$comp" "$cat" >> "$tmp"
+            continue
+        fi
+
         if grep -Fxq -- "$user|$pkg" "$installed_keys" 2>/dev/null; then
             printf '%s|%s|%s\n' "$user" "$comp" "$cat" >> "$tmp"
         else
-            log "STALE: dropping record u$user $comp ($cat); package truly absent from installed snapshot."
+            log "STALE: dropping record u$user $comp ($cat); package truly absent from verified user snapshot."
             stale_dropped=$((stale_dropped + 1))
         fi
     done
@@ -3624,6 +4124,11 @@ cleanup_stale_records() {
             scomp=${srest%%|*}
             [ -n "$scomp" ] || continue
             spkg=${scomp%%/*}
+
+            if [ -f "$_ok_users_file" ] && ! grep -Fxq "$suser" "$_ok_users_file" 2>/dev/null; then
+                continue
+            fi
+
             grep -Fxq -- "$suser|$spkg" "$installed_keys" 2>/dev/null && continue
             remove_state_record "$suser" "$scomp"
         done
@@ -3646,12 +4151,11 @@ retry_orphan_restores() {
     old_ifs=$IFS
     IFS='
 '
-    for record in $orphan_records; do
-        [ -n "$record" ] || continue
-        user=${record%%|*}
-        rest=${record#*|}
+    for orphan_line in $orphan_records; do
+        [ -n "$orphan_line" ] || continue
+        user=${orphan_line%%|*}
+        rest=${orphan_line#*|}
         comp=${rest%%|*}
-        original=${rest#*|}
         [ -n "$comp" ] || continue
         if ! has_any_membership "$user" "$comp"; then
             restore_original_state "$user" "$comp"
@@ -3660,9 +4164,41 @@ retry_orphan_restores() {
     IFS=$old_ifs
 }
 
+rebuild_composite_rules() {
+    _rc_tmp="$DATA_DIR/.rules_composite.tmp.$$"
+    {
+        if [ -f "$DATA_DIR/rules.vendor.conf" ]; then
+            cat "$DATA_DIR/rules.vendor.conf"
+        elif [ -f "$MODDIR/rules.vendor.conf" ]; then
+            cat "$MODDIR/rules.vendor.conf"
+        fi
+        printf '\n\n# --- USER CUSTOM RULES ---\n'
+        if [ -f "$DATA_DIR/rules.user.conf" ]; then
+            cat "$DATA_DIR/rules.user.conf"
+        elif [ -f "$MODDIR/rules.user.conf" ]; then
+            cat "$MODDIR/rules.user.conf"
+        fi
+    } > "$_rc_tmp" 2>/dev/null
+    if [ ! -s "$_rc_tmp" ]; then
+        rm -f "$_rc_tmp" 2>/dev/null
+        return 1
+    fi
+    chmod 600 "$_rc_tmp" 2>/dev/null || true
+    if [ -f "$RULES_FILE" ] && cmp -s "$_rc_tmp" "$RULES_FILE" 2>/dev/null; then
+        rm -f "$_rc_tmp" 2>/dev/null
+        return 0
+    fi
+    if mv -f "$_rc_tmp" "$RULES_FILE" 2>/dev/null; then
+        sync 2>/dev/null || true
+        return 0
+    fi
+    rm -f "$_rc_tmp" 2>/dev/null
+    return 1
+}
+
 compute_config_hash() {
     {
-        for f in "$SETTINGS_FILE" "$RULES_FILE" "$WHITELIST_FILE" "$WHITE_ADS_FILE" "$WHITE_ANALYTICS_FILE"; do
+        for f in "$SETTINGS_FILE" "$DATA_DIR/rules.vendor.conf" "$DATA_DIR/rules.user.conf" "$RULES_FILE" "$WHITELIST_FILE" "$WHITE_ADS_FILE" "$WHITE_ANALYTICS_FILE" "$SMART_REWARD_FILE" "$QA_TARGETS_FILE"; do
             [ -f "$f" ] && cat "$f"
             echo "--FILE--$f"
         done
@@ -3671,11 +4207,1122 @@ compute_config_hash() {
 
 compute_base_policy_hash() {
     {
-        for f in "$SETTINGS_FILE" "$RULES_FILE"; do
+        for f in "$SETTINGS_FILE" "$DATA_DIR/rules.vendor.conf" "$DATA_DIR/rules.user.conf" "$RULES_FILE" "$SMART_REWARD_FILE"; do
             [ -f "$f" ] && cat "$f"
             echo "--FILE--$f"
         done
     } | cksum 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+
+compute_config_hash_with_settings() {
+    _cchs_settings="$1"
+    {
+        [ -f "$_cchs_settings" ] && cat "$_cchs_settings"
+        # Keep the canonical SETTINGS_FILE marker so a snapshot with identical
+        # bytes hashes exactly like the live configuration.
+        echo "--FILE--$SETTINGS_FILE"
+        for f in "$DATA_DIR/rules.vendor.conf" "$DATA_DIR/rules.user.conf" "$RULES_FILE" "$WHITELIST_FILE" "$WHITE_ADS_FILE" "$WHITE_ANALYTICS_FILE" "$SMART_REWARD_FILE" "$QA_TARGETS_FILE"; do
+            [ -f "$f" ] && cat "$f"
+            echo "--FILE--$f"
+        done
+    } | cksum 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+compute_discovery_policy_hash() {
+    {
+        echo "candidate-schema=v3-policy-neutral-discovery"
+        for f in "$DATA_DIR/rules.vendor.conf" "$DATA_DIR/rules.user.conf" "$RULES_FILE"; do
+            [ -f "$f" ] && cat "$f"
+            echo "--FILE--$f"
+        done
+    } | cksum 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+compute_non_primary_settings_hash() {
+    _cnps_file="${1:-${AAD_SETTINGS_SNAPSHOT:-$SETTINGS_FILE}}"
+    if [ -f "$_cnps_file" ]; then
+        awk '
+            /^[[:space:]]*BLOCK_ADS[[:space:]]*=/ {next}
+            /^[[:space:]]*BLOCK_ANALYTICS[[:space:]]*=/ {next}
+            /^[[:space:]]*INCLUDE_SYSTEM_APPS[[:space:]]*=/ {next}
+            /^[[:space:]]*SCAN_SYSTEM_APPS[[:space:]]*=/ {next}
+            {print}
+        ' "$_cnps_file"
+    fi | cksum 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
+aad_policy_snapshot_begin() {
+    AAD_SETTINGS_SNAPSHOT=$(aad_mktemp_near "$DATA_DIR/.settings.policy")
+    [ -n "$AAD_SETTINGS_SNAPSHOT" ] || return 1
+    if [ -f "$SETTINGS_FILE" ]; then
+        cp "$SETTINGS_FILE" "$AAD_SETTINGS_SNAPSHOT" 2>/dev/null || { rm -f "$AAD_SETTINGS_SNAPSHOT"; unset AAD_SETTINGS_SNAPSHOT; return 1; }
+    else
+        : > "$AAD_SETTINGS_SNAPSHOT" 2>/dev/null || { unset AAD_SETTINGS_SNAPSHOT; return 1; }
+    fi
+    chmod 600 "$AAD_SETTINGS_SNAPSHOT" 2>/dev/null || true
+    export AAD_SETTINGS_SNAPSHOT
+    AAD_POLICY_START_HASH=$(compute_config_hash_with_settings "$AAD_SETTINGS_SNAPSHOT")
+    AAD_POLICY_DISCOVERY_HASH=$(compute_discovery_policy_hash)
+    AAD_POLICY_NON_PRIMARY_HASH=$(compute_non_primary_settings_hash "$AAD_SETTINGS_SNAPSHOT")
+    export AAD_POLICY_START_HASH AAD_POLICY_DISCOVERY_HASH AAD_POLICY_NON_PRIMARY_HASH
+    return 0
+}
+
+aad_policy_snapshot_end() {
+    [ -n "${AAD_SETTINGS_SNAPSHOT:-}" ] && rm -f "$AAD_SETTINGS_SNAPSHOT" 2>/dev/null
+    unset AAD_SETTINGS_SNAPSHOT AAD_POLICY_START_HASH AAD_POLICY_DISCOVERY_HASH AAD_POLICY_NON_PRIMARY_HASH
+}
+
+aad_write_reconcile_status() {
+    _awrs_state="$1"; _awrs_mode="$2"; _awrs_generation="$3"; _awrs_detail="${4:-}"
+    _awrs_tmp=$(aad_mktemp_near "$RECONCILE_STATUS_FILE")
+    [ -n "$_awrs_tmp" ] || return 0
+    {
+        echo "state=$_awrs_state"
+        echo "mode=$_awrs_mode"
+        echo "generation=$_awrs_generation"
+        echo "timestamp=$(date +%s 2>/dev/null)"
+        [ -n "$_awrs_detail" ] && echo "detail=$_awrs_detail"
+    } > "$_awrs_tmp" 2>/dev/null || { rm -f "$_awrs_tmp"; return 0; }
+    chmod 600 "$_awrs_tmp" 2>/dev/null || true
+    mv -f "$_awrs_tmp" "$RECONCILE_STATUS_FILE" 2>/dev/null || rm -f "$_awrs_tmp" 2>/dev/null
+}
+
+aad_candidate_cache_rebuild_from_audit() {
+    [ -f "$COMPONENT_AUDIT_FILE" ] || return 1
+    _acra_tmp=$(aad_mktemp_near "$CANDIDATE_FILE")
+    [ -n "$_acra_tmp" ] || return 1
+    awk -F'|' 'NR>1 && ($6=="SAFE" || $6=="EXACT_PROVIDER" || $6=="EXACT_ACTIVITY" || $6=="PUSH_RISK") && $2!="" && $3!="" && $4!="" && $8!="" {print $2 "|" $3 "|" $4 "|" $8 "|" $6}' "$COMPONENT_AUDIT_FILE" 2>/dev/null | sort -u > "$_acra_tmp"
+    chmod 600 "$_acra_tmp" 2>/dev/null || true
+    mv -f "$_acra_tmp" "$CANDIDATE_FILE" 2>/dev/null || { rm -f "$_acra_tmp"; return 1; }
+    return 0
+}
+
+aad_candidate_cache_update_package() {
+    _accu_user="$1"; _accu_pkg="$2"
+    [ -f "$COMPONENT_AUDIT_FILE" ] || return 0
+    _accu_tmp=$(aad_mktemp_near "$CANDIDATE_FILE")
+    [ -n "$_accu_tmp" ] || return 1
+    {
+        [ -f "$CANDIDATE_FILE" ] && awk -F'|' -v u="$_accu_user" -v p="$_accu_pkg" '!($1==u && $2==p)' "$CANDIDATE_FILE"
+        awk -F'|' -v u="$_accu_user" -v p="$_accu_pkg" 'NR>1 && $2==u && $3==p && ($6=="SAFE" || $6=="EXACT_PROVIDER" || $6=="EXACT_ACTIVITY" || $6=="PUSH_RISK") && $8!="" {print $2 "|" $3 "|" $4 "|" $8 "|" $6}' "$COMPONENT_AUDIT_FILE"
+    } | sort -u > "$_accu_tmp" 2>/dev/null || { rm -f "$_accu_tmp"; return 1; }
+    chmod 600 "$_accu_tmp" 2>/dev/null || true
+    mv -f "$_accu_tmp" "$CANDIDATE_FILE" 2>/dev/null || { rm -f "$_accu_tmp"; return 1; }
+    return 0
+}
+
+aad_candidate_cache_structural_valid() {
+    [ -f "$CANDIDATE_FILE" ] || return 1
+    if [ -s "$CANDIDATE_FILE" ] && ! awk -F'|' 'NF!=5 || $1 !~ /^[0-9]+$/ || $2=="" || ($3!="ADS" && $3!="ANALYTICS") || $4=="" || $5=="" {bad=1; exit} END{exit bad?1:0}' "$CANDIDATE_FILE" 2>/dev/null; then
+        log "CANDIDATE-CACHE invalid/malformed; deep discovery required"
+        return 1
+    fi
+    [ -f "$DISCOVERY_HASH_FILE" ] || return 1
+    [ "$(cat "$DISCOVERY_HASH_FILE" 2>/dev/null)" = "$(compute_discovery_policy_hash)" ] || return 1
+    [ -f "$NON_PRIMARY_HASH_FILE" ] || return 1
+    [ "$(cat "$NON_PRIMARY_HASH_FILE" 2>/dev/null)" = "$(compute_non_primary_settings_hash)" ] || return 1
+    return 0
+}
+
+aad_candidate_cache_valid() {
+    aad_candidate_cache_structural_valid || return 1
+    _accv_scope=$(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null)
+    if [ "$(read_include_system_apps)" = "1" ] && [ "$_accv_scope" != "ALL" ]; then
+        return 1
+    fi
+    return 0
+}
+
+aad_candidate_cache_bootstrap_from_audit() {
+    # v6.0.8 candidate schema v3 requires policy-neutral manifest discovery.
+    # Older audit logs can be incomplete when primary ADS/ANALYTICS toggles
+    # were disabled, so they must never be promoted into an authoritative v3 cache.
+    log "CANDIDATE-CACHE bootstrap refused: schema v3 requires one authoritative policy-neutral deep discovery"
+    return 1
+}
+
+aad_scope_cache_build_authoritative() {
+    _asc_tmp=$(aad_mktemp_near "$PACKAGE_SCOPE_CACHE")
+    [ -n "$_asc_tmp" ] || return 1
+    : > "$_asc_tmp" 2>/dev/null || { rm -f "$_asc_tmp"; return 1; }
+    _asc_failed=0
+    _asc_users=0
+    _asc_user_list=$(list_user_ids_checked) || { rm -f "$_asc_tmp" 2>/dev/null; return 1; }
+    for _asc_u in $_asc_user_list; do
+        _asc_users=$((_asc_users + 1))
+        _asc_all=$(aad_mktemp_near "$DATA_DIR/.scope_all_u${_asc_u}")
+        _asc_usr=$(aad_mktemp_near "$DATA_DIR/.scope_usr_u${_asc_u}")
+        if [ -z "$_asc_all" ] || [ -z "$_asc_usr" ]; then
+            _asc_failed=1
+            rm -f "$_asc_all" "$_asc_usr" 2>/dev/null
+            continue
+        fi
+        if ! aad_capture_packages_for_user "$_asc_u" 0 0 "$_asc_all" || \
+           ! aad_capture_packages_for_user "$_asc_u" 1 0 "$_asc_usr"; then
+            _asc_failed=1
+            log "SCOPE-CACHE snapshot failed user=$_asc_u"
+            rm -f "$_asc_all" "$_asc_usr" 2>/dev/null
+            continue
+        fi
+        awk -F'|' -v u="$_asc_u" '
+            FILENAME==ARGV[1] {usr[$1]=1; next}
+            $1!="" {print u "|" $1 "|" (($1 in usr) ? "USER" : "SYSTEM")}
+        ' "$_asc_usr" "$_asc_all" >> "$_asc_tmp" 2>/dev/null || _asc_failed=1
+        rm -f "$_asc_all" "$_asc_usr" 2>/dev/null
+    done
+    if [ "$_asc_users" -eq 0 ] || [ "$_asc_failed" -ne 0 ]; then
+        rm -f "$_asc_tmp" 2>/dev/null
+        return 1
+    fi
+    sort -u "$_asc_tmp" -o "$_asc_tmp" 2>/dev/null || { rm -f "$_asc_tmp"; return 1; }
+    chmod 600 "$_asc_tmp" 2>/dev/null || true
+    mv -f "$_asc_tmp" "$PACKAGE_SCOPE_CACHE" 2>/dev/null || { rm -f "$_asc_tmp"; return 1; }
+    log "SCOPE-CACHE rebuilt entries=$(grep -c . "$PACKAGE_SCOPE_CACHE" 2>/dev/null)"
+    return 0
+}
+
+aad_scope_cache_update_package() {
+    _ascu_user="$1"; _ascu_pkg="$2"
+    [ -n "$_ascu_pkg" ] || return 1
+    _ascu_class="USER"
+    if cap_is_system_package "$_ascu_user" "$_ascu_pkg" 2>/dev/null; then
+        _ascu_class="SYSTEM"
+    fi
+    _ascu_tmp=$(aad_mktemp_near "$PACKAGE_SCOPE_CACHE")
+    [ -n "$_ascu_tmp" ] || return 1
+    {
+        [ -f "$PACKAGE_SCOPE_CACHE" ] && awk -F'|' -v u="$_ascu_user" -v p="$_ascu_pkg" '!($1==u && $2==p)' "$PACKAGE_SCOPE_CACHE"
+        printf '%s|%s|%s\n' "$_ascu_user" "$_ascu_pkg" "$_ascu_class"
+    } | sort -u > "$_ascu_tmp" 2>/dev/null || { rm -f "$_ascu_tmp"; return 1; }
+    chmod 600 "$_ascu_tmp" 2>/dev/null || true
+    mv -f "$_ascu_tmp" "$PACKAGE_SCOPE_CACHE" 2>/dev/null || { rm -f "$_ascu_tmp"; return 1; }
+    return 0
+}
+
+aad_scope_cache_ensure() {
+    _asce_need=0
+    [ -s "$PACKAGE_SCOPE_CACHE" ] || _asce_need=1
+    if [ "$_asce_need" -eq 0 ]; then
+        if ! awk -F'|' 'NF!=3 || $1 !~ /^[0-9]+$/ || $2=="" || ($3!="USER" && $3!="SYSTEM") {bad=1; exit} END{exit bad?1:0}' "$PACKAGE_SCOPE_CACHE" 2>/dev/null; then
+            log "SCOPE-CACHE invalid/malformed; authoritative rebuild required"
+            _asce_need=1
+        fi
+    fi
+    if [ "$_asce_need" -eq 0 ]; then
+        _asce_missing=$(
+            {
+                awk -F'|' '$1!="" && $2!="" {print $1 "|" $2}' "$CANDIDATE_FILE" 2>/dev/null
+                awk -F'|' '$1!="" && $2!="" {p=$2; sub(/\/.*/,"",p); print $1 "|" p}' "$DISABLED_LIST" 2>/dev/null
+            } | sort -u | awk -F'|' -v sf="$PACKAGE_SCOPE_CACHE" '
+                BEGIN {
+                    while ((getline line < sf) > 0) {
+                        split(line,a,"|")
+                        if (a[1]!="" && a[2]!="") known[a[1] SUBSEP a[2]]=1
+                    }
+                    close(sf)
+                }
+                !known[$1 SUBSEP $2] {print; exit}
+            '
+        )
+        [ -n "$_asce_missing" ] && _asce_need=1
+    fi
+    [ "$_asce_need" -eq 0 ] && return 0
+    aad_scope_cache_build_authoritative
+}
+
+aad_fast_build_protected_files() {
+    _afbp_protected="$1"; _afbp_unknown="$2"; _afbp_installed="$3"
+    : > "$_afbp_protected"; : > "$_afbp_unknown"
+    _afbp_users=$(
+        {
+            awk -F'|' '$1!="" {print $1}' "$_afbp_installed" 2>/dev/null
+            awk -F'|' '$1!="" {print $1}' "$CANDIDATE_FILE" 2>/dev/null
+            awk -F'|' '$1!="" {print $1}' "$DISABLED_LIST" 2>/dev/null
+        } | sort -nu
+    )
+    for _afbp_u in $_afbp_users; do
+        for _afbp_p in $SYSTEM_PROTECTED; do
+            printf '%s|%s\n' "$_afbp_u" "$_afbp_p" >> "$_afbp_protected"
+        done
+        for _afbp_p in $(aad_dynamic_protected_packages "$_afbp_u" 2>/dev/null); do
+            [ -n "$_afbp_p" ] && printf '%s|%s\n' "$_afbp_u" "$_afbp_p" >> "$_afbp_protected"
+        done
+        [ -f "$DATA_DIR/.dyn_prot_unknown_u${_afbp_u}" ] && printf '%s\n' "$_afbp_u" >> "$_afbp_unknown"
+    done
+    sort -u "$_afbp_protected" -o "$_afbp_protected" 2>/dev/null || true
+    sort -u "$_afbp_unknown" -o "$_afbp_unknown" 2>/dev/null || true
+}
+
+aad_fast_build_desired_memberships() {
+    _afbd_installed="$1"; _afbd_desired="$2"
+    _afbd_in=$(aad_mktemp_near "$DATA_DIR/.fast_input")
+    _afbd_protected=$(aad_mktemp_near "$DATA_DIR/.fast_protected")
+    _afbd_unknown=$(aad_mktemp_near "$DATA_DIR/.fast_protected_unknown")
+    [ -n "$_afbd_in" ] && [ -n "$_afbd_protected" ] && [ -n "$_afbd_unknown" ] || {
+        rm -f "$_afbd_in" "$_afbd_protected" "$_afbd_unknown" 2>/dev/null
+        return 1
+    }
+
+    aad_fast_build_protected_files "$_afbd_protected" "$_afbd_unknown" "$_afbd_installed"
+    _afbd_ads=$(read_bool_setting BLOCK_ADS 0)
+    _afbd_ana=$(read_bool_setting BLOCK_ANALYTICS 0)
+    _afbd_sys=$(read_include_system_apps)
+    _afbd_push=$(read_bool_setting BLOCK_PUSH_SDK 0)
+    _afbd_max=$(read_max_matches)
+    _afbd_cache_scope=$(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null)
+    case "$_afbd_max" in ''|*[!0-9]*) _afbd_max=25 ;; esac
+
+    {
+        awk -F'|' '$1!="" && $2!="" {print "I|" $1 "|" $2}' "$_afbd_installed" 2>/dev/null
+        awk '$0!="" {print "O|" $0}' "$DATA_DIR/.users_snapshot_ok" 2>/dev/null
+        awk -F'|' '$1!="" && $2!="" && $3!="" {print "S|" $1 "|" $2 "|" $3}' "$PACKAGE_SCOPE_CACHE" 2>/dev/null
+        read_global_list | awk '$0!="" {print "G|" $0}'
+        read_category_list ADS | awk '$0!="" {print "A|" $0}'
+        read_category_list ANALYTICS | awk '$0!="" {print "N|" $0}'
+        awk -F'|' '$1!="" && $2!="" {print "P|" $1 "|" $2}' "$_afbd_protected" 2>/dev/null
+        awk '$0!="" {print "U|" $0}' "$_afbd_unknown" 2>/dev/null
+        awk -F'|' '$1!="" && $2!="" && $3!="" {print "E|" $1 "|" $2 "|" $3}' "$DISABLED_LIST" 2>/dev/null
+        awk -F'|' '$1!="" && $2!="" && $3!="" && $4!="" {print "C|" $1 "|" $2 "|" $3 "|" $4 "|" $5}' "$CANDIDATE_FILE" 2>/dev/null
+    } > "$_afbd_in" 2>/dev/null || {
+        rm -f "$_afbd_in" "$_afbd_protected" "$_afbd_unknown" 2>/dev/null
+        return 1
+    }
+
+    awk -F'|' -v ads="$_afbd_ads" -v ana="$_afbd_ana" -v incsys="$_afbd_sys" \
+        -v push="$_afbd_push" -v max="$_afbd_max" -v cachescope="$_afbd_cache_scope" '
+        BEGIN {OFS="|"}
+        $1=="I" {installed[$2 SUBSEP $3]=1; next}
+        $1=="O" {okuser[$2]=1; next}
+        $1=="S" {scope[$2 SUBSEP $3]=$4; next}
+        $1=="G" {global[$2]=1; next}
+        $1=="A" {wads[$2]=1; next}
+        $1=="N" {wana[$2]=1; next}
+        $1=="P" {protected[$2 SUBSEP $3]=1; next}
+        $1=="U" {role_unknown[$2]=1; next}
+        $1=="E" {
+            el=$2 "|" $3 "|" $4
+            existing[el]=1
+            next
+        }
+        $1=="C" {
+            ck=$2 SUBSEP $3 SUBSEP $4 SUBSEP $5
+            risk[ck]=$6
+            candidate[ck]=1
+            next
+        }
+        END {
+            for (ck in candidate) {
+                split(ck,a,SUBSEP)
+                u=a[1]; p=a[2]; cat=a[3]; comp=a[4]
+                if (!okuser[u] || !installed[u SUBSEP p]) continue
+                if (protected[u SUBSEP p] || global[p]) continue
+                sc=scope[u SUBSEP p]
+                if (sc=="") continue
+                if (sc=="SYSTEM") {
+                    if (incsys!=1 || role_unknown[u]) continue
+                }
+                if (cat=="ADS") {
+                    if (ads!=1 || wads[p]) continue
+                } else if (cat=="ANALYTICS") {
+                    if (ana!=1 || wana[p]) continue
+                } else continue
+                if (risk[ck]=="PUSH_RISK" && push!=1) continue
+                elig[ck]=1
+                cnt[u SUBSEP p SUBSEP cat]++
+            }
+
+            for (ck in elig) {
+                split(ck,a,SUBSEP)
+                u=a[1]; p=a[2]; cat=a[3]; comp=a[4]
+                pk=u SUBSEP p SUBSEP cat
+                if (cnt[pk] <= max) out[u "|" comp "|" cat]=1
+                else freeze[pk]=1
+            }
+
+            for (el in existing) {
+                split(el,e,"|")
+                u=e[1]; comp=e[2]; cat=e[3]
+                p=comp; sub(/\/.*/,"",p)
+                if (!okuser[u]) {
+                    out[el]=1
+                    continue
+                }
+                if (installed[u SUBSEP p] && scope[u SUBSEP p]=="") {
+                    out[el]=1
+                    continue
+                }
+                if (freeze[u SUBSEP p SUBSEP cat]) out[el]=1
+            }
+
+            for (line in out) print line
+        }
+    ' "$_afbd_in" | sort -u > "$_afbd_desired" 2>/dev/null
+    _afbd_rc=$?
+    rm -f "$_afbd_in" "$_afbd_protected" "$_afbd_unknown" 2>/dev/null
+    return "$_afbd_rc"
+}
+
+aad_fast_build_component_transitions() {
+    _afbct_current="$1"; _afbct_desired="$2"; _afbct_out="$3"
+    {
+        awk -F'|' '$1!="" && $2!="" && $3!="" {print "C|" $1 "|" $2 "|" $3}' "$_afbct_current" 2>/dev/null
+        awk -F'|' '$1!="" && $2!="" && $3!="" {print "D|" $1 "|" $2 "|" $3}' "$_afbct_desired" 2>/dev/null
+    } | awk -F'|' '
+        $1=="C" {
+            k=$2 SUBSEP $3
+            row=$2 "|" $3 "|" $4
+            cur_n[k]++
+            cur[row]=1
+            comp[k]=1
+            next
+        }
+        $1=="D" {
+            k=$2 SUBSEP $3
+            row=$2 "|" $3 "|" $4
+            des_n[k]++
+            des[row]=1
+            comp[k]=1
+            next
+        }
+        END {
+            for (row in cur) if (!(row in des)) {
+                split(row,a,"|")
+                changed[a[1] SUBSEP a[2]]=1
+            }
+            for (row in des) if (!(row in cur)) {
+                split(row,a,"|")
+                changed[a[1] SUBSEP a[2]]=1
+            }
+            for (k in changed) {
+                split(k,a,SUBSEP)
+                print a[1] "|" a[2] "|" (cur_n[k]+0) "|" (des_n[k]+0)
+            }
+        }
+    ' | sort -u > "$_afbct_out"
+}
+
+aad_state_batch_merge() {
+    _asbm_add="$1"
+    [ -s "$_asbm_add" ] || return 0
+    aad_db_lock "$STATE_DB_LOCK" || return 1
+    _asbm_tmp=$(aad_mktemp_near "$COMPONENT_STATE")
+    if [ -z "$_asbm_tmp" ]; then aad_db_unlock "$STATE_DB_LOCK"; return 1; fi
+    {
+        [ -f "$COMPONENT_STATE" ] && cat "$COMPONENT_STATE"
+        cat "$_asbm_add"
+    } | awk -F'|' '$1!="" && $2!="" {k=$1 SUBSEP $2; if(!seen[k]++) print}' > "$_asbm_tmp" 2>/dev/null
+    _asbm_rc=$?
+    if [ "$_asbm_rc" -eq 0 ]; then
+        chmod 600 "$_asbm_tmp" 2>/dev/null || true
+        mv -f "$_asbm_tmp" "$COMPONENT_STATE" 2>/dev/null || _asbm_rc=1
+    fi
+    [ "$_asbm_rc" -eq 0 ] || rm -f "$_asbm_tmp" 2>/dev/null
+    aad_db_unlock "$STATE_DB_LOCK"
+    return "$_asbm_rc"
+}
+
+aad_state_batch_remove_components() {
+    _asbr_drop="$1"
+    [ -s "$_asbr_drop" ] || return 0
+    [ -f "$COMPONENT_STATE" ] || return 0
+    aad_db_lock "$STATE_DB_LOCK" || return 1
+    _asbr_tmp=$(aad_mktemp_near "$COMPONENT_STATE")
+    if [ -z "$_asbr_tmp" ]; then aad_db_unlock "$STATE_DB_LOCK"; return 1; fi
+    awk -F'|' -v df="$_asbr_drop" '
+        BEGIN {
+            while ((getline line < df) > 0) {
+                split(line,a,"|")
+                if (a[1]!="" && a[2]!="") drop[a[1] SUBSEP a[2]]=1
+            }
+            close(df)
+        }
+        !drop[$1 SUBSEP $2] {print}
+    ' "$COMPONENT_STATE" > "$_asbr_tmp" 2>/dev/null
+    _asbr_rc=$?
+    if [ "$_asbr_rc" -eq 0 ]; then
+        chmod 600 "$_asbr_tmp" 2>/dev/null || true
+        mv -f "$_asbr_tmp" "$COMPONENT_STATE" 2>/dev/null || _asbr_rc=1
+    fi
+    [ "$_asbr_rc" -eq 0 ] || rm -f "$_asbr_tmp" 2>/dev/null
+    aad_db_unlock "$STATE_DB_LOCK"
+    return "$_asbr_rc"
+}
+
+aad_membership_batch_commit() {
+    _ambc_new="$1"
+    aad_db_lock "$MEMBERSHIP_DB_LOCK" || return 1
+    _ambc_tmp=$(aad_mktemp_near "$DISABLED_LIST")
+    if [ -z "$_ambc_tmp" ]; then aad_db_unlock "$MEMBERSHIP_DB_LOCK"; return 1; fi
+    sort -u "$_ambc_new" > "$_ambc_tmp" 2>/dev/null
+    _ambc_rc=$?
+    if [ "$_ambc_rc" -eq 0 ]; then
+        chmod 600 "$_ambc_tmp" 2>/dev/null || true
+        mv -f "$_ambc_tmp" "$DISABLED_LIST" 2>/dev/null || _ambc_rc=1
+    fi
+    [ "$_ambc_rc" -eq 0 ] || rm -f "$_ambc_tmp" 2>/dev/null
+    aad_db_unlock "$MEMBERSHIP_DB_LOCK"
+    return "$_ambc_rc"
+}
+
+aad_restore_original_state_keep_record() {
+    _aros_user="$1"; _aros_comp="$2"
+    AAD_RESTORE_DID_MUTATE=0
+    state_record_exists "$_aros_user" "$_aros_comp" || {
+        log "FAST-RESTORE-PENDING u$_aros_user: $_aros_comp reason=missing_state_record"
+        return 1
+    }
+    _aros_original=$(get_saved_original_state "$_aros_user" "$_aros_comp")
+    [ -n "$_aros_original" ] || _aros_original=default
+    _aros_applied=$(get_saved_applied_state "$_aros_user" "$_aros_comp")
+    [ -n "$_aros_applied" ] || _aros_applied=disabled
+    _aros_current=$(aad_get_component_override_state_checked "$_aros_user" "$_aros_comp" 2>/dev/null) || {
+        log "FAST-RESTORE-PENDING u$_aros_user: $_aros_comp reason=current_state_read_failed"
+        return 1
+    }
+    if [ "$_aros_current" != "$_aros_applied" ]; then
+        log "RESTORE-PRESERVE u$_aros_user: $_aros_comp current=$_aros_current differs_from_module=$_aros_applied"
+        return 0
+    fi
+    if set_component_state_smart "$_aros_user" "$_aros_comp" "$_aros_original"; then
+        AAD_RESTORE_DID_MUTATE=1
+        log "RESTORE u$_aros_user: $_aros_comp -> $_aros_original"
+        return 0
+    fi
+    if [ "${CAP_LAST_STATE_NONEXISTENT:-0}" = "1" ]; then
+        log "RESTORE-DROP u$_aros_user: $_aros_comp not in package; terminal"
+        return 0
+    fi
+    log "RESTORE-FAILED u$_aros_user: $_aros_comp -> $_aros_original"
+    return 1
+}
+
+aad_fast_effective_memberships() {
+    _afem_current="$1"; _afem_desired="$2"; _afem_preserve="$3"; _afem_out="$4"
+    {
+        awk -F'|' '$1!="" && $2!="" {print "P|" $1 "|" $2}' "$_afem_preserve" 2>/dev/null
+        awk -F'|' '$1!="" && $2!="" && $3!="" {print "C|" $1 "|" $2 "|" $3}' "$_afem_current" 2>/dev/null
+        awk -F'|' '$1!="" && $2!="" && $3!="" {print "D|" $1 "|" $2 "|" $3}' "$_afem_desired" 2>/dev/null
+    } | awk -F'|' '
+        $1=="P" {preserve[$2 SUBSEP $3]=1; next}
+        $1=="C" {
+            if (preserve[$2 SUBSEP $3]) out[$2 "|" $3 "|" $4]=1
+            next
+        }
+        $1=="D" {
+            if (!preserve[$2 SUBSEP $3]) out[$2 "|" $3 "|" $4]=1
+            next
+        }
+        END {for (line in out) print line}
+    ' | sort -u > "$_afem_out"
+}
+
+fast_policy_reconcile_locked() {
+    aad_candidate_cache_valid || return 4
+    _fpr_started=$(aad_now_ms)
+    _fpr_installed=$(aad_mktemp_near "$DATA_DIR/.fast_installed")
+    _fpr_current=$(aad_mktemp_near "$DATA_DIR/.fast_current")
+    _fpr_desired=$(aad_mktemp_near "$DATA_DIR/.fast_desired_global")
+    _fpr_trans=$(aad_mktemp_near "$DATA_DIR/.fast_transitions")
+    _fpr_state_add=$(aad_mktemp_near "$DATA_DIR/.fast_state_add")
+    _fpr_state_drop=$(aad_mktemp_near "$DATA_DIR/.fast_state_drop")
+    _fpr_preserve=$(aad_mktemp_near "$DATA_DIR/.fast_preserve")
+    _fpr_effective=$(aad_mktemp_near "$DATA_DIR/.fast_effective")
+    _fpr_pkgs=$(aad_mktemp_near "$DATA_DIR/.fast_touched_pkgs")
+    for _fpr_tmp in "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs"; do
+        [ -n "$_fpr_tmp" ] || {
+            rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+            return 1
+        }
+    done
+    : > "$_fpr_state_add"; : > "$_fpr_state_drop"; : > "$_fpr_preserve"; : > "$_fpr_pkgs"
+
+    if ! list_all_installed_package_keys > "$_fpr_installed"; then
+        log "FAST-POLICY failed: authoritative installed-package snapshot unavailable"
+        rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+        return 1
+    fi
+    [ -f "$DISABLED_LIST" ] && sort -u "$DISABLED_LIST" > "$_fpr_current" 2>/dev/null || : > "$_fpr_current"
+
+    if ! aad_scope_cache_ensure; then
+        log "FAST-POLICY failed: authoritative package scope cache unavailable"
+        rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+        return 1
+    fi
+    if ! aad_fast_build_desired_memberships "$_fpr_installed" "$_fpr_desired"; then
+        log "FAST-POLICY failed: desired membership set generation failed"
+        rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+        return 1
+    fi
+    aad_fast_build_component_transitions "$_fpr_current" "$_fpr_desired" "$_fpr_trans" || {
+        rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+        return 1
+    }
+
+    _fpr_components=$(grep -c . "$_fpr_trans" 2>/dev/null); [ -n "$_fpr_components" ] || _fpr_components=0
+    if [ "$_fpr_components" -eq 0 ]; then
+        _fpr_finished=$(aad_now_ms)
+        _fpr_ms=$((_fpr_finished - _fpr_started))
+        log "FAST-DELTA finished components=0 membership_delta=0 pm_mutations=0 failed=0 total_ms=$_fpr_ms"
+        rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+        return 0
+    fi
+
+    aad_package_dump_cache_reset
+    # Persist every newly-owned original state in one transaction BEFORE any
+    # component mutation. Only real 0->owned component deltas reach this loop.
+    while IFS='|' read -r _u _c _cur_n _des_n; do
+        [ -n "$_c" ] || continue
+        _p=${_c%%/*}
+        printf '%s|%s\n' "$_u" "$_p" >> "$_fpr_pkgs"
+        if [ "$_cur_n" -eq 0 ] 2>/dev/null && [ "$_des_n" -gt 0 ] 2>/dev/null; then
+            if ! state_record_exists "$_u" "$_c"; then
+                _orig=$(aad_get_component_override_state_checked "$_u" "$_c" 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$_orig" ]; then
+                    printf '%s|%s|%s|disabled\n' "$_u" "$_c" "$_orig" >> "$_fpr_state_add"
+                else
+                    printf '%s|%s\n' "$_u" "$_c" >> "$_fpr_preserve"
+                    : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+                    log "FAST-DELTA-ADD-PENDING u$_u: $_c reason=original_state_read_failed"
+                fi
+            fi
+        fi
+    done < "$_fpr_trans"
+    sort -u "$_fpr_pkgs" -o "$_fpr_pkgs" 2>/dev/null || true
+    if ! aad_state_batch_merge "$_fpr_state_add"; then
+        log "FAST-DELTA aborted: could not durably persist original component states"
+        aad_package_dump_cache_reset
+        rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+        return 1
+    fi
+
+    _fpr_failed=0; _fpr_pm=0
+    while IFS='|' read -r _u _c _cur_n _des_n; do
+        [ -n "$_c" ] || continue
+        if grep -Fxq -- "$_u|$_c" "$_fpr_preserve" 2>/dev/null; then
+            _fpr_failed=1
+            continue
+        fi
+        if [ "$_cur_n" -eq 0 ] 2>/dev/null && [ "$_des_n" -gt 0 ] 2>/dev/null; then
+            if disable_component_smart "$_u" "$_c"; then
+                _fpr_pm=$((_fpr_pm + 1))
+                log "FAST-DELTA-DISABLED u$_u: $_c"
+            else
+                printf '%s|%s\n' "$_u" "$_c" >> "$_fpr_preserve"
+                _fpr_failed=1
+                : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+                log "FAST-DELTA-DISABLE-PENDING u$_u: $_c"
+            fi
+        elif [ "$_cur_n" -gt 0 ] 2>/dev/null && [ "$_des_n" -eq 0 ] 2>/dev/null; then
+            if aad_restore_original_state_keep_record "$_u" "$_c"; then
+                printf '%s|%s\n' "$_u" "$_c" >> "$_fpr_state_drop"
+                [ "${AAD_RESTORE_DID_MUTATE:-0}" = "1" ] && _fpr_pm=$((_fpr_pm + 1))
+            else
+                printf '%s|%s\n' "$_u" "$_c" >> "$_fpr_preserve"
+                _fpr_failed=1
+                : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+            fi
+        else
+            # Membership hand-off only. No PackageManager call is needed.
+            if ! state_record_exists "$_u" "$_c"; then
+                printf '%s|%s\n' "$_u" "$_c" >> "$_fpr_preserve"
+                _fpr_failed=1
+                : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+                log "FAST-DELTA-HANDOFF-PENDING u$_u: $_c reason=missing_state_record"
+            else
+                log "FAST-DELTA-HANDOFF u$_u: $_c"
+            fi
+        fi
+    done < "$_fpr_trans"
+    aad_package_dump_cache_reset
+
+    sort -u "$_fpr_preserve" -o "$_fpr_preserve" 2>/dev/null || true
+    aad_fast_effective_memberships "$_fpr_current" "$_fpr_desired" "$_fpr_preserve" "$_fpr_effective"
+    if ! aad_membership_batch_commit "$_fpr_effective"; then
+        log "FAST-DELTA membership commit failed; state backups retained for retry"
+        : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+        _fpr_failed=1
+    else
+        aad_state_batch_remove_components "$_fpr_state_drop" || {
+            _fpr_failed=1
+            : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+        }
+        # AppOps is ADS-only and only packages whose membership set changed
+        # are reconsidered here.
+        while IFS='|' read -r _u _p; do
+            [ -n "$_p" ] || continue
+            if awk -F'|' -v u="$_u" -v p="$_p/" '$1==u && $3=="ADS" && index($2,p)==1 {found=1; exit} END{exit !found}' "$_fpr_effective" 2>/dev/null; then
+                aad_apply_appops_overlay_control "$_u" "$_p" scope-ok >/dev/null 2>&1 || _fpr_failed=1
+            else
+                aad_restore_appops_overlay_control "$_u" "$_p" >/dev/null 2>&1 || _fpr_failed=1
+            fi
+        done < "$_fpr_pkgs"
+    fi
+
+    _fpr_current_n=$(grep -c . "$_fpr_current" 2>/dev/null); [ -n "$_fpr_current_n" ] || _fpr_current_n=0
+    _fpr_effective_n=$(grep -c . "$_fpr_effective" 2>/dev/null); [ -n "$_fpr_effective_n" ] || _fpr_effective_n=0
+    _fpr_membership_delta=$(
+        {
+            awk 'NR==FNR {a[$0]=1; next} !($0 in a) {print}' "$_fpr_current" "$_fpr_effective"
+            awk 'NR==FNR {a[$0]=1; next} !($0 in a) {print}' "$_fpr_effective" "$_fpr_current"
+        } | grep -c . 2>/dev/null
+    )
+    [ -n "$_fpr_membership_delta" ] || _fpr_membership_delta=0
+    _fpr_finished=$(aad_now_ms)
+    _fpr_ms=$((_fpr_finished - _fpr_started))
+    log "FAST-DELTA finished components=$_fpr_components membership_delta=$_fpr_membership_delta memberships_before=$_fpr_current_n memberships_after=$_fpr_effective_n pm_mutations=$_fpr_pm failed=$_fpr_failed total_ms=$_fpr_ms"
+
+    rm -f "$_fpr_installed" "$_fpr_current" "$_fpr_desired" "$_fpr_trans" "$_fpr_state_add" "$_fpr_state_drop" "$_fpr_preserve" "$_fpr_effective" "$_fpr_pkgs" 2>/dev/null
+    [ "$_fpr_failed" -eq 0 ]
+}
+
+aad_verify_owned_components_locked() {
+    _avoc_started=$(aad_now_ms)
+    _avoc_components=$(aad_mktemp_near "$DATA_DIR/.verify_components")
+    [ -n "$_avoc_components" ] || return 1
+    awk -F'|' '$1!="" && $2!="" {print $1 "|" $2}' "$DISABLED_LIST" 2>/dev/null | sort -u > "$_avoc_components"
+    _avoc_failed=0; _avoc_checked=0; _avoc_reapplied=0
+
+    aad_package_dump_cache_reset
+    while IFS='|' read -r _avoc_u _avoc_c; do
+        [ -n "$_avoc_c" ] || continue
+        _avoc_checked=$((_avoc_checked + 1))
+        if ! state_record_exists "$_avoc_u" "$_avoc_c"; then
+            log "OWNED-VERIFY-PENDING u$_avoc_u: $_avoc_c reason=missing_state_record"
+            _avoc_failed=1
+            continue
+        fi
+        _avoc_cur=$(aad_get_component_override_state_checked "$_avoc_u" "$_avoc_c" 2>/dev/null) || {
+            log "OWNED-VERIFY-PENDING u$_avoc_u: $_avoc_c reason=state_read_failed"
+            _avoc_failed=1
+            continue
+        }
+        if [ "$_avoc_cur" != "disabled" ]; then
+            if disable_component_smart "$_avoc_u" "$_avoc_c"; then
+                _avoc_reapplied=$((_avoc_reapplied + 1))
+                log "OWNED-VERIFY-REAPPLIED u$_avoc_u: $_avoc_c current=$_avoc_cur"
+            else
+                _avoc_failed=1
+                log "OWNED-VERIFY-PENDING u$_avoc_u: $_avoc_c reason=disable_failed current=$_avoc_cur"
+            fi
+        fi
+    done < "$_avoc_components"
+    aad_package_dump_cache_reset
+
+    # Orphan state records are recovery records without active membership.
+    # Their restore is deliberately kept out of interactive FAST and retried
+    # only by this low-frequency verifier.
+    retry_orphan_restores >/dev/null 2>&1 || _avoc_failed=1
+
+    rm -f "$_avoc_components" 2>/dev/null
+    _avoc_finished=$(aad_now_ms)
+    _avoc_ms=$((_avoc_finished - _avoc_started))
+    if [ "$_avoc_failed" -eq 0 ]; then
+        rm -f "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+    else
+        : > "$COMPONENT_VERIFY_PENDING" 2>/dev/null || true
+    fi
+    log "OWNED-VERIFY finished checked=$_avoc_checked reapplied=$_avoc_reapplied failed=$_avoc_failed total_ms=$_avoc_ms"
+    [ "$_avoc_failed" -eq 0 ]
+}
+
+aad_verify_owned_components() {
+    _avoc_reason="${1:-periodic}"
+    _avoc_live=$(compute_config_hash)
+    _avoc_applied=$(cat "$CONFIG_HASH_FILE" 2>/dev/null)
+    if [ -n "$_avoc_applied" ] && [ "$_avoc_live" != "$_avoc_applied" ]; then
+        log "OWNED-VERIFY deferred reason=$_avoc_reason live_generation_not_applied"
+        return 0
+    fi
+    acquire_lock || { log "OWNED-VERIFY deferred reason=$_avoc_reason lock_busy"; return 0; }
+    log "OWNED-VERIFY begin reason=$_avoc_reason"
+    aad_verify_owned_components_locked
+    _avoc_rc=$?
+    release_lock
+    return "$_avoc_rc"
+}
+
+expand_system_candidates_locked() {
+    [ -f "$CANDIDATE_FILE" ] || return 4
+    [ "$(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null)" = "USER" ] || return 0
+    [ "$(read_include_system_apps)" = "1" ] || return 0
+
+    _esc_all=$(aad_mktemp_near "$DATA_DIR/.expand_all")
+    _esc_user=$(aad_mktemp_near "$DATA_DIR/.expand_user")
+    _esc_system=$(aad_mktemp_near "$DATA_DIR/.expand_system")
+    [ -n "$_esc_all" ] && [ -n "$_esc_user" ] && [ -n "$_esc_system" ] || { rm -f "$_esc_all" "$_esc_user" "$_esc_system" 2>/dev/null; return 1; }
+    : > "$_esc_all"; : > "$_esc_user"; : > "$_esc_system"
+    _esc_snapshot_failed=0; _esc_users=0
+    _esc_user_list=$(list_user_ids_checked) || { rm -f "$_esc_all" "$_esc_user" "$_esc_system" 2>/dev/null; log "SYSTEM-EXPAND aborted: user enumeration unavailable"; return 1; }
+    for _u in $_esc_user_list; do
+        _esc_users=$((_esc_users + 1))
+        _ta=$(aad_mktemp_near "$DATA_DIR/.expand_a${_u}"); _tu=$(aad_mktemp_near "$DATA_DIR/.expand_u${_u}")
+        if [ -z "$_ta" ] || [ -z "$_tu" ]; then
+            _esc_snapshot_failed=1
+            rm -f "$_ta" "$_tu" 2>/dev/null
+            continue
+        fi
+        if aad_capture_packages_for_user "$_u" 0 1 "$_ta"; then
+            while IFS='|' read -r _p _v; do [ -n "$_p" ] && echo "$_u|$_p|${_v:-0}"; done < "$_ta" >> "$_esc_all"
+        else
+            _esc_snapshot_failed=1
+            log "SYSTEM-EXPAND snapshot failed user=$_u scope=all; candidate scope remains USER"
+        fi
+        if aad_capture_packages_for_user "$_u" 1 1 "$_tu"; then
+            while IFS='|' read -r _p _v; do [ -n "$_p" ] && echo "$_u|$_p|${_v:-0}"; done < "$_tu" >> "$_esc_user"
+        else
+            _esc_snapshot_failed=1
+            log "SYSTEM-EXPAND snapshot failed user=$_u scope=third-party; candidate scope remains USER"
+        fi
+        rm -f "$_ta" "$_tu" 2>/dev/null
+    done
+    if [ "$_esc_users" -eq 0 ] || [ "$_esc_snapshot_failed" -ne 0 ]; then
+        rm -f "$_esc_all" "$_esc_user" "$_esc_system" 2>/dev/null
+        log "SYSTEM-EXPAND aborted: authoritative package snapshots unavailable users=$_esc_users failures=$_esc_snapshot_failed"
+        return 1
+    fi
+    awk -F'|' 'NR==FNR {usr[$1 "|" $2]=1; next} !(($1 "|" $2) in usr) {print}' "$_esc_user" "$_esc_all" > "$_esc_system"
+    _esc_count=$(grep -c . "$_esc_system" 2>/dev/null); [ -n "$_esc_count" ] || _esc_count=0
+    log "SYSTEM-EXPAND begin system_packages/users=$_esc_count"
+    _esc_failed=0; _esc_done=0
+    while IFS='|' read -r _u _p _v; do
+        [ -n "$_p" ] || continue
+        _esc_done=$((_esc_done + 1))
+        AAD_CURRENT_VERSION_CODE="$_v"; export AAD_CURRENT_VERSION_CODE
+        process_package_user "$_u" "$_p" >/dev/null || _esc_failed=1
+    done < "$_esc_system"
+    unset AAD_CURRENT_VERSION_CODE
+    if [ "$_esc_failed" -eq 0 ]; then
+        cat "$_esc_all" | sort -u > "$STATE_FILE.tmp.$$" 2>/dev/null && mv -f "$STATE_FILE.tmp.$$" "$STATE_FILE" 2>/dev/null
+        _esc_scope_tmp=$(aad_mktemp_near "$PACKAGE_SCOPE_CACHE")
+        if [ -n "$_esc_scope_tmp" ]; then
+            {
+                awk -F'|' '$1!="" && $2!="" {print $1 "|" $2 "|USER"}' "$_esc_user" 2>/dev/null
+                awk -F'|' '$1!="" && $2!="" {print $1 "|" $2 "|SYSTEM"}' "$_esc_system" 2>/dev/null
+            } | sort -u > "$_esc_scope_tmp" 2>/dev/null
+            chmod 600 "$_esc_scope_tmp" 2>/dev/null || true
+            mv -f "$_esc_scope_tmp" "$PACKAGE_SCOPE_CACHE" 2>/dev/null || rm -f "$_esc_scope_tmp" 2>/dev/null
+        fi
+        echo ALL > "$CANDIDATE_SCOPE_FILE"
+        log "SYSTEM-EXPAND complete processed=$_esc_done scope=ALL scope_cache=$(grep -c . "$PACKAGE_SCOPE_CACHE" 2>/dev/null)"
+    else
+        log "SYSTEM-EXPAND incomplete processed=$_esc_done; candidate scope remains USER"
+    fi
+    rm -f "$_esc_all" "$_esc_user" "$_esc_system" 2>/dev/null
+    [ "$_esc_failed" -eq 0 ]
+}
+
+reconcile_out_of_scope_records() {
+    _ros_installed="$1"
+    _ros_desired="$2"
+    [ -f "$DISABLED_LIST" ] || return 0
+    [ -s "$_ros_installed" ] || return 0
+    [ -f "$_ros_desired" ] || return 0
+
+    _ok_installed="$DATA_DIR/.users_snapshot_ok"
+    _ok_desired="$DATA_DIR/.users_desired_snapshot_ok"
+
+    _ros_owned_pkgs=$(awk -F'|' '{comp=$2; sub(/\/.*$/, "", comp); if (comp != "") print $1 "|" comp}' "$DISABLED_LIST" 2>/dev/null | sort -u)
+    [ -n "$_ros_owned_pkgs" ] || return 0
+
+    _ros_restored=0
+    old_ifs=$IFS
+    IFS='
+'
+    for _ros_pair in $_ros_owned_pkgs; do
+        [ -n "$_ros_pair" ] || continue
+        _ros_u=${_ros_pair%%|*}
+        _ros_p=${_ros_pair#*|}
+        [ -n "$_ros_p" ] || continue
+
+        if [ -f "$_ok_installed" ] && ! grep -Fxq "$_ros_u" "$_ok_installed" 2>/dev/null; then
+            continue
+        fi
+        if [ -f "$_ok_desired" ] && ! grep -Fxq "$_ros_u" "$_ok_desired" 2>/dev/null; then
+            continue
+        fi
+
+        if grep -Fxq -- "$_ros_u|$_ros_p" "$_ros_installed" 2>/dev/null && ! awk -F'|' -v u="$_ros_u" -v p="$_ros_p" '$1==u && $2==p {found=1; exit} END {exit found ? 0 : 1}' "$_ros_desired" 2>/dev/null; then
+            log "SCOPE-EXIT-RESTORE user=$_ros_u package=$_ros_p (package out of desired scope; restoring all owned components)"
+            restore_all_for_package_user "$_ros_u" "$_ros_p"
+            _ros_restored=$((_ros_restored + 1))
+        fi
+    done
+    IFS=$old_ifs
+    [ "$_ros_restored" -gt 0 ] && log "SCOPE-EXIT-CLEANUP restored $_ros_restored out-of-scope package(s)"
+    return 0
+}
+
+aad_is_webview_command_line_supported() {
+    _b_type=$(getprop ro.build.type 2>/dev/null)
+    [ "$_b_type" = "userdebug" ] || [ "$_b_type" = "eng" ] && return 0
+
+    if command -v settings >/dev/null 2>&1; then
+        _dev_enabled=$(settings get global development_settings_enabled 2>/dev/null)
+        [ "$_dev_enabled" = "1" ] && return 0
+        _adb_enabled=$(settings get global adb_enabled 2>/dev/null)
+        [ "$_adb_enabled" = "1" ] && return 0
+    fi
+
+    _debuggable=$(getprop ro.debuggable 2>/dev/null)
+    [ "$_debuggable" = "1" ] && return 0
+
+    return 1
+}
+
+aad_settings_get_value() {
+    _sgv_ns="$1"; _sgv_user="$2"; _sgv_key="$3"
+    case "$_sgv_ns" in
+        global) settings get global "$_sgv_key" 2>/dev/null ;;
+        secure_user) settings get secure --user "$_sgv_user" "$_sgv_key" 2>/dev/null ;;
+        secure) settings get secure "$_sgv_key" 2>/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
+aad_settings_set_original() {
+    _sso_ns="$1"; _sso_user="$2"; _sso_key="$3"; _sso_orig="$4"
+    case "$_sso_ns" in
+        global)
+            if [ "$_sso_orig" = "null" ] || [ -z "$_sso_orig" ]; then settings delete global "$_sso_key" >/dev/null 2>&1; else settings put global "$_sso_key" "$_sso_orig" >/dev/null 2>&1; fi ;;
+        secure_user)
+            if [ "$_sso_orig" = "null" ] || [ -z "$_sso_orig" ]; then settings delete secure --user "$_sso_user" "$_sso_key" >/dev/null 2>&1; else settings put secure --user "$_sso_user" "$_sso_key" "$_sso_orig" >/dev/null 2>&1; fi ;;
+        secure)
+            if [ "$_sso_orig" = "null" ] || [ -z "$_sso_orig" ]; then settings delete secure "$_sso_key" >/dev/null 2>&1; else settings put secure "$_sso_key" "$_sso_orig" >/dev/null 2>&1; fi ;;
+        *) return 1 ;;
+    esac
+}
+
+aad_restore_owned_settings() {
+    _aros_dir="${1:-$DATA_DIR}"
+    _aros_backup="$_aros_dir/.ad_id_backup"
+    [ -f "$_aros_backup" ] || return 0
+    command -v settings >/dev/null 2>&1 || return 1
+
+    _aros_tmp=$(aad_mktemp_near "$_aros_backup")
+    [ -n "$_aros_tmp" ] || return 1
+    : > "$_aros_tmp" 2>/dev/null || { rm -f "$_aros_tmp"; return 1; }
+    _aros_pending=0
+
+    while IFS='=' read -r _skey _sval; do
+        [ -n "$_skey" ] || continue
+        _sorig=${_sval%%|*}; _sappl=${_sval#*|}; [ -n "$_sappl" ] || _sappl=1
+        _ns=""; _u=0; _key=""
+        case "$_skey" in
+            global_ad_id_zero) _ns=global; _key=ad_id_zero ;;
+            global_limit_ad_tracking) _ns=global; _key=limit_ad_tracking ;;
+            secure_limit_ad_tracking) _ns=secure; _key=limit_ad_tracking ;;
+            user_*_secure_limit_ad_tracking) _ns=secure_user; _u=${_skey#user_}; _u=${_u%_secure_limit_ad_tracking}; _key=limit_ad_tracking ;;
+            *) continue ;;
+        esac
+
+        _cur=$(aad_settings_get_value "$_ns" "$_u" "$_key"); _get_rc=$?
+        if [ "$_get_rc" -ne 0 ]; then
+            if [ "$_ns" = "secure_user" ]; then
+                aad_user_presence_authoritative "$_u"; _upa_rc=$?
+                if [ "$_upa_rc" -eq 1 ]; then
+                    log "SETTING-RESTORE-RETIRED key=$_skey reason=user_absent"
+                    continue
+                fi
+            fi
+            printf '%s=%s|%s\n' "$_skey" "$_sorig" "$_sappl" >> "$_aros_tmp"
+            _aros_pending=1
+            log "SETTING-RESTORE-PENDING key=$_skey reason=read_failed"
+            continue
+        fi
+        [ -n "$_cur" ] || _cur=null
+        if [ "$_cur" != "$_sappl" ]; then
+            log "SETTING-RESTORE-PRESERVE key=$_skey external=$_cur module_applied=$_sappl"
+            continue
+        fi
+        if ! aad_settings_set_original "$_ns" "$_u" "$_key" "$_sorig"; then
+            printf '%s=%s|%s\n' "$_skey" "$_sorig" "$_sappl" >> "$_aros_tmp"
+            _aros_pending=1
+            log "SETTING-RESTORE-PENDING key=$_skey reason=set_failed"
+            continue
+        fi
+        _verify=$(aad_settings_get_value "$_ns" "$_u" "$_key"); _verify_rc=$?; [ -n "$_verify" ] || _verify=null
+        _expect="${_sorig:-null}"
+        if [ "$_verify_rc" -ne 0 ] || [ "$_verify" != "$_expect" ]; then
+            printf '%s=%s|%s\n' "$_skey" "$_sorig" "$_sappl" >> "$_aros_tmp"
+            _aros_pending=1
+            log "SETTING-RESTORE-PENDING key=$_skey reason=verify_failed current=${_verify:-unknown} expected=$_expect"
+        else
+            log "SETTING-RESTORED key=$_skey -> $_expect"
+        fi
+    done < "$_aros_backup"
+
+    chmod 600 "$_aros_tmp" 2>/dev/null || true
+    if [ -s "$_aros_tmp" ]; then
+        mv -f "$_aros_tmp" "$_aros_backup" 2>/dev/null || { rm -f "$_aros_tmp"; return 1; }
+    else
+        rm -f "$_aros_tmp" "$_aros_backup" 2>/dev/null
+    fi
+    [ "$_aros_pending" -eq 0 ]
+}
+
+aad_apply_zero_ad_id() {
+    command -v settings >/dev/null 2>&1 || return 1
+    _backup_file="$DATA_DIR/.ad_id_backup"
+    _backup_tmp=$(aad_mktemp_near "$_backup_file")
+    [ -n "$_backup_tmp" ] || return 1
+    [ -f "$_backup_file" ] && cat "$_backup_file" > "$_backup_tmp" 2>/dev/null || : > "$_backup_tmp"
+
+    aad_backup_setting_line() {
+        _bsl_key="$1"; _bsl_ns="$2"; _bsl_user="$3"; _bsl_name="$4"
+        grep -q "^${_bsl_key}=" "$_backup_tmp" 2>/dev/null && return 0
+        _bsl_cur=$(aad_settings_get_value "$_bsl_ns" "$_bsl_user" "$_bsl_name") || return 1
+        [ -n "$_bsl_cur" ] || _bsl_cur=null
+        printf '%s=%s|1\n' "$_bsl_key" "$_bsl_cur" >> "$_backup_tmp" 2>/dev/null
+    }
+
+    _zad_users=$(list_user_ids_checked) || { rm -f "$_backup_tmp"; log "AD-ID-ZERO pending: user enumeration unavailable"; return 1; }
+    aad_backup_setting_line global_ad_id_zero global 0 ad_id_zero || { rm -f "$_backup_tmp"; return 1; }
+    aad_backup_setting_line global_limit_ad_tracking global 0 limit_ad_tracking || { rm -f "$_backup_tmp"; return 1; }
+    aad_backup_setting_line secure_limit_ad_tracking secure 0 limit_ad_tracking || { rm -f "$_backup_tmp"; return 1; }
+    for _u in $_zad_users; do
+        aad_backup_setting_line "user_${_u}_secure_limit_ad_tracking" secure_user "$_u" limit_ad_tracking || { rm -f "$_backup_tmp"; return 1; }
+    done
+    chmod 600 "$_backup_tmp" 2>/dev/null || true
+    mv -f "$_backup_tmp" "$_backup_file" 2>/dev/null || { rm -f "$_backup_tmp"; return 1; }
+
+    _zad_failed=0
+    settings put global ad_id_zero 1 >/dev/null 2>&1 || _zad_failed=1
+    settings put global limit_ad_tracking 1 >/dev/null 2>&1 || _zad_failed=1
+    settings put secure limit_ad_tracking 1 >/dev/null 2>&1 || _zad_failed=1
+    for _u in $_zad_users; do settings put secure --user "$_u" limit_ad_tracking 1 >/dev/null 2>&1 || _zad_failed=1; done
+
+    for _check in "global|0|ad_id_zero" "global|0|limit_ad_tracking" "secure|0|limit_ad_tracking"; do
+        _ns=${_check%%|*}; _rest=${_check#*|}; _u=${_rest%%|*}; _key=${_rest#*|}
+        _v=$(aad_settings_get_value "$_ns" "$_u" "$_key" 2>/dev/null) || _zad_failed=1
+        [ "$_v" = "1" ] || _zad_failed=1
+    done
+    for _u in $_zad_users; do
+        _v=$(aad_settings_get_value secure_user "$_u" limit_ad_tracking 2>/dev/null) || _zad_failed=1
+        [ "$_v" = "1" ] || _zad_failed=1
+    done
+    if [ "$_zad_failed" -eq 0 ]; then
+        log "AD-ID-ZERO applied and verified"
+        return 0
+    fi
+    log "AD-ID-ZERO apply incomplete; ownership backup retained for retry/restore"
+    return 1
+}
+
+aad_restore_webview_owned_state() {
+    _rwos_dir="${1:-$DATA_DIR}"
+    _rwos_cmd="/data/local/tmp/webview-command-line"
+    _rwos_backup="$_rwos_dir/.webview_command_line_backup"
+    _rwos_marker="$_rwos_dir/.webview_command_line_applied.cksum"
+    [ -f "$_rwos_marker" ] || return 0
+    _rwos_expected=$(cat "$_rwos_marker" 2>/dev/null)
+    [ -n "$_rwos_expected" ] || return 1
+    _rwos_current=$(cksum "$_rwos_cmd" 2>/dev/null | awk '{print $1 ":" $2}')
+    if [ "$_rwos_current" != "$_rwos_expected" ]; then
+        log "WEBVIEW-FLAGS-PRESERVE external content differs from module snapshot"
+        rm -f "$_rwos_marker" "$_rwos_backup" 2>/dev/null
+        return 0
+    fi
+    [ -f "$_rwos_backup" ] || return 1
+    if grep -Fxq '__AAD_ABSENT__' "$_rwos_backup" 2>/dev/null; then
+        rm -f "$_rwos_cmd" 2>/dev/null || return 1
+        [ ! -e "$_rwos_cmd" ] || return 1
+    else
+        _rwos_tmp="${_rwos_cmd}.aad_restore.$$"
+        cp "$_rwos_backup" "$_rwos_tmp" 2>/dev/null || { rm -f "$_rwos_tmp"; return 1; }
+        mv -f "$_rwos_tmp" "$_rwos_cmd" 2>/dev/null || { rm -f "$_rwos_tmp"; return 1; }
+        cmp -s "$_rwos_backup" "$_rwos_cmd" 2>/dev/null || return 1
+    fi
+    rm -f "$_rwos_marker" "$_rwos_backup" 2>/dev/null
+    log "WEBVIEW-FLAGS restored and verified"
+    return 0
+}
+
+reconcile_side_effects() {
+    _rse_reason="${1:-reconcile}"
+    _rse_ads_on=$(read_bool_setting BLOCK_ADS 0)
+    _rse_analytics_on=$(read_bool_setting BLOCK_ANALYTICS 0)
+    _rse_pending=0
+    _rse_pending_file="$DATA_DIR/.side_effects.pending"
+
+    # 1. Zero Advertising ID (подчиняется первичной политике)
+    _zad_wanted=0
+    if [ "$_rse_analytics_on" = "1" ] || [ "$_rse_ads_on" = "1" ]; then
+        [ "$(read_bool_setting ZERO_AD_ID 0)" = "1" ] && _zad_wanted=1
+    fi
+
+    if [ "$_zad_wanted" = "1" ]; then
+        aad_apply_zero_ad_id || _rse_pending=1
+    elif [ -f "$DATA_DIR/.ad_id_backup" ]; then
+        aad_restore_owned_settings "$DATA_DIR" || _rse_pending=1
+    fi
+
+    # 2. WebView command line flags (optional, ADS-only, default OFF)
+    _wv_cmd="/data/local/tmp/webview-command-line"
+    _wv_backup="$DATA_DIR/.webview_command_line_backup"
+    _wv_wanted=0
+    if [ "$_rse_ads_on" = "1" ] && [ "$(read_bool_setting BLOCK_WEBVIEW_ADS 0)" = "1" ]; then _wv_wanted=1; fi
+
+    if [ "$_wv_wanted" = "1" ] && aad_is_webview_command_line_supported; then
+        _wv_flags="_ --host-rules=\"MAP *.doubleclick.net 127.0.0.1, MAP *.an.yandex.ru 127.0.0.1, MAP *.googleads.g.doubleclick.net 127.0.0.1, MAP *.applovin.com 127.0.0.1, MAP *.unityads.unity3d.com 127.0.0.1, MAP *.vungle.com 127.0.0.1, MAP *.inmobi.com 127.0.0.1\""
+        if [ ! -f "$_wv_backup" ]; then
+            if [ -f "$_wv_cmd" ]; then
+                cp "$_wv_cmd" "$_wv_backup" 2>/dev/null || { log "WEBVIEW-FLAGS apply skipped: backup failed"; _wv_wanted=0; _rse_pending=1; }
+            else
+                printf '__AAD_ABSENT__\n' > "$_wv_backup" 2>/dev/null || { _wv_wanted=0; _rse_pending=1; }
+            fi
+            chmod 600 "$_wv_backup" 2>/dev/null || true
+        fi
+        if [ "$_wv_wanted" = "1" ]; then
+            _wv_tmp="${_wv_cmd}.aad.$$"
+            if printf '%s\n' "$_wv_flags" > "$_wv_tmp" 2>/dev/null && mv -f "$_wv_tmp" "$_wv_cmd" 2>/dev/null; then
+                _wv_ck=$(cksum "$_wv_cmd" 2>/dev/null | awk '{print $1 ":" $2}')
+                if [ -n "$_wv_ck" ]; then
+                    printf '%s\n' "$_wv_ck" > "$DATA_DIR/.webview_command_line_applied.cksum" 2>/dev/null || _rse_pending=1
+                    chmod 0644 "$_wv_cmd" 2>/dev/null || true
+                    log "WEBVIEW-FLAGS applied to $_wv_cmd"
+                else
+                    _rse_pending=1
+                    log "WEBVIEW-FLAGS apply verification failed; ownership backup retained"
+                fi
+            else
+                rm -f "$_wv_tmp" 2>/dev/null
+                _rse_pending=1
+                log "WEBVIEW-FLAGS apply failed; ownership backup retained"
+            fi
+        fi
+    else
+        [ "$_wv_wanted" = "1" ] && log "WEBVIEW-FLAGS-BYPASS: unsupported environment; restoring any previous owned state"
+        if [ -f "$DATA_DIR/.webview_command_line_applied.cksum" ]; then
+            aad_restore_webview_owned_state "$DATA_DIR" || _rse_pending=1
+        fi
+    fi
+
+    # 3. AppOps desired state (ADS-only)
+    if [ -f "$DATA_DIR/.appops_state" ]; then
+        _aop_wanted=0
+        if [ "$_rse_ads_on" = "1" ]; then _aop_wanted=$(read_bool_setting BLOCK_OVERLAY_ADS 0); fi
+        if [ "$_aop_wanted" != "1" ]; then
+            aad_restore_appops_state "" "" || _rse_pending=1
+        fi
+    fi
+
+    # 4. Ad Killer Firewall (подчиняется BLOCK_ADS=1)
+    if [ "$_rse_ads_on" = "1" ]; then
+        reconcile_ad_surface_killer "$_rse_reason" >/dev/null 2>&1 || _rse_pending=1
+    else
+        ad_killer_cleanup DISABLED "$_rse_reason" >/dev/null 2>&1 || _rse_pending=1
+        rm -f "$DATA_DIR/.ad_killer_active" 2>/dev/null || true
+    fi
+
+    if [ "$_rse_pending" -ne 0 ]; then
+        printf '%s\n' "$(date +%s 2>/dev/null)|$_rse_reason" > "$_rse_pending_file" 2>/dev/null || true
+        log "SIDE-EFFECTS-PENDING reason=$_rse_reason; retry scheduled"
+        return 1
+    fi
+    rm -f "$_rse_pending_file" 2>/dev/null || true
+    return 0
 }
 
 policy_list_symmetric_diff() {
@@ -3717,7 +5364,11 @@ reconcile_whitelist_delta_locked() {
     fi
     collect_whitelist_delta_packages > "$changed"
     log "CONFIG-DELTA: building installed-package snapshot."
-    list_all_installed_package_keys > "$installed_snapshot"
+    if ! list_all_installed_package_keys > "$installed_snapshot"; then
+        log "CONFIG-DELTA failed: authoritative installed-package snapshot unavailable"
+        rm -f "$changed" "$installed_snapshot" 2>/dev/null
+        return 1
+    fi
     log "CONFIG-DELTA: installed-package snapshot ready entries=$(grep -c . "$installed_snapshot" 2>/dev/null)."
     count=$(grep -c . "$changed" 2>/dev/null)
     [ -n "$count" ] || count=0
@@ -3757,10 +5408,6 @@ reconcile_whitelist_delta_locked() {
     done < "$changed"
     rm -f "$changed" "$installed_snapshot" 2>/dev/null
     unset AAD_AUDIT_ROWS_PRECLEANED
-    reconcile_owned_ifw_rules || {
-        log "CONFIG-DELTA: IFW reconciliation failed."
-        return 1
-    }
     rm -f "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null
     log "CONFIG-DELTA: reconciliation complete."
     return 0
@@ -3774,46 +5421,108 @@ refresh_policy_caches() {
 
 reconcile_config_if_changed() {
     reason="${1:-unknown}"
+    _rcc_round=0
+    _rcc_last_rc=0
+    _rcc_force=0
 
-    if [ -d "$LOCK_DIR" ]; then
-        owner=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
-            log "CONFIG-DEFER: reconciliation already active owner=$owner reason=$reason"
+    while [ "$_rcc_round" -lt 3 ]; do
+        _rcc_round=$((_rcc_round + 1))
+        if [ -d "$LOCK_DIR" ] && aad_lock_owner_alive "$LOCK_DIR"; then
+            owner=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+            log "CONFIG-DEFER: reconciliation already active owner=$owner reason=$reason; active owner will coalesce live config on completion"
             return 0
         fi
-    fi
 
-    acquire_lock || { log "CONFIG-DEFER: could not acquire reconciliation lock reason=$reason"; return 0; }
+        rebuild_composite_rules || {
+            log "CONFIG-REBUILD-FAILED: composite rules generation failed; deferring reconcile."
+            return 1
+        }
+        acquire_lock || { log "CONFIG-DEFER: could not acquire reconciliation lock reason=$reason"; return 0; }
+        aad_policy_snapshot_begin || { release_lock; log "CONFIG-SNAPSHOT-FAILED reason=$reason"; return 1; }
 
-    current_hash=$(compute_config_hash)
-    previous_hash=$(cat "$CONFIG_HASH_FILE" 2>/dev/null)
-    if [ "$current_hash" = "$previous_hash" ]; then
+        _rcc_start="$AAD_POLICY_START_HASH"
+        _rcc_previous=$(cat "$CONFIG_HASH_FILE" 2>/dev/null)
+        if [ "$_rcc_force" = "0" ] && [ "$_rcc_start" = "$_rcc_previous" ] && aad_candidate_cache_valid; then
+            aad_write_reconcile_status IDLE NOOP "$_rcc_start" "applied=yes source=$reason"
+            aad_policy_snapshot_end
+            release_lock
+            return 0
+        fi
+
+        AAD_PROTECTED_CACHE_ACTIVE=1
+        export AAD_PROTECTED_CACHE_ACTIVE
+        _rcc_mode="DEEP"
+        aad_write_reconcile_status RUNNING "$_rcc_mode" "$_rcc_start" "source=$reason round=$_rcc_round"
+
+        _rcc_candidate_discovery=$(cat "$DISCOVERY_HASH_FILE" 2>/dev/null)
+        _rcc_candidate_nonprimary=$(cat "$NON_PRIMARY_HASH_FILE" 2>/dev/null)
+        _rcc_scope=$(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null)
+        if [ -f "$CANDIDATE_FILE" ] && [ "$_rcc_candidate_discovery" = "$AAD_POLICY_DISCOVERY_HASH" ] && [ "$_rcc_candidate_nonprimary" = "$AAD_POLICY_NON_PRIMARY_HASH" ]; then
+            if [ "$(read_include_system_apps)" = "1" ] && [ "$_rcc_scope" = "USER" ]; then
+                _rcc_mode="SYSTEM_EXPAND"
+                aad_write_reconcile_status RUNNING "$_rcc_mode" "$_rcc_start" "source=$reason round=$_rcc_round"
+                expand_system_candidates_locked
+                rc=$?
+                if [ "$rc" -eq 0 ]; then
+                    _rcc_mode="FAST"
+                    aad_write_reconcile_status RUNNING "$_rcc_mode" "$_rcc_start" "source=$reason round=$_rcc_round after=system-expand"
+                    fast_policy_reconcile_locked
+                    rc=$?
+                fi
+            else
+                _rcc_mode="FAST"
+                aad_write_reconcile_status RUNNING "$_rcc_mode" "$_rcc_start" "source=$reason round=$_rcc_round"
+                fast_policy_reconcile_locked
+                rc=$?
+            fi
+        else
+            log "CONFIG changed -> deep discovery source=$reason candidate_cache=$([ -f "$CANDIDATE_FILE" ] && echo present || echo missing)"
+            full_rescan_locked
+            rc=$?
+        fi
+
+        unset AAD_PROTECTED_CACHE_ACTIVE
+        rm -f "$DATA_DIR"/.dyn_prot_u* "$DATA_DIR"/.dyn_prot_unknown_u* 2>/dev/null || true
+
+        _rcc_latest=$(compute_config_hash)
+        if [ "$rc" -eq 0 ] && [ "$_rcc_latest" = "$_rcc_start" ]; then
+            refresh_policy_caches
+            printf '%s\n' "$_rcc_start" > "$CONFIG_HASH_FILE"
+            compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
+            printf '%s\n' "$AAD_POLICY_DISCOVERY_HASH" > "$DISCOVERY_HASH_FILE"
+            printf '%s\n' "$AAD_POLICY_NON_PRIMARY_HASH" > "$NON_PRIMARY_HASH_FILE"
+            printf '%s|%s|%s\n' "$_rcc_start" "$(date +%s 2>/dev/null)" "$_rcc_mode" > "$APPLIED_GENERATION_FILE" 2>/dev/null
+            aad_write_reconcile_status IDLE "$_rcc_mode" "$_rcc_start" "applied=yes source=$reason"
+        elif [ "$rc" -eq 0 ]; then
+            log "CONFIG-COALESCE: generation changed while $_rcc_mode was running old=$_rcc_start latest=$_rcc_latest; old generation not marked applied"
+            aad_write_reconcile_status PENDING "$_rcc_mode" "$_rcc_start" "latest=$_rcc_latest source=$reason"
+        else
+            aad_write_reconcile_status FAILED "$_rcc_mode" "$_rcc_start" "rc=$rc source=$reason"
+        fi
+
+        _rcc_generation_applied=0
+        [ "$rc" -eq 0 ] && [ "$_rcc_latest" = "$_rcc_start" ] && _rcc_generation_applied=1
+        aad_policy_snapshot_end
         release_lock
-        return 0
-    fi
+        if [ "$_rcc_generation_applied" = "1" ]; then
+            reconcile_side_effects "config:$reason" >/dev/null 2>&1 || true
+            launch_ad_surface_indexer_bg "config:$reason" >/dev/null 2>&1 || true
+        fi
+        _rcc_last_rc=$rc
 
-    current_base=$(compute_base_policy_hash)
-    previous_base=$(cat "$BASE_POLICY_HASH_FILE" 2>/dev/null)
+        [ "$rc" -eq 0 ] || return "$rc"
+        _rcc_now=$(compute_config_hash)
+        _rcc_applied=$(cat "$CONFIG_HASH_FILE" 2>/dev/null)
+        if [ "$_rcc_now" = "$_rcc_applied" ] && [ "$_rcc_generation_applied" = "1" ]; then
+            return 0
+        fi
+        _rcc_force=1
+        log "CONFIG-COALESCE: immediately reconciling latest generation round=$((_rcc_round + 1)) force=$_rcc_force"
+        reason="coalesced:$reason"
+    done
 
-    if [ -n "$previous_base" ] && [ "$current_base" = "$previous_base" ]; then
-        log "CONFIG changed -> whitelist delta reconciliation source=$reason old=${previous_hash:-none} new=$current_hash"
-        reconcile_whitelist_delta_locked
-        rc=$?
-    else
-        log "CONFIG changed -> full policy reconciliation source=$reason base_policy_changed=yes old=${previous_hash:-none} new=$current_hash"
-        full_rescan_locked
-        rc=$?
-    fi
-
-    if [ "$rc" -eq 0 ]; then
-        refresh_policy_caches
-        compute_config_hash > "$CONFIG_HASH_FILE"
-        compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
-    fi
-    release_lock
-    [ "$rc" -eq 0 ] && reconcile_ad_surface_killer "config:$reason" >/dev/null 2>&1 || true
-    [ "$rc" -eq 0 ] && launch_ad_surface_indexer_bg "config:$reason" >/dev/null 2>&1 || true
-    return "$rc"
+    log "CONFIG-COALESCE-PENDING: more than 3 generations changed during reconcile; watcher will continue with latest"
+    return "$_rcc_last_rc"
 }
 
 AAD_FULL_VERIFY_MAX_AGE=${AAD_FULL_VERIFY_MAX_AGE:-86400}
@@ -3849,22 +5558,34 @@ aad_package_verified() {
 full_rescan_locked() {
     AAD_TIMING_TOTAL_START=$(aad_now_ms)
     installed_keys="$DATA_DIR/.installed_keys.$$"
-    list_all_installed_package_keys > "$installed_keys"
+    if ! list_all_installed_package_keys > "$installed_keys"; then
+        rm -f "$installed_keys" 2>/dev/null
+        log "FULL-SCAN aborted: installed-user snapshot unavailable"
+        return 1
+    fi
+    new_state="$DATA_DIR/package_state.tmp.$$"
+    if ! list_all_package_state > "$new_state"; then
+        rm -f "$installed_keys" "$new_state" 2>/dev/null
+        log "FULL-SCAN aborted: desired-user snapshot unavailable"
+        return 1
+    fi
+    reconcile_out_of_scope_records "$installed_keys" "$new_state"
     cleanup_stale_records "$installed_keys"
     retry_orphan_restores
-    new_state="$DATA_DIR/package_state.tmp.$$"
-    list_all_package_state > "$new_state"
     total=0
     processed=0
     skipped=0
     aborted=0
+    _full_package_failed=0
     AAD_AUDIT_CARRY="$COMPONENT_AUDIT_FILE.carry"
     AAD_SDK_CARRY="$SDK_FINGERPRINT_FILE.carry"
-    rm -f "$AAD_AUDIT_CARRY" "$AAD_SDK_CARRY" 2>/dev/null
+    AAD_DISCOVERY_FAILED_FILE="$DATA_DIR/.discovery_failed.$$"
+    export AAD_DISCOVERY_FAILED_FILE
+    rm -f "$AAD_AUDIT_CARRY" "$AAD_SDK_CARRY" "$AAD_DISCOVERY_FAILED_FILE" 2>/dev/null
     [ -s "$COMPONENT_AUDIT_FILE" ] && cp "$COMPONENT_AUDIT_FILE" "$AAD_AUDIT_CARRY" 2>/dev/null
     [ -s "$SDK_FINGERPRINT_FILE" ] && cp "$SDK_FINGERPRINT_FILE" "$AAD_SDK_CARRY" 2>/dev/null
 
-    AAD_POLICY_FINGERPRINT=$(compute_config_hash)
+    AAD_POLICY_FINGERPRINT="${AAD_POLICY_START_HASH:-$(compute_config_hash)}"
     AAD_SKIPPED_KEYS="$DATA_DIR/.scan_skipped.$$"
     AAD_VERIFIED_NEW="$PACKAGE_VERIFIED_FILE.new.$$"
     : > "$AAD_SKIPPED_KEYS"; : > "$AAD_VERIFIED_NEW"
@@ -3939,6 +5660,7 @@ full_rescan_locked() {
         n=$(process_package_user "$user" "$pkg")
         rc=$?
         [ "$rc" -eq 0 ] && printf '|%s|%s|%s|\n' "$user" "$pkg" "$vc" >> "$AAD_VERIFIED_NEW"
+        [ "$rc" -eq 0 ] || _full_package_failed=1
         case "$n" in ''|*[!0-9]*) n=0 ;; esac
         total=$((total + n))
         if [ "$rc" -eq 2 ] || [ -f "$AAD_FAIL_FAST_ABORT" ]; then
@@ -3947,6 +5669,8 @@ full_rescan_locked() {
         fi
     done < "$new_state"
     AAD_TIMING_PACKAGE_END=$(aad_now_ms)
+    _full_discovery_failed=0
+    [ -f "$AAD_DISCOVERY_FAILED_FILE" ] && _full_discovery_failed=1
 
     if [ "$skipped" -gt 0 ]; then
         for _cf in "$AAD_AUDIT_CARRY:$COMPONENT_AUDIT_FILE" "$AAD_SDK_CARRY:$SDK_FINGERPRINT_FILE"; do
@@ -3962,7 +5686,7 @@ full_rescan_locked() {
     fi
     rm -f "$AAD_AUDIT_CARRY" "$AAD_SDK_CARRY" "$AAD_SKIPPED_KEYS" 2>/dev/null
 
-    if [ "$aborted" -ne 1 ] && [ -s "$AAD_VERIFIED_NEW" ]; then
+    if [ "$aborted" -ne 1 ] && [ "$_full_discovery_failed" -eq 0 ] && [ -s "$AAD_VERIFIED_NEW" ]; then
         chmod 600 "$AAD_VERIFIED_NEW" 2>/dev/null || true
         if mv -f "$AAD_VERIFIED_NEW" "$PACKAGE_VERIFIED_FILE" 2>/dev/null; then
             printf '%s\n' "$AAD_POLICY_FINGERPRINT" > "$PACKAGE_VERIFIED_HASH_FILE" 2>/dev/null
@@ -3981,11 +5705,15 @@ full_rescan_locked() {
     unset AAD_MANIFEST_STATS_FILE
     unset AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH AAD_CURRENT_VERSION_CODE
     rm -f "$AAD_FAIL_FAST_STATE" 2>/dev/null
-    if [ -s "$new_state" ]; then
+    if [ "$_full_discovery_failed" -eq 0 ] && [ -s "$new_state" ]; then
         mv -f "$new_state" "$STATE_FILE"
     else
         rm -f "$new_state" 2>/dev/null
-        log "PACKAGE-STATE-SKIP: enumeration returned no packages; previous baseline preserved."
+        if [ "$_full_discovery_failed" -ne 0 ]; then
+            log "PACKAGE-STATE-PRESERVED: discovery failed for at least one package; previous authoritative baseline retained."
+        else
+            log "PACKAGE-STATE-SKIP: enumeration returned no packages; previous baseline preserved."
+        fi
     fi
 
     if [ "$aborted" -eq 1 ]; then
@@ -4006,8 +5734,27 @@ full_rescan_locked() {
         return 1
     fi
     AAD_TIMING_IFW_END=$(aad_now_ms)
-    compute_config_hash > "$CONFIG_HASH_FILE"
-    compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
+    if [ "$_full_discovery_failed" -ne 0 ]; then
+        rm -f "$installed_keys" "$AAD_DISCOVERY_FAILED_FILE" 2>/dev/null
+        unset AAD_DISCOVERY_FAILED_FILE
+        log "FULL-SCAN incomplete: at least one package discovery FAILED; previous candidate generation preserved and retry required."
+        return 1
+    fi
+    rm -f "$AAD_DISCOVERY_FAILED_FILE" 2>/dev/null
+    unset AAD_DISCOVERY_FAILED_FILE
+    if aad_candidate_cache_rebuild_from_audit; then
+        printf '%s\n' "${AAD_POLICY_DISCOVERY_HASH:-$(compute_discovery_policy_hash)}" > "$DISCOVERY_HASH_FILE"
+        printf '%s\n' "${AAD_POLICY_NON_PRIMARY_HASH:-$(compute_non_primary_settings_hash)}" > "$NON_PRIMARY_HASH_FILE"
+        if [ "$(read_include_system_apps)" = "1" ]; then echo ALL > "$CANDIDATE_SCOPE_FILE"; else echo USER > "$CANDIDATE_SCOPE_FILE"; fi
+        if ! aad_scope_cache_build_authoritative; then
+            log "SCOPE-CACHE rebuild deferred after deep discovery; FAST will retry authoritative package scope capture"
+            rm -f "$PACKAGE_SCOPE_CACHE" 2>/dev/null
+        fi
+        log "CANDIDATE-CACHE rebuilt entries=$(grep -c . "$CANDIDATE_FILE" 2>/dev/null) scope=$(cat "$CANDIDATE_SCOPE_FILE" 2>/dev/null)"
+    else
+        log "CANDIDATE-CACHE rebuild failed; next policy change will use deep discovery"
+        rm -f "$DISCOVERY_HASH_FILE" "$NON_PRIMARY_HASH_FILE" "$CANDIDATE_SCOPE_FILE" 2>/dev/null
+    fi
     rm -f "$installed_keys" 2>/dev/null
     audit_summary=$(awk -F'|' '
         NR>1 {
@@ -4045,16 +5792,40 @@ full_rescan_locked() {
     timing_ifw=$(aad_elapsed_ms "$AAD_TIMING_IFW_START" "$AAD_TIMING_IFW_END")
     timing_total=$(aad_elapsed_ms "$AAD_TIMING_TOTAL_START" "$AAD_TIMING_TOTAL_END")
     log "TIMING-SUMMARY inventory_ms=$timing_inventory package_reconcile_ms=$timing_packages ifw_ms=$timing_ifw total_ms=$timing_total"
-    log "FULL-SCAN finished: packages/users=$processed operations=$total"
+    log "FULL-SCAN finished: packages/users=$processed operations=$total package_failed=$_full_package_failed"
     [ "$AAD_SHOW_PROGRESS" = "1" ] && echo "Scan complete: $processed checked, $total policy operations."
+    [ "$_full_package_failed" -eq 0 ] || return 1
     return 0
 }
 
 full_rescan() {
     acquire_lock || { log "LOCK timeout: full rescan skipped"; return 1; }
+    aad_policy_snapshot_begin || { release_lock; return 1; }
+    AAD_PROTECTED_CACHE_ACTIVE=1
+    export AAD_PROTECTED_CACHE_ACTIVE
+    aad_write_reconcile_status RUNNING DEEP_MANUAL "$AAD_POLICY_START_HASH" "source=manual/full"
     full_rescan_locked
     _fr_rc=$?
+    _fr_start="$AAD_POLICY_START_HASH"
+    unset AAD_PROTECTED_CACHE_ACTIVE
+    rm -f "$DATA_DIR"/.dyn_prot_u* "$DATA_DIR"/.dyn_prot_unknown_u* 2>/dev/null || true
+    _fr_latest=$(compute_config_hash)
+    if [ "$_fr_rc" -eq 0 ] && [ "$_fr_latest" = "$_fr_start" ]; then
+        printf '%s\n' "$_fr_start" > "$CONFIG_HASH_FILE"
+        compute_base_policy_hash > "$BASE_POLICY_HASH_FILE"
+        printf '%s|%s|DEEP_MANUAL\n' "$_fr_start" "$(date +%s 2>/dev/null)" > "$APPLIED_GENERATION_FILE" 2>/dev/null
+        aad_write_reconcile_status IDLE DEEP_MANUAL "$_fr_start" "applied=yes"
+    elif [ "$_fr_rc" -eq 0 ]; then
+        aad_write_reconcile_status PENDING DEEP_MANUAL "$_fr_start" "latest=$_fr_latest"
+    else
+        aad_write_reconcile_status FAILED DEEP_MANUAL "$_fr_start" "rc=$_fr_rc"
+    fi
+    aad_policy_snapshot_end
     release_lock
+    reconcile_side_effects "full_rescan"
+    if [ "$_fr_rc" -eq 0 ] && [ "$_fr_latest" != "$_fr_start" ]; then
+        reconcile_config_if_changed "post-manual-coalesce" >/dev/null 2>&1 || true
+    fi
     return "$_fr_rc"
 }
 
@@ -4073,9 +5844,14 @@ aad_verified_forget() {
 rescan_changed_packages_locked() {
     current="$DATA_DIR/package_state.current.$$"
     old_count=$(grep -c '|' "$STATE_FILE" 2>/dev/null); [ -n "$old_count" ] || old_count=0
-    list_all_package_state > "$current"
+    if ! list_all_package_state > "$current"; then
+        rm -f "$current" 2>/dev/null
+        log "PACKAGE-DELTA-SKIP: authoritative user/package enumeration failed; previous baseline preserved."
+        return 1
+    fi
     new_count=$(grep -c '|' "$current" 2>/dev/null); [ -n "$new_count" ] || new_count=0
     AAD_PACKAGE_CHANGES=0
+    _delta_failed=0
     if [ ! -s "$current" ]; then
         rm -f "$current" 2>/dev/null
         log "PACKAGE-DELTA-SKIP: enumeration returned no packages; nothing reconciled."
@@ -4102,15 +5878,25 @@ rescan_changed_packages_locked() {
             aad_verified_forget "$user" "$pkg"
             AAD_CURRENT_VERSION_CODE="$vc"
             export AAD_CURRENT_VERSION_CODE
-            process_package_user "$user" "$pkg" >/dev/null
+            if process_package_user "$user" "$pkg" >/dev/null; then
+                aad_scope_cache_update_package "$user" "$pkg" >/dev/null 2>&1 || rm -f "$PACKAGE_SCOPE_CACHE" 2>/dev/null
+            else
+                _delta_failed=1
+                log "PACKAGE-CHANGE-PENDING u$user: $pkg discovery/policy apply failed; previous package_state baseline preserved for retry"
+            fi
         fi
     done < "$current"
 
     rm -f "$AAD_APK_PATH_CACHE" 2>/dev/null
     unset AAD_APK_PATH_CACHE AAD_MANIFEST_CACHE_ENABLED AAD_MANIFEST_RULES_HASH AAD_CURRENT_VERSION_CODE
 
-    mv -f "$current" "$STATE_FILE"
-    cleanup_stale_records
+    if [ "$_delta_failed" -ne 0 ]; then
+        rm -f "$current" 2>/dev/null
+        : > "$PACKAGE_RESCAN_PENDING" 2>/dev/null || true
+        return 1
+    fi
+    mv -f "$current" "$STATE_FILE" 2>/dev/null || { rm -f "$current" 2>/dev/null; return 1; }
+    cleanup_stale_records || return 1
     reconcile_owned_ifw_rules
 }
 
@@ -4123,13 +5909,32 @@ rescan_changed_packages() {
         return 1
     fi
     rm -f "$PACKAGE_RESCAN_PENDING" 2>/dev/null
+    aad_policy_snapshot_begin || { release_lock; return 1; }
+    _rcp_start="$AAD_POLICY_START_HASH"
+    AAD_PROTECTED_CACHE_ACTIVE=1
+    export AAD_PROTECTED_CACHE_ACTIVE
+    aad_write_reconcile_status RUNNING PACKAGE_DELTA "$_rcp_start" "source=package-watch"
     rescan_changed_packages_locked
     rc=$?
     changes=${AAD_PACKAGE_CHANGES:-0}
+    unset AAD_PROTECTED_CACHE_ACTIVE
+    rm -f "$DATA_DIR"/.dyn_prot_u* "$DATA_DIR"/.dyn_prot_unknown_u* 2>/dev/null || true
+    _rcp_latest=$(compute_config_hash)
+    if [ "$rc" -eq 0 ] && [ "$_rcp_latest" = "$_rcp_start" ]; then
+        aad_write_reconcile_status IDLE PACKAGE_DELTA "$_rcp_start" "changes=$changes"
+    elif [ "$rc" -eq 0 ]; then
+        aad_write_reconcile_status PENDING PACKAGE_DELTA "$_rcp_start" "latest=$_rcp_latest"
+    else
+        aad_write_reconcile_status FAILED PACKAGE_DELTA "$_rcp_start" "rc=$rc"
+    fi
+    aad_policy_snapshot_end
     release_lock
-    if [ "$rc" -eq 0 ] && [ "$changes" -gt 0 ] 2>/dev/null; then
+    if [ "$rc" -eq 0 ] && [ "$changes" -gt 0 ] 2>/dev/null && [ "$_rcp_latest" = "$_rcp_start" ]; then
         reconcile_ad_surface_killer "package-change:$changes" >/dev/null 2>&1 || true
         launch_ad_surface_indexer_bg "package-change:$changes" >/dev/null 2>&1 || true
+    fi
+    if [ "$rc" -eq 0 ] && [ "$_rcp_latest" != "$_rcp_start" ]; then
+        reconcile_config_if_changed "post-package-coalesce" >/dev/null 2>&1 || true
     fi
     return "$rc"
 }

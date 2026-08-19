@@ -7,6 +7,8 @@ DATA_DIR="/data/adb/analytics_ads_disabler"
 LOG_DIR="$DATA_DIR/logs"
 LOGFILE="$LOG_DIR/debug.log"
 LAST_UPDATE_FILE="$DATA_DIR/.last_rules_update"
+VENDOR_RULES="$DATA_DIR/rules.vendor.conf"
+USER_RULES="$DATA_DIR/rules.user.conf"
 RULES_FILE="$DATA_DIR/rules.conf"
 SETTINGS_FILE="$DATA_DIR/settings.conf"
 REMOTE_RULES_URL="https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/rules.conf"
@@ -33,9 +35,9 @@ read_bool_setting() {
 http_fetch() {
     _url="$1"; _out="$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -skfL --connect-timeout 15 --max-time 60 "$_url" -o "$_out" 2>/dev/null && return 0
+        curl -sfL --connect-timeout 15 --max-time 60 "$_url" -o "$_out" 2>/dev/null && return 0
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --no-check-certificate --timeout=15 -O "$_out" "$_url" 2>/dev/null && return 0
+        wget -q --timeout=15 -O "$_out" "$_url" 2>/dev/null && return 0
     fi
     return 1
 }
@@ -51,26 +53,20 @@ is_wifi_connected() {
     return 1
 }
 
-has_network() {
-    if command -v ping >/dev/null 2>&1; then
-        ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && return 0
-        ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 && return 0
-    fi
-    return 0
-}
+if [ -f "$MODDIR/common.sh" ]; then
+    . "$MODDIR/common.sh"
+elif [ -f "$DATA_DIR/common.sh" ]; then
+    . "$DATA_DIR/common.sh"
+fi
 
 check_and_update_rules() {
-    [ "$(read_bool_setting AUTO_UPDATE_RULES 1)" = "1" ] || return 0
+    [ "$(read_bool_setting AUTO_UPDATE_RULES 0)" = "1" ] || return 0
 
     if [ "$(read_bool_setting AUTO_UPDATE_WIFI_ONLY 0)" = "1" ]; then
         if ! is_wifi_connected; then
             log "Update skipped: Wi-Fi required but not connected"
             return 0
         fi
-    fi
-
-    if ! has_network; then
-        return 0
     fi
 
     _now=$(date +%s 2>/dev/null)
@@ -119,37 +115,81 @@ check_and_update_rules() {
     fi
 
     # Проверка на отсутствие битых байт / BOM
-    if head -c 3 "$_tmp_download" 2>/dev/null | grep -q $'\xef\xbb\xbf'; then
+    if [ "$(od -An -tx1 -N3 "$_tmp_download" 2>/dev/null | tr -d ' \n')" = "efbbbf" ]; then
         log "Validation failed: BOM header detected"
         rm -f "$_tmp_download" "$_tmp_hash" 2>/dev/null
         return 1
     fi
 
-    # Сравнение с текущими правилами
-    if [ -f "$RULES_FILE" ] && cmp -s "$_tmp_download" "$RULES_FILE" 2>/dev/null; then
-        log "Local rules are already up to date"
-        echo "$_now" > "$LAST_UPDATE_FILE" 2>/dev/null || true
+    # Скачивание и проверка SHA-256 хеша манифеста
+    if ! http_fetch "$REMOTE_HASH_URL" "$_tmp_hash"; then
+        log "Validation failed: SHA-256 manifest unavailable"
         rm -f "$_tmp_download" "$_tmp_hash" 2>/dev/null
-        return 0
+        return 1
+    fi
+    _expected_hash=$(awk 'NR==1 {print tolower($1)}' "$_tmp_hash" 2>/dev/null | tr -d '\r\n')
+    case "$_expected_hash" in ''|*[!0-9a-f]* )
+        log "Validation failed: malformed SHA-256 manifest"
+        rm -f "$_tmp_download" "$_tmp_hash" 2>/dev/null
+        return 1 ;;
+    esac
+    [ "${#_expected_hash}" -eq 64 ] || {
+        log "Validation failed: malformed SHA-256 length"
+        rm -f "$_tmp_download" "$_tmp_hash" 2>/dev/null
+        return 1
+    }
+    _actual_hash=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        _actual_hash=$(sha256sum "$_tmp_download" 2>/dev/null | awk '{print tolower($1)}')
+    elif command -v openssl >/dev/null 2>&1; then
+        _actual_hash=$(openssl dgst -sha256 "$_tmp_download" 2>/dev/null | awk '{print tolower($NF)}')
+    fi
+    if [ -z "$_actual_hash" ] || [ "$_expected_hash" != "$_actual_hash" ]; then
+        log "Validation failed: SHA-256 mismatch or digest tool unavailable"
+        rm -f "$_tmp_download" "$_tmp_hash" 2>/dev/null
+        return 1
+    fi
+    log "SHA-256 integrity verified successfully: $_actual_hash"
+
+    # Vendor equality does not prove that composite/policy generation was applied.
+    if [ -f "$VENDOR_RULES" ] && cmp -s "$_tmp_download" "$VENDOR_RULES" 2>/dev/null; then
+        log "Vendor rules are already up to date; verifying composite and applied policy generation"
+        rm -f "$_tmp_download" 2>/dev/null
+        if rebuild_composite_rules && reconcile_config_if_changed "rules_update_equal"; then
+            echo "$_now" > "$LAST_UPDATE_FILE" 2>/dev/null || true
+            rm -f "$_tmp_hash" 2>/dev/null
+            return 0
+        fi
+        log "Existing vendor rules could not be reconciled; update remains pending"
+        rm -f "$_tmp_hash" 2>/dev/null
+        return 1
     fi
 
+    _vendor_prev="$DATA_DIR/.rules.vendor.prev.$$"
+    [ -f "$VENDOR_RULES" ] && cp "$VENDOR_RULES" "$_vendor_prev" 2>/dev/null || rm -f "$_vendor_prev" 2>/dev/null
     chmod 600 "$_tmp_download" 2>/dev/null || true
-    if mv -f "$_tmp_download" "$RULES_FILE" 2>/dev/null; then
-        echo "$_now" > "$LAST_UPDATE_FILE" 2>/dev/null || true
-        log "RULES UPDATED successfully (size=${_size} bytes). Triggering reconciliation."
-        
-        # Оповещение подсистемы мониторинга
-        if [ -f "$DATA_DIR/service.sh" ]; then
-            sh "$DATA_DIR/service.sh" reconcile-rules >/dev/null 2>&1 &
-        elif [ -f "$MODDIR/service.sh" ]; then
-            sh "$MODDIR/service.sh" reconcile-rules >/dev/null 2>&1 &
+    if mv -f "$_tmp_download" "$VENDOR_RULES" 2>/dev/null; then
+        log "VENDOR RULES UPDATED successfully (size=${_size} bytes). Rebuilding and reconciling."
+        if rebuild_composite_rules && reconcile_config_if_changed "rules_update"; then
+            echo "$_now" > "$LAST_UPDATE_FILE" 2>/dev/null || true
+            rm -f "$_tmp_hash" "$_vendor_prev" 2>/dev/null
+            log "VENDOR RULES RECONCILED successfully."
+            return 0
         fi
+        log "Vendor update did not reach applied policy; rolling vendor source back"
+        if [ -f "$_vendor_prev" ]; then
+            mv -f "$_vendor_prev" "$VENDOR_RULES" 2>/dev/null || true
+            rebuild_composite_rules >/dev/null 2>&1 || true
+            reconcile_config_if_changed "rules_update_rollback" >/dev/null 2>&1 || true
+        fi
+        rm -f "$_tmp_hash" 2>/dev/null
+        return 1
     else
-        log "Failed to apply updated rules file"
-        rm -f "$_tmp_download" 2>/dev/null
+        rm -f "$_vendor_prev" 2>/dev/null
+        log "Failed to apply updated vendor rules file"
+        rm -f "$_tmp_download" "$_tmp_hash" 2>/dev/null
+        return 1
     fi
-    rm -f "$_tmp_hash" 2>/dev/null
-    return 0
 }
 
 # Если запущен напрямую - выполняем однократную проверку

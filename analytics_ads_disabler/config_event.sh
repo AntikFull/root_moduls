@@ -5,7 +5,7 @@ watched=${2:-?}
 child=${3:-}
 
 case "$child" in
-    settings.conf|rules.conf|whitelist.list|white_ads.list|white_analytics.list) ;;
+    settings.conf|rules.user.conf|rules.vendor.conf|whitelist.list|white_ads.list|white_analytics.list|smart_reward.list|qa_targets.list) ;;
     *) exit 0 ;;
 esac
 
