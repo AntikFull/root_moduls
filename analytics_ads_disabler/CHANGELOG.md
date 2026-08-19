@@ -1,65 +1,66 @@
 # v6.0.8 / 6008
 
-- **Rollback correctness:** runtime, ordinary uninstall и deferred rollback используют общий authoritative component-state engine; `UNKNOWN` больше не превращается в `default`/external preserve.
-- **Transactional uninstall recovery:** deferred bundle строится во временной директории, обязательные assets копируются с verification и публикуются атомарно до удаления source state.
-- **Multi-user fail-safe:** failure `cmd user list` или package snapshot больше не означает `user 0 only`/empty inventory; неполная generation не публикуется authoritative.
-- **Discovery tri-state:** package/manifest discovery различает authoritative DATA/EMPTY и FAILED; при FAILED прежние audit/candidate/membership rows сохраняются и идут на retry.
-- **Policy-neutral candidate schema v3:** manifest discovery больше не зависит от ADS/ANALYTICS/SYSTEM toggles; старые потенциально неполные caches принудительно проходят один authoritative deep rebuild.
-- **FAST snapshot gate:** global-delta FAST прекращается, если installed-package snapshot не authoritative.
-- **Firewall terminal semantics:** cleanup проверяет отсутствие own jump/master/child chains, missing active backend остаётся PENDING; QUIC/DoH rule failures больше не маскируются success; stale child chains удаляются до batch restore.
-- **AppOps apply retry:** read/set/verify failures возвращают nonzero и создают side-effect pending state.
-- **Scope/cache hardening:** malformed package-scope/candidate rows инвалидируют cache; missing/corrupt SYSTEM primary key fail-safe OFF и не resurrect legacy `SCAN_SYSTEM_APPS`.
-- **Boot rules transaction:** startup использует только central checked `rebuild_composite_rules()`; stale composite не считается допустимым после failed commit.
-- **Current-user safety:** inability to resolve current Android user больше не угадывается как user 0.
-- **Ad Surface snapshot safety:** failed authoritative package inventory не публикует ложнопустой surface index и сохраняет последний completed index.
+- **Корректность отката (Rollback):** среда выполнения, штатное удаление и отложенный откат используют единый авторитетный движок состояний компонентов; статус UNKNOWN больше не подменяется состоянием по умолчанию.
+- **Транзакционное восстановление при удалении:** пакет отложенного восстановления формируется во временном каталоге, все обязательные ресурсы верифицируются и публикуются атомарно до очистки исходного состояния.
+- **Отказоустойчивость Multi-User:** сбой cmd user list или снимка пакетов больше не приводит к ошибочному предположению «только пользователь 0» или очистке базы; неполные поколения политики не помечаются как примененные.
+- **Трехпозиционная семантика обнаружения:** анализ пакетов и манифестов строго различает состояния ДАННЫЕ, ПУСТО и ОШИБКА; при сбое предыдущие записи аудита и кандидатов сохраняются и отправляются на повторную обработку.
+- **Нейтральная к политике схема кандидатов v3:** обнаружение манифестов больше не зависит от текущих переключателей ADS/ANALYTICS/SYSTEM; устаревшие неполные кэши принудительно перестраиваются через разовый глубокий аудит.
+- **Защита FAST-снимка:** глобальный FAST-режим прерывается, если снимок установленных пакетов не подтвержден.
+- **Терминальная семантика фаервола:** процедура очистки проверяет отсутствие собственных цепочек и правил, отсутствующий активный бэкенд переходит в статус ожидания; сбои правил QUIC/DoH больше не маскируются под успех; устаревшие цепочки удаляются до пакетного восстановления.
+- **Повторные попытки AppOps:** ошибки чтения, установки и верификации возвращают ненулевой код и создают состояние ожидания повтора.
+- **Усиление кэша областей видимости:** поврежденные строки классификации пакетов инвалидируют кэш; поврежденный ключ SYSTEM по умолчанию выключается без воскрешения устаревших параметров.
+- **Транзакция правил при загрузке:** запуск использует централизованную проверенную сборку 
+ebuild_composite_rules(); устаревший файл правил не допускается после сбоя коммита.
+- **Безопасность текущего пользователя:** невозможность определить текущего пользователя Android больше не подменяется принудительно на пользователя 0.
+- **Безопасность снимка Ad Surface:** сбой инвентаризации пакетов не создает ложнопустой индекс и сохраняет последний успешно завершенный индекс поверхностей рекламы.
 
 # v6.0.7 / 6007
 
-- **Global Delta FAST v2**: обычные ADS/ANALYTICS/SYSTEM переключения больше не выполняют `dumpsys package` для неизменившихся пакетов. Сначала строится единый desired membership-set, затем вычисляется глобальный diff `desired - current` / `current - desired`.
-- **PM только для реального delta**: PackageManager read-back/disable/restore выполняются только для компонентов, которые реально добавляются в ownership или выходят из него. No-op generation на валидном cache не делает component PM calls.
-- **Batch membership/state transaction**: новые original-state записи сохраняются одной транзакцией до мутаций; итоговый `disabled_components.list` коммитится атомарно одним batch; успешно восстановленные state rows удаляются batch-операцией после membership commit.
-- **Fail-safe authoritative state read**: новый компонент не отключается, если его исходный override state нельзя достоверно прочитать. Generation остаётся failed/pending, ownership не придумывается.
-- **Rollback UNKNOWN != default**: обычный deep/add path и orphan restore также переведены на authoritative component-state read; временный `dumpsys package` failure больше не может превратить UNKNOWN в `default` и удалить recovery state.
-- **Persistent package scope cache**: `package_scope.list` хранит `USER/SYSTEM` классификацию и убирает повторную дорогую системную классификацию из interactive FAST. Cache обновляется package-delta/system-expansion и безопасно перестраивается authoritative package snapshots.
-- **Low-priority ownership verifier**: проверка внешнего re-enable и orphan rollback вынесена из interactive FAST в редкий safety/pending verifier. Это сохраняет enforcement/rollback, не заставляя каждый toggle перечитывать все owned packages.
-- **Category hand-off без PM**: `ADS↔ANALYTICS` на уже-owned компоненте меняет только membership-set, без промежуточного restore/re-disable и без повторного PackageManager read.
-- **Generation safety сохранена**: failed batch/state/PM операции не продвигают `.config.hash`/`.applied_generation`; pending ownership остаётся для повторной проверки.
-- LSPosed/Xposed companion bridge остаётся удалённым; upgrade-cleanup v6.0.6 сохранён.
+- **Глобальный дельта-режим FAST v2:** обычные переключения ADS/ANALYTICS/SYSTEM больше не вызывают dumpsys package для неизменившихся пакетов. Формируется общий список желаемых компонентов, после чего вычисляется точная разница desired - current / current - desired.
+- **Вызовы PackageManager только для реальных изменений:** чтение и изменение компонентов в PackageManager выполняются исключительно для тех элементов, которые реально добавляются или удаляются. Повторное применение той же политики не совершает лишних вызовов PM.
+- **Пакетные транзакции состояний:** новые исходные состояния компонентов сохраняются единой транзакцией до применения мутаций; итоговый список disabled_components.list коммитится атомарно; восстановленные записи удаляются пакетно после фиксации списка.
+- **Авторитетное чтение исходного состояния:** компонент не отключается, если его исходное состояние невозможно достоверно прочитать. Поколение переходит в статус ожидания, исключая потерю исходного состояния.
+- **Корректный откат без подмены UNKNOWN:** обычный глубокий поиск и восстановление потерянных компонентов также переведены на прямое чтение; временный сбой dumpsys package больше не сбрасывает статус в default.
+- **Постоянный кэш областей видимости пакетов:** файл package_scope.list сохраняет классификацию USER/SYSTEM, избавляя от повторной дорогостоящей проверки при каждом быстром переключении.
+- **Низкоприоритетный фоновый верификатор:** проверка внешнего включения компонентов вынесена из интерактивного FAST-режима в редкий фоновый процесс проверки безопасности.
+- **Передача категорий без лишних вызовов PM:** смена категории ADS ↔ ANALYTICS для уже отключенного компонента обновляет только базу принадлежности без промежуточного включения/отключения в системе.
+- **Сохранение безопасности поколений:** сбои пакетных операций не продвигают хеш примененного поколения; неподтвержденные компоненты остаются для следующей проверки.
+- Мост LSPosed/Xposed полностью удален из модуля.
 
 # v6.0.6 / 6006
 
-- Полностью удалён retired LSPosed/Xposed companion bridge из runtime `common.sh`: больше нет framework detection, `XPOSED_BRIDGE` policy и экспорта target-файлов.
-- При обновлении автоматически удаляются legacy `xposed_targets.json`, `xposed_targets.list` и их незавершённые `.tmp.*` файлы из data/module paths.
-- Legacy-ключ `XPOSED_BRIDGE=...` атомарно удаляется из существующего `settings.conf`, остальные пользовательские настройки сохраняются.
-- Native Zygisk + `aad_core.dex` остаются единственным встроенным in-process Auto-Collapse/QA-контуром; внешний LSPosed/APK companion для runtime AAD не требуется.
+- Полностью удален устаревший мост компаньона LSPosed/Xposed из runtime: исключено определение фреймворка, политика XPOSED_BRIDGE и экспорт файлов целей.
+- При обновлении автоматически удаляются устаревшие файлы xposed_targets.json, xposed_targets.list и их временные файлы.
+- Параметр XPOSED_BRIDGE атомарно удаляется из существующего settings.conf с сохранением всех остальных настроек пользователя.
+- Нативный Zygisk и библиотека ad_core.dex остаются единственным встроенным контуром схлопывания рекламы (Auto-Collapse); внешний компаньон больше не требуется.
 
 # v6.0.5 / 6005
 
-- Fast policy reconcile: обычные `BLOCK_ADS` / `BLOCK_ANALYTICS` / `INCLUDE_SYSTEM_APPS` больше не требуют полного manifest discovery всех приложений при валидном candidate cache.
-- Generation snapshot + coalescing: один reconcile работает по неизменяемому snapshot настроек; более новая policy не смешивается с уже идущим проходом и применяется следующей generation.
-- Persistent `component_candidates.list` + discovery/non-primary hashes; warm boot использует cache и package-delta вместо безусловного deep scan.
-- `SYSTEM 0→1` расширяет USER-cache только системными пакетами; частичный/неавторитетный PackageManager snapshot fail-safe оставляет scope `USER` и не применяет неполную policy.
-- `SYSTEM 1→0` и category OFF используют текущие memberships/ownership для быстрого restore.
-- Category hand-off исправлен: новая membership добавляется до удаления старой, поэтому `ADS↔ANALYTICS` не вызывает временный restore/re-disable одного компонента и не портит original state.
-- Overlay AppOps теперь строго ADS-only: analytics-only package не получает ADS overlay restrictions только потому, что `BLOCK_ADS=1` глобально.
-- `reconcile.status` и `.applied_generation` добавлены для точного runtime/ADB ожидания terminal generation (`FAST`, `SYSTEM_EXPAND`, `DEEP`, `PACKAGE_DELTA`, `NOOP`).
-- `qa_targets.list` теперь действительно участвует в config generation hash.
-- Старый v6.0.4 audit может безопасно bootstrap'нуть USER candidate cache только при подтверждённом полном coverage; иначе выполняется deep discovery.
+- **Быстрое применение политики (FAST):** переключение BLOCK_ADS, BLOCK_ANALYTICS, INCLUDE_SYSTEM_APPS больше не требует полного сканирования манифестов всех приложений при наличии валидного кэша кандидатов.
+- **Снимки поколений (Generation Snapshots):** каждый цикл реконсиляции работает по неизменяемому снимку конфигурации; новые изменения объединяются со следующим поколением без разрыва текущего прохода.
+- **Постоянный кэш кандидатов component_candidates.list:** теплый запуск использует кэш и дельту пакетов вместо медленного глубокого сканирования.
+- **Расширение SYSTEM 0 → 1:** первичное включение системных приложений дополняет пользовательский кэш только системными пакетами.
+- **Быстрый откат при SYSTEM 1 → 0:** отключение системных служб и категорий использует текущую базу для мгновенного восстановления.
+- **Передача категорий (Hand-off):** новая категория регистрируется до удаления старой, исключая временное включение и мерцание компонентов.
+- **AppOps строго для рекламы:** пакеты с одной лишь аналитикой не получают ограничений оверлеев рекламы.
+- **Контроль поколений 
+econcile.status и .applied_generation:** добавлены точные маркеры завершения поколений (FAST, SYSTEM_EXPAND, DEEP, PACKAGE_DELTA, NOOP).
+- Параметр qa_targets.list включен в расчет хеша поколения конфигурации.
 
 # v6.0.4 / 6004
 
-- Fixed authoritative per-user package snapshots: an empty profile is now a valid successful snapshot, while PackageManager failures remain UNKNOWN and never trigger restore/ownership deletion.
-- Added snapshot-validity guard to whitelist/config delta restore.
-- Added unified scope re-check at the final firewall mutation boundary; stale targets cannot bypass SYSTEM/whitelist/protected policy.
-- AppOps restore now retains unresolved ownership rows and verifies read-back before dropping state.
-- Advertising-ID settings restore now uses compare-before-restore, per-user retry state and read-back verification.
-- WebView shared-file feature is OFF by default on fresh installs and restore retains backup on failures.
-- Rule updater only advances success timestamp after composite rebuild + policy reconcile; failed generations roll back/retry.
-- Legacy v5 custom-rule migration preserves section context.
-- Installer refuses to delete live state locks and validates exact SHA-256 format.
-- Firewall rebuild preserves the existing AAD jump position instead of reinserting at OUTPUT position 1.
-- App-event locks now use PID + process starttime ownership.
-- Legacy IFW cleanup no longer blocks the PM-only runtime when an old IFW file was modified externally.
+- Исправлены снимки пакетов per-user: пустой профиль считается корректным снимком, а сбои PackageManager сохраняют статус UNKNOWN без удаления базы.
+- Добавлена проверка валидности снимков при откате изменений по белому списку.
+- Внедрена сквозная проверка областей видимости перед мутациями сетевого экрана.
+- Процедура отката AppOps сохраняет неразрешенные записи и проверяет результат чтения перед удалением состояния.
+- Восстановление Advertising-ID использует сравнение перед откатом и попользовательскую проверку.
+- Параметр командной строки WebView по умолчанию выключен на чистых установках.
+- Обновлятор правил продвигает метку времени только после успешной пересборки композитных правил и применения политики.
+- Миграция пользовательских правил с v5 сохраняет контекст секций.
+- Установщик не удаляет активные блокировки и проверяет точный формат SHA-256.
+- Пересборка фаервола сохраняет текущую позицию перехода в цепочку AAD вместо принудительной вставки на первое место.
+- Блокировки событий приложений используют PID и время запуска процесса для контроля владельца.
+- Очистка устаревшего IFW больше не блокирует компонентный режим при внешнем изменении файлов.
 
 # Список изменений Analytics & Ads Disabler
 

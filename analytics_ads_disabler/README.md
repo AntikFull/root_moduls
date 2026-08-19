@@ -1,11 +1,10 @@
 # Analytics & Ads Disabler v6.0.8
 
+> **v6.0.8:** Повышение надежности и отказоустойчивости: единый проверенный механизм отката (rollback) для runtime, удаления и отложенных задач; транзакционный пакет восстановления; строгое разделение снимков multi-user; трехпозиционная семантика обнаружения (данные / пусто / ошибка); нейтральная к политике схема кандидатов v3; гарантированная очистка правил фаервола и безопасные повторные попытки для AppOps и сетевых операций.
 
-> **v6.0.8:** Correctness/failure hardening: единый checked rollback для runtime/uninstall/deferred, transactional recovery bundle, authoritative multi-user snapshots, DATA/EMPTY/FAILED discovery semantics, policy-neutral candidate schema v3, verified firewall cleanup и fail-safe AppOps/network retries.
+> **v6.0.7:** Оптимизация FAST-режима на базе глобальной разницы состояний (membership-delta). Неизменившиеся приложения больше не опрашивают PackageManager (`dumpsys package`) при переключении рекламы/аналитики/системных служб; PM вызывается строго для реальных изменений. Исходные состояния и база компонентов сохраняются пакетными транзакциями, а внешние изменения проверяются отдельным фоновым верификатором.
 
-> **v6.0.7:** FAST переведён на глобальный membership-delta. Неизменившиеся пакеты больше не проходят `dumpsys package` при обычном переключении ADS/ANALYTICS/SYSTEM; PM вызывается только для реального add/remove delta. Original state и membership DB коммитятся batch-транзакциями, а внешние изменения проверяет отдельный low-priority verifier.
-
-> **v6.0.6:** LSPosed/Xposed companion bridge удалён из runtime полностью. Auto-Collapse работает через встроенный Zygisk + `aad_core.dex`; отдельный LSPosed/APK-компаньон AAD не требуется. При обновлении старые `xposed_targets.json/list` и ключ `XPOSED_BRIDGE` удаляются автоматически.
+> **v6.0.6:** Полный отказ от LSPosed/Xposed компаньонов. Схлопывание баннеров (Auto-Collapse) работает автономно через встроенный Zygisk и `aad_core.dex`, без внешних APK. Устаревшие файлы моста и настройки Xposed автоматически удаляются при обновлении.
 
 **Analytics & Ads Disabler** — универсальный, полностью автономный root-модуль для Magisk / KernelSU / KernelSU Next / APatch, предназначенный для блокировки мобильной рекламы, трекеров и фоновой аналитики.
 
