@@ -117,3 +117,23 @@
 1. Запускается `uninstall.sh`.
 2. Если PackageManager доступен, оригинальные состояния компонентов восстанавливаются немедленно.
 3. Если удаление инициировано до загрузки Android, создается временный отложенный воркер `/data/adb/analytics_ads_disabler_rollback`, который безопасно восстановит состояние компонентов и системные настройки (AppOps, Ad-ID, WebView) после события `sys.boot_completed`.
+
+---
+
+## 💖 Поддержать разработчика / Support & Donations
+
+Ваша поддержка мотивирует развивать проекты, поддерживать базы стратегий и оперативно выпускать фиксы!  
+*Your support helps maintain the projects and release regular updates!*
+
+- **СБП (Россия):** `+7 923 618-89-93`
+- **Т-Банк:** [Перевод по ссылке Т-Банк](https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131)
+- **Ю.Money (Яндекс):** [Перевод ЮMoney (410011494875904)](https://yoomoney.ru/to/410011494875904)
+- **Crypto Bot (Telegram):** [USDT / TON / GRAM](http://t.me/send?start=IVjCT8LiszJ2)
+- **TON Wallet:** `UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4`
+
+---
+
+## 📄 Лицензия / License
+
+Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.
+
