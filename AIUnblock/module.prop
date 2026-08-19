@@ -1,7 +1,7 @@
 id=AIUnblock
 name=AI Unblock RU
-version=v3.0.2
-versionCode=302
+version=v3.0.3
+versionCode=303
 author=eCubz (https://t.me/eCubz)
 description=Чистый и надежный обход блокировок ChatGPT, Gemini, Claude, Grok и NotebookLM через нативный роутер. Без рекламоблока и без подмены hosts. Логи: /sdcard/eCubz/AIUnblock/logs • Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/AIUnblock/update.json

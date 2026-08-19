@@ -1,3 +1,9 @@
+# Версия v3.0.3
+
+- **Устранена утечка геолокации Gemini:** из списка прокси-шлюзов (`proxies.conf`) удалены российские IP-адреса, вызывавшие определение геолокации RU у Google.
+- Для отдельного приложения Gemini (`com.google.android.apps.bard`) активирован полный сквозной DNAT-прокси (аналогично ChatGPT и Claude).
+- Расширен список SNI-доменов до 33 адресов: добавлены геолокационные, gRPC и аватарные endpoint'ы (`clients6.google.com`, `footprints-pa.googleapis.com`, `ogads-pa.googleapis.com`, `location.googleapis.com`, `lh3..lh6.googleusercontent.com`).
+
 # Версия v3.0.2
 
 - Расширена SNI-маршрутизация для Gemini, Gemini Live и Google AI Studio.

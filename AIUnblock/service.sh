@@ -705,7 +705,9 @@ apply_uid_rules() {
     echo "-F AIUNBLOCK_OUT"
     if [ "$router_ok" -eq 1 ] && [ -n "$CURRENT_GEMINI" ] && [ "$GEMINI_ROUTER_READY" -eq 1 ]; then
       for uid in $GEMINI_SNI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
-      for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
+    fi
+    if [ -n "$CURRENT_GEMINI" ]; then
+      for uid in $GEMINI_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j GEMINI_DNAT"; done
     fi
     if [ "$router_ok" -eq 1 ] && [ -n "$CURRENT_NOTEBOOK" ] && [ "$NOTEBOOK_ROUTER_READY" -eq 1 ]; then
       for uid in $NOTEBOOK_UIDS; do echo "-A AIUNBLOCK_OUT -m owner --uid-owner $uid -j AIUNBLOCK_SNI"; done
@@ -1022,7 +1024,7 @@ refresh_proxy_rules() {
 
   if [ -n "$GEMINI_SNI_UIDS$GEMINI_UIDS" ]; then
     old="$CURRENT_GEMINI"; selected=$(cat "$dir/gemini" 2>/dev/null)
-    if is_ipv4 "$selected" && publish_gateway gemini "$selected"; then
+    if is_ipv4 "$selected" && apply_service_rules GEMINI_DNAT "$selected" && publish_gateway gemini "$selected"; then
       CURRENT_GEMINI="$selected"; [ "$old" = "$selected" ] || log "Gateway Gemini: $selected"
       GEMINI_ROUTER_READY=1
       if ! router_tls_probe "gemini.google.com robinfrontend-pa.googleapis.com proactivebackend-pa.googleapis.com generativelanguage.googleapis.com"; then
