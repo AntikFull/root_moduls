@@ -475,6 +475,16 @@ if [ -f "$DATA_DIR/rules.conf" ] && [ ! -f "$DATA_DIR/rules.user.conf" ]; then
   fi
 fi
 
+# Очистка дубликатов каталогов данных с невидимыми символами (\r, пробелы)
+for _ghost_d in /data/adb/analytics_ads_disabler*; do
+  [ -d "$_ghost_d" ] || continue
+  if [ "$_ghost_d" != "$DATA_DIR" ]; then
+    ui_print "- Merging and removing ghost directory: $_ghost_d"
+    cp -rn "$_ghost_d"/* "$DATA_DIR/" 2>/dev/null || true
+    rm -rf "$_ghost_d" 2>/dev/null || true
+  fi
+done
+
 # Безопасная нормализация BLOCK_DOH_BYPASS в существующем settings.conf при обновлении
 if [ -f "$DATA_DIR/settings.conf" ] && grep -q '^BLOCK_DOH_BYPASS=1' "$DATA_DIR/settings.conf" 2>/dev/null; then
   sed -i 's/^BLOCK_DOH_BYPASS=1/BLOCK_DOH_BYPASS=0/' "$DATA_DIR/settings.conf" 2>/dev/null || true
