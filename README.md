@@ -25,7 +25,7 @@
 
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
-| **[zapret2-android](./zapret2-android)** | `v3.3.5` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
+| **[zapret2-android](./zapret2-android)** | `v3.3.6` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
 | **[analytics_ads_disabler](./analytics_ads_disabler)** | `v6.1.0` | Универсальная автономная блокировка рекламы и аналитики (3 переключателя: ADS, ANALYTICS, SYSTEM): PM per-user + Ad Surface Killer xtables + In-Memory View-Collapse без внешних APK и без LSPosed. Быстрый Generation-Aware Reconcile (2–8 сек). | Magisk 20.4+ / KernelSU / APatch (Android 7–16) |
 | **[AIUnblock](./AIUnblock)** | `v3.0.5` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch |
 | **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.1.5` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек и выделенной таблицей VPN-маршрутизации для обхода ограничений операторов на раздачу интернета. | Magisk / KernelSU / APatch |

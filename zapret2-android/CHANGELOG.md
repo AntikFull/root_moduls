@@ -1,3 +1,13 @@
+# v3.3.6 (3242) — Telegram Media Download & Clean DNS Fix
+
+- **Исправление загрузки медиафайлов и фото в Telegram / Exteragram:**
+  - В `warp-tunnel.sh` исправлен сбор DNS-серверов (`collect_warp_dns`): теперь в первую очередь используются надёжные DNS самого туннеля (`1.1.1.1`, `1.0.0.1`, `8.8.8.8`, `8.8.4.4`), что устранило поломку резолва Telegram CDN хостов (`cdn1.telegram.org` ... `cdn5.telegram.org`).
+  - Внедрён мгновенный ICMPv6 Reject для WARP-приложений (`ip6tables -t filter -A ZAPRET2_WARP_FILTER -m owner --uid-owner <uid> -j REJECT --reject-with icmp6-port-unreachable`), устраняющий зависание механизма Happy Eyeballs на недоступных IPv6 эндпоинтах Telegram.
+  - Добавлена явная фиксация `TCPMSS = 1240` на интерфейсе `awg99` для предотвращения фрагментации больших пакетов медиа-потоков в мобильных сетях.
+- **Очистка конфигурации DNS (`lists/dns.list` и `zapret2.conf`):**
+  - Из установочного списка `dns.list` удалены сторонние прокси-серверы; оставлены только эталонные резолверы Cloudflare (`1.1.1.1`, `1.0.0.1`) и Google (`8.8.8.8`, `8.8.4.4`).
+  - Параметры `DNS_FORWARD_SERVERS` и `WARP_DNS` в `zapret2.conf` синхронизированы на чистый список `1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4`.
+
 # v3.3.5 (3241) — Live ADB Fix & WARP Routing Recovery
 
 - **Устранение критической ошибки подбора WARP (AmneziaWG v3):**

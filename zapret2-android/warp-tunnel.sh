@@ -145,18 +145,20 @@ release_warp_lock() {
 
 collect_warp_dns() {
   local dns_list="" list line
-  for list in "$DNS_LIST" "$DNS_USER_LIST" "$MODDIR/dns.list" "$MODDIR/dns.user.list"; do
-    [ -f "$list" ] || continue
-    while IFS= read -r line || [ -n "$line" ]; do
-      line=$(printf '%s' "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-      case "$line" in ''|\#*) continue ;; esac
-      validate_ipv4 "$line" && dns_list="$dns_list $line"
-    done < "$list"
+  for line in ${WARP_DNS:-1.1.1.1 1.0.0.1}; do
+    validate_ipv4 "$line" && dns_list="$dns_list $line"
   done
   if [ -z "$dns_list" ]; then
-    for line in $WARP_DNS; do validate_ipv4 "$line" && dns_list="$dns_list $line"; done
+    for list in "$DNS_USER_LIST" "$DNS_LIST" "$MODDIR/dns.user.list" "$MODDIR/dns.list"; do
+      [ -f "$list" ] || continue
+      while IFS= read -r line || [ -n "$line" ]; do
+        line=$(printf '%s' "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        case "$line" in ''|\#*) continue ;; esac
+        validate_ipv4 "$line" && dns_list="$dns_list $line"
+      done < "$list"
+    done
   fi
-  [ -n "$dns_list" ] || dns_list=" 1.1.1.1 1.0.0.1"
+  [ -n "$dns_list" ] || dns_list="1.1.1.1 1.0.0.1"
   printf '%s\n' "$dns_list" | tr -s ' ' | sed 's/^ //;s/ $//'
 }
 
@@ -430,7 +432,8 @@ apply_routing_rules() {
   fi
 
   iptables -t mangle -N ZAPRET2_WARP_MANGLE 2>/dev/null || iptables -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null || true
-  iptables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240 2>/dev/null || \
+    iptables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
   iptables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -j MARK --set-mark 0x40000000/0x40000000 2>/dev/null || true
   iptables -t mangle -C OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null || iptables -t mangle -I OUTPUT 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
   iptables -t mangle -C POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null || iptables -t mangle -I POSTROUTING 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
@@ -440,6 +443,13 @@ apply_routing_rules() {
     ip6tables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -j MARK --set-mark 0x40000000/0x40000000 2>/dev/null || true
     ip6tables -t mangle -C OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null || ip6tables -t mangle -I OUTPUT 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
     ip6tables -t mangle -C POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null || ip6tables -t mangle -I POSTROUTING 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
+
+    # Мгновенный REJECT для IPv6 сокетов WARP-приложений, чтобы исключить зависание Dual-Stack (Happy Eyeballs)
+    ip6tables -t filter -N ZAPRET2_WARP_FILTER 2>/dev/null || ip6tables -t filter -F ZAPRET2_WARP_FILTER 2>/dev/null || true
+    for uid in $warp_uids; do
+      ip6tables -t filter -A ZAPRET2_WARP_FILTER -m owner --uid-owner "$uid" -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null || true
+    done
+    ip6tables -t filter -C OUTPUT -j ZAPRET2_WARP_FILTER 2>/dev/null || ip6tables -t filter -I OUTPUT 1 -j ZAPRET2_WARP_FILTER 2>/dev/null || true
   fi
 
   mv -f "$tmp" "$WARP_RULE_STATE" || { rm -f "$tmp"; cleanup_routing_rules; return 1; }
@@ -473,6 +483,10 @@ cleanup_routing_rules() {
     while ip6tables -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
     ip6tables -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null || true
     ip6tables -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null || true
+
+    while ip6tables -t filter -D OUTPUT -j ZAPRET2_WARP_FILTER 2>/dev/null; do :; done
+    ip6tables -t filter -F ZAPRET2_WARP_FILTER 2>/dev/null || true
+    ip6tables -t filter -X ZAPRET2_WARP_FILTER 2>/dev/null || true
   fi
 
   if ip -4 route show table "$TABLE" default 2>/dev/null | grep -q "dev $DEV"; then
