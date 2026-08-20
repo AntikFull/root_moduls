@@ -1915,7 +1915,10 @@ remove_state_record() {
 restore_original_state() {
     user="$1"; comp="$2"
     original=$(get_saved_original_state "$user" "$comp")
-    [ -z "$original" ] && original=default
+    case "$original" in
+        enabled) ;;
+        *) original=default ;;
+    esac
     applied=$(get_saved_applied_state "$user" "$comp")
     [ -n "$applied" ] || applied=disabled
     current=$(aad_get_component_override_state_checked "$user" "$comp" 2>/dev/null) || {

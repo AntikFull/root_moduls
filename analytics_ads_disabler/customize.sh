@@ -523,7 +523,14 @@ if [ -s "$DATA_DIR/disabled_components.list" ] && ! grep -q '^[0-9][0-9]*|' "$DA
   ui_print "- Legacy v3 state found; preserving current component overrides (original ownership was not recorded)."
   : > "$DATA_DIR/disabled_components.list" || abort "! Failed to reset legacy membership database safely."
   rm -f "$DATA_DIR/component_state.list" "$DATA_DIR/package_state.list"
-  ui_print "- Legacy v3 ownership relinquished safely (backup kept; no guessed default-state restore)."
+# Очистка ошибочно выключенных PreloadInfoContentProvider и DebugPanelFileProvider в Android
+if [ -f "$DATA_DIR/disabled_components.list" ]; then
+  grep -E '(PreloadInfoContentProvider|DebugPanelFileProvider|TTFileProvider)' "$DATA_DIR/disabled_components.list" 2>/dev/null | while IFS='|' read -r _ru _rc _rk; do
+    [ -n "$_rc" ] || continue
+    cmd package default-state --user "${_ru:-0}" "$_rc" >/dev/null 2>&1 || pm default-state --user "${_ru:-0}" "$_rc" >/dev/null 2>&1 || true
+  done
+  sed -i -E '/(PreloadInfoContentProvider|DebugPanelFileProvider|TTFileProvider)/d' "$DATA_DIR/disabled_components.list" "$DATA_DIR/component_state.list" 2>/dev/null || true
+  ui_print "- Unlocked critical ContentProviders and FileProviders in all apps"
 fi
 
 for f in settings.conf rules.conf whitelist.list white_ads.list white_analytics.list qa_targets.list il2cpp_hooks.conf; do

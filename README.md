@@ -26,7 +26,7 @@
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
 | **[zapret2-android](./zapret2-android)** | `v3.3.6` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
-| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v6.1.7` | Универсальная автономная блокировка рекламы и аналитики (3 переключателя: ADS, ANALYTICS, SYSTEM): PM per-user + Ad Surface Killer xtables + In-Memory View-Collapse без внешних APK и без LSPosed. Быстрый Generation-Aware Reconcile (2–8 сек). | Magisk 20.4+ / KernelSU / APatch (Android 7–16) |
+| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v6.1.8` | Универсальная автономная блокировка рекламы и аналитики (3 переключателя: ADS, ANALYTICS, SYSTEM): PM per-user + Ad Surface Killer xtables + In-Memory View-Collapse без внешних APK и без LSPosed. Быстрый Generation-Aware Reconcile (2–8 сек). | Magisk 20.4+ / KernelSU / APatch (Android 7–16) |
 | **[AIUnblock](./AIUnblock)** | `v3.0.5` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch |
 | **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.1.5` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек и выделенной таблицей VPN-маршрутизации для обхода ограничений операторов на раздачу интернета. | Magisk / KernelSU / APatch |
 | **[alice-bt-launcher](./alice-bt-launcher)** | `v1.1.0` | Автоматический фоновый запуск и контроль процессов голосового ассистента Алиса AI при подключении Bluetooth-наушников или гарнитуры. | Magisk / KernelSU / APatch |
@@ -67,7 +67,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 | Модуль / Module | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- |
 | **zapret2-android v3.3.5** | [zapret2-android_v3.3.5_3241.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v3.3.5_3241.zip) | ~11.8 MB |
-| **analytics_ads_disabler v6.1.7** | [analytics_ads_disabler_v6.1.7_6017.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v6.1.7_6017.zip) | ~825 KB |
+| **analytics_ads_disabler v6.1.8** | [analytics_ads_disabler_v6.1.8_6018.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v6.1.8_6018.zip) | ~825 KB |
 | **AIUnblock v3.0.5** | [AIUnblock_v3.0.5_305.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v3.0.5_305.zip) | ~9.6 MB |
 | **nfqttl_ecubz v15.1.5** | [nfqttl_ecubz_v15.1.5_1515.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/nfqttl_ecubz_v15.1.5_1515.zip) | ~80 KB |
 | **alice-bt-launcher v1.1.0** | [alice-bt-launcher_v1.1.0_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/alice-bt-launcher_v1.1.0_110.zip) | ~7.5 KB |
