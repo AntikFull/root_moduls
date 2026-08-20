@@ -168,10 +168,10 @@ cmd_json_status() {
   [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid" && running=true || pid=0
   direct=false
   if [ -f "$RUN_DIR/direct.flag" ]; then direct=true; running=true; pid=0; fi
-  [ -f "$APPS_LIST" ] && manual_apps=$(grep -cvE '^[[:space:]]*(#|$)' "$APPS_LIST")
-  [ -f "$AUTO_APPS_LIST" ] && auto_apps=$(grep -cvE '^[[:space:]]*(#|$)' "$AUTO_APPS_LIST")
-  [ -f "$EXCLUDE_LIST" ] && excluded=$(grep -cvE '^[[:space:]]*(#|$)' "$EXCLUDE_LIST")
-  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)
+  [ -f "$APPS_LIST" ] && manual_apps=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$APPS_LIST" 2>/dev/null || echo 0)
+  [ -f "$AUTO_APPS_LIST" ] && auto_apps=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$AUTO_APPS_LIST" 2>/dev/null || echo 0)
+  [ -f "$EXCLUDE_LIST" ] && excluded=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$EXCLUDE_LIST" 2>/dev/null || echo 0)
+  youtube_count=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)
   scope=${SCOPE_PRESET:-}
   case "$scope" in SAFE|SELECTED|ALL|CUSTOM) ;; *) case "${MODE:-INCLUDE}:${QUIC_MODE:-SELECTED}" in EXCLUDE:SELECTED) scope=SAFE ;; INCLUDE:SELECTED) scope=SELECTED ;; GLOBAL:GLOBAL) scope=ALL ;; *) scope=CUSTOM ;; esac ;; esac
   health=$(health_value HEALTH); [ -n "$health" ] || health=UNKNOWN
@@ -490,7 +490,7 @@ cmd_json_warp_status() {
   local active_jc="${WARP_JC:-5}" active_jmin="${WARP_JMIN:-40}" active_jmax="${WARP_JMAX:-70}" adapt_step=0 adapt_mode=basic
   local adapt_result=pending adapt_updated=0 adapt_total=40 handshake_age=-1 now
   [ -f "$warp_apps_file" ] || warp_apps_file="$MODDIR/warp_apps.list"
-  if [ -f "$warp_apps_file" ]; then apps_count=$(grep -cvE '^[[:space:]]*(#|$)' "$warp_apps_file" 2>/dev/null || echo 0); fi
+  if [ -f "$warp_apps_file" ]; then apps_count=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$warp_apps_file" 2>/dev/null || echo 0); fi
 
   local dns_file="$LISTS_DIR/dns.list"
   [ -f "$dns_file" ] || dns_file="$MODDIR/dns.list"

@@ -455,6 +455,8 @@ apply_routing_rules() {
   mv -f "$tmp" "$WARP_RULE_STATE" || { rm -f "$tmp"; cleanup_routing_rules; return 1; }
   chmod 0600 "$WARP_RULE_STATE" 2>/dev/null || true
   verify_routing_rules "$warp_uids" || { log_e "Финальная проверка WARP policy routing не прошла"; cleanup_routing_rules; return 1; }
+  ip -4 route flush cache 2>/dev/null || true
+  ip -6 route flush cache 2>/dev/null || true
   log_i "Policy Routing проверен: $app_count UID направлены в WARP ($DEV)"
   return 0
 }
@@ -488,6 +490,9 @@ cleanup_routing_rules() {
     ip6tables -t filter -F ZAPRET2_WARP_FILTER 2>/dev/null || true
     ip6tables -t filter -X ZAPRET2_WARP_FILTER 2>/dev/null || true
   fi
+
+  ip -4 route flush cache 2>/dev/null || true
+  ip -6 route flush cache 2>/dev/null || true
 
   if ip -4 route show table "$TABLE" default 2>/dev/null | grep -q "dev $DEV"; then
     for pref in "$PREF_BASE" "$PREF_DEST"; do

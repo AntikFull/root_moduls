@@ -312,6 +312,8 @@ cleanup_iptables() {
     ipt6_quiet -t filter -F ZAPRET2_FILTER; ipt6_quiet -t filter -X ZAPRET2_FILTER
     ipt6_quiet -t filter -F ZAPRET2_FILTER_FORWARD; ipt6_quiet -t filter -X ZAPRET2_FILTER_FORWARD
   }
+  ip -4 route flush cache 2>/dev/null || true
+  ip -6 route flush cache 2>/dev/null || true
 }
 
 normalize_pm_output() {
@@ -938,12 +940,27 @@ AUTO_APP_UIDS=""
 [ "$AUTO_APPS_ENABLED" = "1" ] && AUTO_APP_UIDS=$(get_app_uids "$AUTO_APPS_LIST" 1)
 APP_UIDS=$(printf '%s\n%s\n' "$AUTO_APP_UIDS" "$MANUAL_APP_UIDS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
 EXCLUDE_UIDS=$(get_app_uids "$EXCLUDE_LIST" 0)
+WARP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_app_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
+
+# Автоматическое правило: всё, что идёт в туннель WARP, полностью исключается из AntiDPI (nfqws2)
+if [ "${ENABLE_WARP:-0}" = "1" ] && [ -n "$WARP_UIDS" ]; then
+  filtered_app_uids=""
+  for uid in $APP_UIDS; do
+    case " $WARP_UIDS " in
+      *" $uid "*) continue ;;
+      *) filtered_app_uids="$filtered_app_uids $uid" ;;
+    esac
+  done
+  APP_UIDS=$(printf '%s\n' "$filtered_app_uids" | tr -s ' ' | sed 's/^ //;s/ $//')
+fi
+
 AUTO_APP_UID_COUNT=$(echo "$AUTO_APP_UIDS" | wc -w | tr -d ' ')
 MANUAL_APP_UID_COUNT=$(echo "$MANUAL_APP_UIDS" | wc -w | tr -d ' ')
 APP_UID_COUNT=$(echo "$APP_UIDS" | wc -w | tr -d ' ')
 EXCLUDE_UID_COUNT=$(echo "$EXCLUDE_UIDS" | wc -w | tr -d ' ')
-log_i "Resolved UIDs: SMART effective=$APP_UID_COUNT auto=$AUTO_APP_UID_COUNT manual=$MANUAL_APP_UID_COUNT exclude=$EXCLUDE_UID_COUNT source=$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
-[ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из AUTO/ручных приложений не разрешн"
+WARP_UID_COUNT=$(echo "$WARP_UIDS" | wc -w | tr -d ' ')
+log_i "Resolved UIDs: SMART effective=$APP_UID_COUNT auto=$AUTO_APP_UID_COUNT manual=$MANUAL_APP_UID_COUNT exclude=$EXCLUDE_UID_COUNT warp=$WARP_UID_COUNT source=$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
+[ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из AUTO/ручных приложений не разрешён"
 
 DIRECT_MODE_FILE="$RUN_DIR/direct.flag"
 rm -f "$DIRECT_MODE_FILE" 2>/dev/null
