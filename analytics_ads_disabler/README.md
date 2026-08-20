@@ -1,6 +1,6 @@
-# Analytics & Ads Disabler v6.1.5
+# Analytics & Ads Disabler v6.1.6
 
-> **v6.1.5:** Автоматическая выгрузка Zygisk из DenyList/Shamiko (Яндекс Пей, банки), полная изоляция рендереров Chromium (Brave, Chrome, Edge) и отключение блокировки DoH по умолчанию.
+> **v6.1.6:** Безопасность ContentProvider (AppMetrica / Yandex / FileProvider), гарантированная изоляция Zygisk для браузеров и банков, сохранение Secure DNS (DoH).
 
 > **v6.0.9:** Критические исправления инвентаря путей к APK и универсальная поддержка Multi-App/вторичных профилей (User 999, User 10, User 2); надежный fallback исходного состояния `default`; мгновенная фиксация успешных ответов PackageManager; гарантированная работа всех типов белых списков (`whitelist.list`, `white_analytics.list`, `white_ads.list`).
 
