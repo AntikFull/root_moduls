@@ -523,6 +523,9 @@ if [ -s "$DATA_DIR/disabled_components.list" ] && ! grep -q '^[0-9][0-9]*|' "$DA
   ui_print "- Legacy v3 state found; preserving current component overrides (original ownership was not recorded)."
   : > "$DATA_DIR/disabled_components.list" || abort "! Failed to reset legacy membership database safely."
   rm -f "$DATA_DIR/component_state.list" "$DATA_DIR/package_state.list"
+  ui_print "- Legacy v3 ownership relinquished safely (backup kept; no guessed default-state restore)."
+fi
+
 # Очистка ошибочно выключенных PreloadInfoContentProvider и DebugPanelFileProvider в Android
 if [ -f "$DATA_DIR/disabled_components.list" ]; then
   grep -E '(PreloadInfoContentProvider|DebugPanelFileProvider|TTFileProvider)' "$DATA_DIR/disabled_components.list" 2>/dev/null | while IFS='|' read -r _ru _rc _rk; do
