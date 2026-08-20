@@ -5,6 +5,7 @@
 umask 077
 
 MODDIR="${0%/*}"
+case "$MODDIR" in /data/adb/modules/*) ;; *) [ -f "/data/adb/modules/zapret2-android/module.prop" ] && MODDIR="/data/adb/modules/zapret2-android" ;; esac
 BIN_DIR="$MODDIR/bin"
 RUN_DIR="$MODDIR/run"
 LOG_DIR="$MODDIR/logs"
@@ -22,8 +23,8 @@ WARP_APPS_USER_LIST="$LISTS_DIR/warp_apps.user.list"
 DNS_LIST="$LISTS_DIR/dns.list"
 DNS_USER_LIST="$LISTS_DIR/dns.user.list"
 WARP_LOCK="$RUN_DIR/warp.lock"
-PREF_BASE="10500"
-PREF_DEST="10400"
+PREF_BASE="50"
+PREF_DEST="40"
 
 mkdir -p "$RUN_DIR" "$LOG_DIR" "$STATE_DIR" 2>/dev/null
 chmod 0700 "$RUN_DIR" "$LOG_DIR" "$STATE_DIR" 2>/dev/null || true
@@ -405,6 +406,18 @@ apply_routing_rules() {
     ip -6 route replace unreachable default table "$TABLE" 2>/dev/null || { rm -f "$tmp"; log_e "Не удалось создать IPv6 fail-closed route table=$TABLE"; return 1; }
   fi
 
+  # Резервные прямые маршруты и правила на все диапазоны Telegram (Core + CDN Media) в таблицу WARP
+  local TG_SUBNETS="91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20"
+  local TG_SUBNETS_V6="2001:b28:f23d::/48 2001:67c:4e8::/48"
+  for subnet in $TG_SUBNETS; do
+    ip -4 route replace "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+    ip -4 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+  done
+  for subnet in $TG_SUBNETS_V6; do
+    ip -6 route replace "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+    ip -6 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+  done
+
   for uid in $warp_uids; do
     case "$uid" in ''|0|*[!0-9]*) continue ;; esac
     pref=$(next_warp_pref "$((PREF_BASE + app_count))") || { rm -f "$tmp"; cleanup_routing_rules; log_e "Нет свободного policy-rule priority для WARP"; return 1; }
@@ -437,6 +450,7 @@ apply_routing_rules() {
   iptables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -j MARK --set-mark 0x40000000/0x40000000 2>/dev/null || true
   iptables -t mangle -C OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null || iptables -t mangle -I OUTPUT 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
   iptables -t mangle -C POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null || iptables -t mangle -I POSTROUTING 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
+  iptables -t nat -C POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null || iptables -t nat -I POSTROUTING 1 -o "$DEV" -j MASQUERADE 2>/dev/null || true
   if command -v ip6tables >/dev/null 2>&1; then
     ip6tables -t mangle -N ZAPRET2_WARP_MANGLE 2>/dev/null || ip6tables -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null || true
     ip6tables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
@@ -463,6 +477,17 @@ apply_routing_rules() {
 
 cleanup_routing_rules() {
   local fam pref uid table n
+  local TG_SUBNETS="91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20"
+  local TG_SUBNETS_V6="2001:b28:f23d::/48 2001:67c:4e8::/48"
+  for subnet in $TG_SUBNETS; do
+    ip -4 rule del to "$subnet" 2>/dev/null || true
+    ip -4 route del "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+  done
+  for subnet in $TG_SUBNETS_V6; do
+    ip -6 rule del to "$subnet" 2>/dev/null || true
+    ip -6 route del "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+  done
+
   if [ -f "$WARP_RULE_STATE" ]; then
     while IFS='|' read -r fam pref uid table; do
       case "$fam:$pref:$uid:$table" in *[!0-9:]*|'') continue ;; esac
@@ -473,6 +498,7 @@ cleanup_routing_rules() {
   rm -f "$WARP_RULE_STATE" 2>/dev/null
 
   while iptables -t nat -D OUTPUT -j ZAPRET2_WARP_DNS 2>/dev/null; do :; done
+  while iptables -t nat -D POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null; do :; done
   iptables -t nat -F ZAPRET2_WARP_DNS 2>/dev/null || true
   iptables -t nat -X ZAPRET2_WARP_DNS 2>/dev/null || true
 
@@ -808,12 +834,18 @@ probe_handshake() {
     now=$(date +%s 2>/dev/null || echo 0)
     if [ "$hs" -gt 0 ] 2>/dev/null; then
       if [ "$before" -eq 0 ] 2>/dev/null || [ "$hs" -gt "$before" ] 2>/dev/null; then
-        return 0
+        # Проверяем реальную передачу L7 HTTPS данных через туннель
+        if curl --interface "$DEV" -4 -sS -o /dev/null --connect-timeout 2 https://1.1.1.1/ 2>/dev/null || \
+           curl --interface "$DEV" -4 -sS -o /dev/null --connect-timeout 2 https://1.0.0.1/ 2>/dev/null; then
+          return 0
+        fi
       fi
     fi
     rx_now=$(get_rx_bytes)
-    if [ "$rx_now" -gt "$rx_before" ] 2>/dev/null && [ "$hs" -gt 0 ] 2>/dev/null; then
-      return 0
+    if [ "$rx_now" -gt "$((rx_before + 500))" ] 2>/dev/null && [ "$hs" -gt 0 ] 2>/dev/null; then
+      if curl --interface "$DEV" -4 -sS -o /dev/null --connect-timeout 2 https://1.1.1.1/ 2>/dev/null; then
+        return 0
+      fi
     fi
     [ $((now - start)) -ge "$timeout" ] 2>/dev/null && break
   done
