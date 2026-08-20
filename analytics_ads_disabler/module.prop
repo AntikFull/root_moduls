@@ -1,7 +1,7 @@
 id=analytics_ads_disabler
 name=Analytics & Ads Disabler
-version=v6.1.0
-versionCode=6010
+version=v6.1.1
+versionCode=6011
 author=eCubz (https://t.me/eCubz)
 description=Универсальная блокировка рекламы и аналитики (3 переключателя): PM per-user + Ad Surface Killer xtables + In-Memory View-Collapse без внешних APK и без LSPosed. Логи: /data/adb/analytics_ads_disabler/logs. Группа: https://t.me/module_ecubz
 updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/analytics_ads_disabler/update.json

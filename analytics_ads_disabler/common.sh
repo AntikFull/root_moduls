@@ -852,32 +852,53 @@ ad_killer_build_targets_from_surface() {
 }
 
 ad_killer_uid_inventory() {
-    _akui_users=$(list_user_ids_checked) || return 1
+    _akui_users=$(list_user_ids_checked) || _akui_users="0"
     _akui_tmp=$(aad_mktemp_near "$DATA_DIR/.uid_inventory")
     [ -n "$_akui_tmp" ] || return 1
     : > "$_akui_tmp" 2>/dev/null || { rm -f "$_akui_tmp"; return 1; }
-    _akui_failed=0
-    for _aku_user in $_akui_users; do
-        _akui_raw=$(aad_mktemp_near "$DATA_DIR/.uid_raw_u${_aku_user}")
-        [ -n "$_akui_raw" ] || { _akui_failed=1; continue; }
-        if command -v cmd >/dev/null 2>&1; then
-            cmd package list packages -U --user "$_aku_user" > "$_akui_raw" 2>/dev/null || _akui_failed=1
-        elif [ -x /system/bin/cmd ]; then
-            /system/bin/cmd package list packages -U --user "$_aku_user" > "$_akui_raw" 2>/dev/null || _akui_failed=1
-        else
-            _akui_failed=1
-        fi
-        if [ "$_akui_failed" -eq 0 ] || [ -s "$_akui_raw" ]; then
+
+    if [ -f /data/system/packages.list ] && [ -r /data/system/packages.list ]; then
+        for _aku_user in $_akui_users; do
             awk -v u="$_aku_user" '
-                /^package:/ {
-                    pkg=$1; sub(/^package:/,"",pkg); uid=""
-                    for(i=2;i<=NF;i++) if($i ~ /^uid:/){uid=$i; sub(/^uid:/,"",uid)}
-                    if(pkg!="" && uid ~ /^[0-9]+$/) print u "|" pkg "|" uid
-                }' "$_akui_raw" >> "$_akui_tmp"
-        fi
-        rm -f "$_akui_raw" 2>/dev/null
-    done
-    [ "$_akui_failed" -eq 0 ] || { rm -f "$_akui_tmp" 2>/dev/null; return 1; }
+                NF >= 2 && $2 ~ /^[0-9]+$/ {
+                    uid = $2
+                    if (u > 0) {
+                        uid = (u * 100000) + (uid % 100000)
+                    }
+                    print u "|" $1 "|" uid
+                }
+            ' /data/system/packages.list >> "$_akui_tmp" 2>/dev/null
+        done
+    fi
+
+    if [ ! -s "$_akui_tmp" ]; then
+        for _aku_user in $_akui_users; do
+            _akui_raw=$(aad_mktemp_near "$DATA_DIR/.uid_raw_u${_aku_user}")
+            [ -n "$_akui_raw" ] || continue
+            if command -v cmd >/dev/null 2>&1; then
+                cmd package list packages -U --user "$_aku_user" > "$_akui_raw" 2>/dev/null || \
+                cmd package list packages -U > "$_akui_raw" 2>/dev/null || true
+            elif command -v pm >/dev/null 2>&1; then
+                pm list packages -U --user "$_aku_user" > "$_akui_raw" 2>/dev/null || \
+                pm list packages -U > "$_akui_raw" 2>/dev/null || true
+            fi
+            if [ -s "$_akui_raw" ]; then
+                awk -v u="$_aku_user" '
+                    /^package:/ {
+                        pkg=$1; sub(/^package:/,"",pkg); uid=""
+                        for(i=2;i<=NF;i++) if($i ~ /^uid:/){uid=$i; sub(/^uid:/,"",uid)}
+                        if(pkg!="" && uid ~ /^[0-9]+$/) print u "|" pkg "|" uid
+                    }' "$_akui_raw" >> "$_akui_tmp"
+            fi
+            rm -f "$_akui_raw" 2>/dev/null
+        done
+    fi
+
+    if [ ! -s "$_akui_tmp" ]; then
+        rm -f "$_akui_tmp" 2>/dev/null
+        return 1
+    fi
+
     sort -u "$_akui_tmp"
     _akui_rc=$?
     rm -f "$_akui_tmp" 2>/dev/null
@@ -1938,30 +1959,28 @@ cap_list_packages_with_paths_raw() {
 build_apk_path_inventory() {
     out_file="$1"
     : > "$out_file" || return 1
-    _bapi_users=$(list_user_ids_checked) || return 1
-    _bapi_failed=0
+    _bapi_users=$(list_user_ids_checked) || _bapi_users="0"
     for inv_user in $_bapi_users; do
         _bapi_raw=$(aad_mktemp_near "$DATA_DIR/.path_inventory_u${inv_user}")
-        [ -n "$_bapi_raw" ] || { _bapi_failed=1; continue; }
-        if ! cap_list_packages_with_paths_raw "$inv_user" > "$_bapi_raw" 2>/dev/null; then
-            _bapi_failed=1
-            rm -f "$_bapi_raw" 2>/dev/null
-            continue
+        [ -n "$_bapi_raw" ] || continue
+        if cap_list_packages_with_paths_raw "$inv_user" > "$_bapi_raw" 2>/dev/null; then
+            while IFS= read -r line; do
+                case "$line" in
+                    package:*=*)
+                        body=${line#package:}
+                        inv_pkg=${body##*=}
+                        inv_apk=${body%="$inv_pkg"}
+                        inv_apk=${inv_apk%=}
+                        [ -n "$inv_pkg" ] && [ -n "$inv_apk" ] && printf '%s|%s|%s\n' "$inv_user" "$inv_pkg" "$inv_apk"
+                        ;;
+                esac
+            done < "$_bapi_raw" >> "$out_file"
         fi
-        while IFS= read -r line; do
-            case "$line" in
-                package:*=*)
-                    body=${line#package:}
-                    inv_pkg=${body##*=}
-                    inv_apk=${body%="$inv_pkg"}
-                    inv_apk=${inv_apk%=}
-                    [ -n "$inv_pkg" ] && [ -n "$inv_apk" ] && printf '%s|%s|%s\n' "$inv_user" "$inv_pkg" "$inv_apk"
-                    ;;
-            esac
-        done < "$_bapi_raw" >> "$out_file"
         rm -f "$_bapi_raw" 2>/dev/null
     done
-    [ "$_bapi_failed" -eq 0 ] || return 1
+    if [ ! -s "$out_file" ]; then
+        return 1
+    fi
     sort -u "$out_file" -o "$out_file" 2>/dev/null || return 1
     return 0
 }
