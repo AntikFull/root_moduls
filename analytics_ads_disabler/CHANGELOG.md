@@ -1,3 +1,9 @@
+# v6.1.7 / 6017
+
+- **Автоматическое восстановление при обновлении (Seamless Reconcile):** При установке обновления поверх старых версий модуль автоматически синхронизирует базу `rules.vendor.conf`, находит все ранее ошибочно отключенные `ContentProvider` (AppMetrica / Yandex / FileProvider) в `disabled_components.list` и мгновенно восстанавливает их в исходное состояние (`default`/`enabled`) в PackageManager.
+- **Авто-миграция настроек DoH:** Установщик автоматически исправляет флаг `BLOCK_DOH_BYPASS=1 -> 0` в существующем `settings.conf`, защищая работу Secure DNS в браузерах.
+- **Обновление Zygisk библиотек и контрольных сумм.**
+
 # v6.1.6 / 6016
 
 - **Безопасность ContentProvider (AppMetrica / Yandex / FileProvider):** `PreloadInfoContentProvider` переведен в безопасный режим `AUDIT (REPORT_ONLY)`, исключая сбои авторизации и доставки Push-уведомлений в сервисах Яндекса (Яндекс Пей, Go, Такси, Путешествия, Налоги ФНС). Из правил отключения удалены любые `FileProvider` (`DebugPanelFileProvider`, `TTFileProvider`), исключая системные исключения `SecurityException`.

@@ -475,7 +475,13 @@ if [ -f "$DATA_DIR/rules.conf" ] && [ ! -f "$DATA_DIR/rules.user.conf" ]; then
   fi
 fi
 
-for f in rules.vendor.conf rules.user.conf whitelist.list white_ads.list white_analytics.list smart_reward.list qa_targets.list il2cpp_hooks.conf; do
+# Безопасная нормализация BLOCK_DOH_BYPASS в существующем settings.conf при обновлении
+if [ -f "$DATA_DIR/settings.conf" ] && grep -q '^BLOCK_DOH_BYPASS=1' "$DATA_DIR/settings.conf" 2>/dev/null; then
+  sed -i 's/^BLOCK_DOH_BYPASS=1/BLOCK_DOH_BYPASS=0/' "$DATA_DIR/settings.conf" 2>/dev/null || true
+  ui_print "- Updated legacy BLOCK_DOH_BYPASS=1 -> 0 to protect Secure DNS (DoH) in browsers"
+fi
+
+for f in settings.conf rules.vendor.conf rules.user.conf whitelist.list white_ads.list white_analytics.list smart_reward.list qa_targets.list il2cpp_hooks.conf; do
   if [ ! -f "$DATA_DIR/$f" ] && [ -f "$MODPATH/$f" ]; then
     cp "$MODPATH/$f" "$DATA_DIR/$f"
   fi
