@@ -39,6 +39,58 @@ if [ "$ROOT_MANAGER" != "Magisk" ]; then
   ui_print "! Zygisk engine requires a compatible Zygisk implementation enabled in $ROOT_MANAGER."
 fi
 
+if [ -f "$MODPATH/integrity.manifest" ]; then
+  ui_print "- Verifying package integrity against integrity.manifest..."
+  _manifest_err=0
+  _sha_tool=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    _sha_tool="sha256sum"
+  elif command -v busybox >/dev/null 2>&1 && busybox sha256sum /dev/null >/dev/null 2>&1; then
+    _sha_tool="busybox sha256sum"
+  elif command -v openssl >/dev/null 2>&1; then
+    _sha_tool="openssl dgst -sha256"
+  fi
+
+  if [ -z "$_sha_tool" ]; then
+    abort "! Integrity verification FAILED: no SHA-256 utility available in environment."
+  fi
+
+  while IFS='=' read -r _mf_path _mf_hash || [ -n "$_mf_path" ]; do
+    _mf_path="$(printf '%s' "$_mf_path" | tr -d '\r\n[:space:]')"
+    _mf_hash="$(printf '%s' "$_mf_hash" | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
+    case "$_mf_path" in ''|'#'*) continue ;; esac
+    _mf_full="$MODPATH/$_mf_path"
+    if [ ! -f "$_mf_full" ]; then
+      ui_print "! Integrity error: missing file $_mf_path"
+      _manifest_err=$((_manifest_err + 1))
+      continue
+    fi
+    if [ "$_sha_tool" = "openssl dgst -sha256" ]; then
+      _real_hash=$(openssl dgst -sha256 "$_mf_full" 2>/dev/null | awk '{print $NF}' | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')
+    else
+      _real_hash=$($_sha_tool "$_mf_full" 2>/dev/null | awk '{print $1}' | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')
+    fi
+    if [ "${#_real_hash}" -ne 64 ] || printf '%s' "$_real_hash" | grep -q '[^0-9a-fA-F]'; then
+      ui_print "! Integrity error: could not compute valid SHA-256 for $_mf_path"
+      _manifest_err=$((_manifest_err + 1))
+      continue
+    fi
+    if [ "${#_mf_hash}" -ne 64 ] || printf '%s' "$_mf_hash" | grep -q '[^0-9a-fA-F]'; then
+      ui_print "! Integrity error: malformed expected SHA-256 for $_mf_path"
+      _manifest_err=$((_manifest_err + 1))
+      continue
+    fi
+    if [ -z "$_real_hash" ] || [ "$_real_hash" != "$_mf_hash" ]; then
+      ui_print "! Integrity mismatch for $_mf_path"
+      _manifest_err=$((_manifest_err + 1))
+    fi
+  done < "$MODPATH/integrity.manifest"
+  if [ "$_manifest_err" -gt 0 ]; then
+    abort "! Integrity verification FAILED ($_manifest_err errors). Aborting installation."
+  fi
+  ui_print "  Package integrity verified successfully."
+fi
+
 volume_select() {
   default_answer="$1"
   if ! command -v getevent >/dev/null 2>&1; then
@@ -474,56 +526,6 @@ for f in settings.conf rules.conf whitelist.list white_ads.list white_analytics.
   ln -s "$DATA_DIR/$f" "$MODPATH/$f" 2>/dev/null || cp "$DATA_DIR/$f" "$MODPATH/$f"
 done
 ui_print "- Config aliases configured in $DATA_DIR"
-
-if [ -f "$MODPATH/integrity.manifest" ]; then
-  ui_print "- Verifying package integrity against integrity.manifest..."
-  _manifest_err=0
-  _sha_tool=""
-  if command -v sha256sum >/dev/null 2>&1; then
-    _sha_tool="sha256sum"
-  elif command -v busybox >/dev/null 2>&1 && busybox sha256sum /dev/null >/dev/null 2>&1; then
-    _sha_tool="busybox sha256sum"
-  elif command -v openssl >/dev/null 2>&1; then
-    _sha_tool="openssl dgst -sha256"
-  fi
-
-  if [ -z "$_sha_tool" ]; then
-    abort "! Integrity verification FAILED: no SHA-256 utility available in environment."
-  fi
-
-  while IFS='=' read -r _mf_path _mf_hash; do
-    case "$_mf_path" in ''|'#'*) continue ;; esac
-    _mf_full="$MODPATH/$_mf_path"
-    if [ ! -f "$_mf_full" ]; then
-      ui_print "! Integrity error: missing file $_mf_path"
-      _manifest_err=$((_manifest_err + 1))
-      continue
-    fi
-    if [ "$_sha_tool" = "openssl dgst -sha256" ]; then
-      _real_hash=$(openssl dgst -sha256 "$_mf_full" 2>/dev/null | awk '{print $NF}')
-    else
-      _real_hash=$($_sha_tool "$_mf_full" 2>/dev/null | awk '{print $1}')
-    fi
-    if [ "${#_real_hash}" -ne 64 ] || printf '%s' "$_real_hash" | grep -q '[^0-9a-fA-F]'; then
-      ui_print "! Integrity error: could not compute valid SHA-256 for $_mf_path"
-      _manifest_err=$((_manifest_err + 1))
-      continue
-    fi
-    if [ "${#_mf_hash}" -ne 64 ] || printf '%s' "$_mf_hash" | grep -q '[^0-9a-fA-F]'; then
-      ui_print "! Integrity error: malformed expected SHA-256 for $_mf_path"
-      _manifest_err=$((_manifest_err + 1))
-      continue
-    fi
-    if [ -z "$_real_hash" ] || [ "$_real_hash" != "$_mf_hash" ]; then
-      ui_print "! Integrity mismatch for $_mf_path"
-      _manifest_err=$((_manifest_err + 1))
-    fi
-  done < "$MODPATH/integrity.manifest"
-  if [ "$_manifest_err" -gt 0 ]; then
-    abort "! Integrity verification FAILED ($_manifest_err errors). Aborting installation."
-  fi
-  ui_print "  Package integrity verified successfully."
-fi
 
 set_perm "$MODPATH/common.sh" 0 0 0644
 set_perm "$MODPATH/compat.sh" 0 0 0644
