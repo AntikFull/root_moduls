@@ -1,17 +1,24 @@
 #!/system/bin/sh
+#
+# Обработчик события изменения настроек. Вызывается inotifyd.
+#
+# Аргументы inotifyd: <события> <каталог> <имя файла>
+#
+# Автор: eCubz (https://t.me/eCubz)
+
 MODDIR=${0%/*}
-events=${1:-?}
-watched=${2:-?}
-child=${3:-}
+child="$3"
 
 case "$child" in
-    settings.conf|rules.user.conf|rules.vendor.conf|whitelist.list|white_ads.list|white_analytics.list|smart_reward.list|qa_targets.list) ;;
+    settings.conf|whitelist.list|rules.conf) ;;
     *) exit 0 ;;
 esac
 
-. "$MODDIR/common.sh"
+. "$MODDIR/lib.sh"
 
-log "CONFIG-FS event=$events file=$child"
-sleep 1
-reconcile_config_if_changed "inotify:$events:$child"
+# Редакторы сохраняют файл в несколько операций записи. Небольшая пауза
+# схлопывает пачку событий в одну перегенерацию политики.
+sleep 2
+
+aad_sync_policy "inotify:$child"
 exit $?

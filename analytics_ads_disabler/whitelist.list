@@ -1,8 +1,25 @@
+# Приложения, в которые движок не внедряется совсем.
+#
+# Одно имя пакета в строке. Можно указывать и имя процесса целиком,
+# например com.example.app:remote.
+#
+# Системные процессы, сервисы Google, магазины, клавиатуры и менеджеры root
+# исключены на уровне движка и перечислять их здесь не нужно.
+#
+# Здесь имеет смысл держать банковские приложения и приложения с проверкой
+# целостности: внедрение постороннего кода в их процесс может привести к
+# отказу в обслуживании со стороны самого приложения.
+
 ru.sberbankmobile
 com.tinkoff.android
-ru.nspk.mirpay
 ru.vtb.mobile.android
 ru.alfa.mobile.android
-ru.gpu.gosuslugi
-ru.yandex.yandexnavi
-com.google.android.apps.maps
+ru.raiffeisen.mobile.new
+ru.gazprombank.android.mobilebank.app
+ru.psbank.mobile
+ru.mkb.mobile
+ru.rosbank.android
+ru.nspk.mirpay
+ru.gosuslugi.mobile
+ru.fns.billing
+com.google.android.apps.walletnfcrel
