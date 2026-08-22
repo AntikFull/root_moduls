@@ -16,10 +16,12 @@ WARP_PID_FILE="$RUN_DIR/warp.pid"
 WARP_RUNTIME_CONF="$RUN_DIR/warp-runtime.conf"
 WARP_RULE_STATE="$RUN_DIR/warp-rules.state"
 WARP_ADAPT_STATE="$STATE_DIR/warp-adapt.state"
+# Домены, уводимые в туннель, и разрешённые для них адреса.
+WARP_DOMAIN_IPS_STATE="$STATE_DIR/warp-domain-ips.state"
+# С какого момента туннель признан нездоровым — для решения о полном перезапуске.
+WARP_UNHEALTHY_SINCE="$RUN_DIR/warp-unhealthy-since.ts"
 LISTS_DIR="$MODDIR/lists"
 [ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
-WARP_APPS_LIST="$LISTS_DIR/warp_apps.list"
-WARP_APPS_USER_LIST="$LISTS_DIR/warp_apps.user.list"
 DNS_LIST="$LISTS_DIR/dns.list"
 DNS_USER_LIST="$LISTS_DIR/dns.user.list"
 WARP_LOCK="$RUN_DIR/warp.lock"
@@ -60,9 +62,27 @@ DEV="$WARP_DEV"
 : "${WARP_SIP_FORCE:=0}"
 : "${WARP_STARTUP_TRIES:=40}"
 : "${WARP_PROBE_TIMEOUT:=3}"
+: "${WARP_DOMAIN_ROUTING:=1}"
+: "${WARP_HEALTH_MAX_AGE:=180}"
+: "${WARP_HEALTH_PROBE_IP:=1.1.1.1}"
+: "${WARP_HEALTH_PROBE_TIMEOUT:=3}"
+: "${WARP_HEALTH_PROBE_TRIES:=2}"
+: "${WARP_STALL_RESTART_SEC:=600}"
 : "${WARP_WATCH_BATCH:=5}"
 : "${WARP_ADAPT_RETRY_SEC:=300}"
 : "${WARP_AWG_CMD_TIMEOUT:=2}"
+
+# Зомби и умирающие процессы не отдают cmdline: ядро держит блокировку памяти
+# задачи, и чтение виснет без таймаута — однажды это подвесило перезапуск целиком.
+# /proc/PID/stat читается без этой блокировки, поэтому сначала спрашиваем
+# состояние. Полный вариант с потолком по времени — в service.sh.
+pid_cmdline() {
+  local st
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
 
 log_i() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] warp: $*" >> "$LOG_FILE"; }
 log_w() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] warp: $*" >> "$LOG_FILE"; }
@@ -98,6 +118,19 @@ run_with_timeout() {
 awg_cmd() {
   run_with_timeout "${WARP_AWG_CMD_TIMEOUT:-2}" "$BIN_DIR/awg" "$@"
 }
+
+# Снятие правила с потолком по числу повторов. Тот же приём, что и
+# delete_jump_bounded в service.sh: дублирующихся правил восьми не бывает,
+# а `while ...; do :; done` без предела — это заявка на зависший cleanup.
+del_bounded() {
+  local attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    "$@" >/dev/null 2>&1 || return 0
+    attempt=$((attempt + 1))
+  done
+  log_w "Очистка правила ограничена восемью повторами: $*"
+  return 0
+}
 validate_ipv4() {
   local ip="$1" a b c d extra o
   IFS=. read -r a b c d extra <<EOV
@@ -116,7 +149,7 @@ EOV
 # ------------------------------------------------------------------------------
 WARP_LOCK_DEPTH=${WARP_LOCK_DEPTH:-0}
 acquire_warp_lock() {
-  local attempts=0 owner
+  local attempts=0 owner empty_seen=0
   if [ "$WARP_LOCK_DEPTH" -gt 0 ] 2>/dev/null && [ "$(cat "$WARP_LOCK/pid" 2>/dev/null)" = "$$" ]; then
     WARP_LOCK_DEPTH=$((WARP_LOCK_DEPTH + 1))
     return 0
@@ -124,8 +157,18 @@ acquire_warp_lock() {
   while ! mkdir "$WARP_LOCK" 2>/dev/null; do
     owner=$(cat "$WARP_LOCK/pid" 2>/dev/null)
     case "$owner" in
-      ''|*[!0-9]*) rm -rf "$WARP_LOCK" 2>/dev/null; continue ;;
-      *) if ! kill -0 "$owner" 2>/dev/null; then rm -rf "$WARP_LOCK" 2>/dev/null; continue; fi ;;
+      # Прежде здесь стоял `continue` ДО инкремента и sleep: если каталог по
+      # какой-то причине не удалялся, цикл крутился на 100% CPU без предела.
+      # Пустой pid к тому же не означает брошенную блокировку — владелец мог
+      # сделать mkdir и ещё не записать себя, поэтому ждём две итерации.
+      ''|*[!0-9]*)
+        empty_seen=$((empty_seen + 1))
+        [ "$empty_seen" -ge 2 ] && { rm -rf "$WARP_LOCK" 2>/dev/null; empty_seen=0; }
+        ;;
+      *)
+        empty_seen=0
+        kill -0 "$owner" 2>/dev/null || rm -rf "$WARP_LOCK" 2>/dev/null
+        ;;
     esac
     attempts=$((attempts + 1))
     [ "$attempts" -ge 50 ] && return 1
@@ -336,113 +379,267 @@ EOF
 # ------------------------------------------------------------------------------
 # Сбор UID приложений из списков (Multi-User aware)
 # ------------------------------------------------------------------------------
-collect_warp_uids() {
-  local uids="" pkg uid user users list_files=""
-  [ -f "$WARP_APPS_LIST" ] && list_files="$list_files $WARP_APPS_LIST"
-  [ -f "$WARP_APPS_USER_LIST" ] && list_files="$list_files $WARP_APPS_USER_LIST"
-  [ -n "$list_files" ] || { echo ""; return 0; }
-
-  users=$(cmd user list 2>/dev/null | sed -n 's/.*UserInfo{\([0-9][0-9]*\):.*/\1/p')
-  [ -n "$users" ] || users="0"
-
-  for f in $list_files; do
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in ''|\#*) continue ;; esac
-      pkg=$(printf '%s' "$line" | awk '{print $1}')
-      case "$pkg" in ''|*[!A-Za-z0-9_.]*) continue ;; esac
-      for user in $users; do
-        uid=$(cmd package list packages --user "$user" -U "$pkg" 2>/dev/null | awk -v p="$pkg" '
-          index($0,"package:" p)==1 {
-            for(i=1;i<=NF;i++) if($i ~ /^uid:/){sub(/^uid:/,"",$i); print $i; exit}
-          }')
-        if [ -z "$uid" ] && [ "$user" = 0 ] && [ -r /data/system/packages.list ]; then
-          uid=$(awk -v p="$pkg" '$1==p {print $2; exit}' /data/system/packages.list 2>/dev/null)
-        fi
-        case "$uid" in ''|0|*[!0-9]*) ;; *) uids="$uids $uid" ;; esac
-      done
-    done < "$f"
-  done
-  printf '%s\n' "$uids" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' '
-}
+# Список приложений для туннеля удалён: маршрутизация идёт по доменам и
+# подсетям (warp_domains.list, warp_bypass_nets.list), а не по UID.
 
 # ------------------------------------------------------------------------------
 # Управление правилами маршрутизации (Policy Routing & Dedicated Chains)
 # ------------------------------------------------------------------------------
-next_warp_pref() {
-  local pref="${1:-$PREF_BASE}" max=10999
-  case "$pref" in ''|*[!0-9]*) pref="$PREF_BASE" ;; esac
-  while [ "$pref" -le "$max" ]; do
-    if ! ip -4 rule show 2>/dev/null | grep -q "^${pref}:" && ! ip -6 rule show 2>/dev/null | grep -q "^${pref}:"; then
-      printf '%s\n' "$pref"
-      return 0
+
+
+# ------------------------------------------------------------------------------
+# Разрешение имени в адреса для маршрутизации домена в туннель.
+#
+# ОГРАНИЧЕНИЕ, о котором нужно помнить: маршрутизация идёт по IP назначения, а у
+# сайтов за CDN адреса меняются и делятся с другими сайтами. Поэтому список
+# перечитывается при каждой синхронизации и при смене сети, а сюда стоит вносить
+# только то, что иначе не работает вовсе.
+# ------------------------------------------------------------------------------
+resolve_domain_addrs() {
+  local host="$1" family="$2" out=""
+  case "$host" in ''|*[!A-Za-z0-9.-]*) return 1 ;; esac
+  if [ "$family" = 6 ]; then
+    out=$(ping6 -c1 -w1 "$host" 2>/dev/null | sed -n 's/^PING [^(]*(\([0-9a-fA-F:]*\)).*/\1/p' | head -n1)
+  else
+    out=$(ping -c1 -w1 "$host" 2>/dev/null | sed -n 's/^PING [^(]*(\([0-9.]*\)).*/\1/p' | head -n1)
+  fi
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# Домены, которые уводятся в туннель: заданные вручную плюс добавленные
+# автоматически (не поддались ни одной стратегии обхода).
+collect_warp_domains() {
+  local list line
+  for list in "$LISTS_DIR/warp_domains.list" "$STATE_DIR/warp_auto_domains.list"; do
+    [ -f "$list" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%%#*}
+      line=$(printf '%s' "$line" | tr -d '[:space:]')
+      [ -n "$line" ] || continue
+      case "$line" in *[!A-Za-z0-9.-]*) continue ;; esac
+      printf '%s\n' "$line"
+    done < "$list"
+  done | awk 'NF && !seen[$0]++'
+}
+
+# Подсети из общего файла. Раньше тот же список Telegram был захардкожен здесь
+# и ещё раз в service.sh, причём наборы успели разойтись.
+collect_warp_bypass_nets() {
+  local family="$1" line file="$LISTS_DIR/warp_bypass_nets.list"
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%%#*}
+    line=$(printf '%s' "$line" | tr -d '[:space:]')
+    [ -n "$line" ] || continue
+    case "$line" in *[!0-9A-Fa-f.:/]*) continue ;; esac
+    if [ "$family" = 6 ]; then
+      case "$line" in *:*) printf '%s\n' "$line" ;; esac
+    else
+      case "$line" in *:*) ;; *) printf '%s\n' "$line" ;; esac
     fi
-    pref=$((pref + 1))
+  done < "$file"
+}
+
+# ==============================================================================
+# Живость туннеля
+#
+# Свежего handshake НЕДОСТАТОЧНО. Бывает состояние, когда рукопожатие проходит и
+# обновляется, а полезные данные не идут: наружу уходят килобайты, обратно
+# приходят только служебные пакеты в десятки байт. Формально туннель «живой»,
+# фактически — чёрная дыра.
+#
+# Поэтому проверяются два условия:
+#   1. handshake не старше WARP_HEALTH_MAX_AGE секунд;
+#   2. сквозь туннель реально проходят данные (см. warp_data_flows).
+# Второе условие не зависит от того, идёт ли сейчас пользовательский трафик:
+# проверка отправляет собственный пакет, поэтому простой не путается с обрывом.
+# ==============================================================================
+# Проходят ли сквозь туннель настоящие данные.
+#
+# Пакет отправляется С ПРИВЯЗКОЙ к интерфейсу туннеля, поэтому проверяется
+# именно он, а не общий доступ в интернет. Cloudflare отвечает на 1.1.1.1
+# изнутри туннеля; ICMP здесь идёт уже внутри шифрованного канала, так что
+# фильтры провайдера на него не влияют.
+#
+# Это заменило подсчёт байтов rx/tx. Тот подход выглядел разумно, но замер на
+# устройстве показал его несостоятельность: в мёртвом туннеле TCP не
+# устанавливается, поэтому tx растёт медленно и порог не набирается, а rx при
+# этом пухнет ответами на рукопожатие по 92 байта. Любые пороги давали либо
+# пропуски, либо ложные срабатывания на обычной отдаче файла.
+warp_data_flows() {
+  local target="${WARP_HEALTH_PROBE_IP:-1.1.1.1}" timeout="${WARP_HEALTH_PROBE_TIMEOUT:-3}" n=0
+  command -v ping >/dev/null 2>&1 || return 0
+  case "$timeout" in ''|*[!0-9]*) timeout=3 ;; esac
+  while [ "$n" -lt "${WARP_HEALTH_PROBE_TRIES:-2}" ]; do
+    ping -c1 -W"$timeout" -I "$DEV" "$target" >/dev/null 2>&1 && return 0
+    n=$((n + 1))
   done
   return 1
 }
 
-verify_routing_rules() {
-  local warp_uids="$1" uid
-  ip -4 route show table "$TABLE" default 2>/dev/null | grep -q "default.*dev $DEV" || return 1
-  { ip -6 route show table "$TABLE" default 2>/dev/null | grep -q "default.*dev $DEV" || ip -6 route show table "$TABLE" 2>/dev/null | grep -Eq '(^|[[:space:]])unreachable[[:space:]]+default'; } || return 1
-  for uid in $warp_uids; do
-    ip -4 rule show 2>/dev/null | grep -E "^[0-9]+:.*uidrange ${uid}-${uid}.*lookup ${TABLE}([[:space:]]|$)" >/dev/null || return 1
-    ip -6 rule show 2>/dev/null | grep -E "^[0-9]+:.*uidrange ${uid}-${uid}.*lookup ${TABLE}([[:space:]]|$)" >/dev/null || return 1
+# Есть ли вообще через что поднимать туннель.
+#
+# Перебор профилей без связи бессмыслен по построению: ни один кандидат не
+# получит рукопожатие, потому что пакету некуда идти. Раньше watchdog в такой
+# ситуации честно шагал по матрице (по WARP_WATCH_BATCH кандидатов за тик),
+# упирался в 40-й профиль, ставил result=failed, выжидал WARP_ADAPT_RETRY_SEC и
+# начинал заново — и так до возвращения сети. Плюс раз в WARP_STALL_RESTART_SEC
+# поднимал весь туннель с нуля. Всё это в самолёте, метро или подвале.
+#
+# Маршрут проверяется до endpoint'а, а не «хоть какой-нибудь»: если он ведёт в
+# сам туннель, несущей сети тоже нет.
+underlay_available() {
+  local dev
+  dev=$(ip -4 route get "${WARP_ENDPOINT:-162.159.192.1}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+  [ -n "$dev" ] || return 1
+  [ "$dev" != "$DEV" ] || return 1
+  return 0
+}
+
+# Возвращает 0 (живой) / 1 (мёртвый). Причина — в WARP_HEALTH_REASON.
+warp_tunnel_healthy() {
+  local hs now diff
+  WARP_HEALTH_REASON=""
+  if ! ip link show dev "$DEV" >/dev/null 2>&1; then
+    WARP_HEALTH_REASON="интерфейс $DEV отсутствует"; return 1
+  fi
+  hs=$(get_latest_handshake_epoch)
+  case "$hs" in ''|*[!0-9]*) hs=0 ;; esac
+  if [ "$hs" -le 0 ] 2>/dev/null; then
+    WARP_HEALTH_REASON="handshake отсутствует"; return 1
+  fi
+  now=$(date +%s 2>/dev/null || echo 0)
+  diff=$((now - hs))
+  if [ "$diff" -lt 0 ] 2>/dev/null || [ "$diff" -ge "${WARP_HEALTH_MAX_AGE:-180}" ] 2>/dev/null; then
+    WARP_HEALTH_REASON="handshake устарел на ${diff}с"; return 1
+  fi
+
+  # Рукопожатие свежее — но это ещё не значит, что через туннель ходят данные.
+  # Бывает состояние, когда пир исправно отвечает на рукопожатия, а полезный
+  # трафик молча теряет. Формально живой туннель, фактически — чёрная дыра.
+  if ! warp_data_flows; then
+    WARP_HEALTH_REASON="рукопожатие есть, но данные сквозь туннель не проходят"
+    return 1
+  fi
+  return 0
+}
+
+# Снятие правил по адресу назначения.
+# UID-правила здесь НЕ трогаются: приложение, которое пользователь сознательно
+# увёл в туннель, не должно втихую пойти мимо него. А подсети и домены — это
+# улучшение «по возможности»: при мёртвом туннеле правильнее вернуть их на
+# обычный маршрут, где работает обход DPI, чем отправлять в никуда.
+remove_dest_rules() {
+  local subnet fam domain addr
+  for subnet in $(collect_warp_bypass_nets 4); do
+    ip -4 rule del to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
   done
+  for subnet in $(collect_warp_bypass_nets 6); do
+    ip -6 rule del to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+  done
+  if [ -f "$WARP_DOMAIN_IPS_STATE" ]; then
+    while IFS='|' read -r fam domain addr; do
+      [ -n "$addr" ] || continue
+      case "$addr" in *[!0-9A-Fa-f.:]*) continue ;; esac
+      if [ "$fam" = 6 ]; then
+        ip -6 rule del to "$addr" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+      else
+        ip -4 rule del to "$addr" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+      fi
+    done < "$WARP_DOMAIN_IPS_STATE"
+    rm -f "$WARP_DOMAIN_IPS_STATE" 2>/dev/null
+  fi
+}
+
+# Есть ли что вообще ставить: непустой список подсетей или доменов.
+dest_rules_wanted() {
+  [ -n "$(collect_warp_bypass_nets 4)" ] && return 0
+  [ -n "$(collect_warp_bypass_nets 6)" ] && return 0
+  [ "${WARP_DOMAIN_ROUTING:-1}" = "1" ] && [ -n "$(collect_warp_domains)" ] && return 0
+  return 1
+}
+
+# Стоят ли сейчас правила с нашим приоритетом назначения.
+dest_rules_present() {
+  ip -4 rule show 2>/dev/null | grep -q "^${PREF_DEST}:" && return 0
+  ip -6 rule show 2>/dev/null | grep -q "^${PREF_DEST}:" && return 0
+  return 1
+}
+
+# Установка правил маршрутизации по адресу назначения (подсети + домены).
+# Вынесена отдельно, потому что вызывается из двух мест: при полном
+# применении правил и из watchdog при восстановлении туннеля.
+install_dest_rules() {
+  local subnet net_count=0 domain addr domain_count=0
+  if ! warp_tunnel_healthy; then
+    remove_dest_rules
+    log_w "Туннель нерабочий (${WARP_HEALTH_REASON:-?}): маршруты по адресу назначения сняты, трафик идёт обычным путём с обходом DPI"
+    return 1
+  fi
+
+  # Подсети назначения из lists/warp_bypass_nets.list — тот же файл, что использует
+  # service.sh для вывода их из-под AntiDPI, чтобы наборы не расходились.
+  for subnet in $(collect_warp_bypass_nets 4); do
+    ip -4 route replace "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+    ip -4 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+    net_count=$((net_count + 1))
+  done
+  for subnet in $(collect_warp_bypass_nets 6); do
+    ip -6 route replace "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
+    ip -6 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
+    net_count=$((net_count + 1))
+  done
+
+  # Домены, уводимые в туннель целиком. Резолвим на месте: адреса CDN меняются,
+  # поэтому список пересобирается при каждой синхронизации.
+  if [ "${WARP_DOMAIN_ROUTING:-1}" = "1" ]; then
+    : > "$WARP_DOMAIN_IPS_STATE.tmp.$$" 2>/dev/null || true
+    for domain in $(collect_warp_domains); do
+      addr=$(resolve_domain_addrs "$domain" 4) || { log_w "WARP-домен $domain не резолвится, пропущен"; continue; }
+      ip -4 route replace "$addr" dev "$DEV" table "$TABLE" 2>/dev/null || true
+      if ip -4 rule add to "$addr" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null; then
+        printf '4|%s|%s\n' "$domain" "$addr" >> "$WARP_DOMAIN_IPS_STATE.tmp.$$" 2>/dev/null
+        domain_count=$((domain_count + 1))
+      fi
+      addr=$(resolve_domain_addrs "$domain" 6) || continue
+      ip -6 route replace "$addr" dev "$DEV" table "$TABLE" 2>/dev/null || true
+      if ip -6 rule add to "$addr" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null; then
+        printf '6|%s|%s\n' "$domain" "$addr" >> "$WARP_DOMAIN_IPS_STATE.tmp.$$" 2>/dev/null
+      fi
+    done
+    mv -f "$WARP_DOMAIN_IPS_STATE.tmp.$$" "$WARP_DOMAIN_IPS_STATE" 2>/dev/null || rm -f "$WARP_DOMAIN_IPS_STATE.tmp.$$" 2>/dev/null
+    chmod 0600 "$WARP_DOMAIN_IPS_STATE" 2>/dev/null || true
+  fi
+  if [ "$net_count" -gt 0 ] || [ "$domain_count" -gt 0 ]; then
+    log_i "WARP destination routing: подсетей=$net_count доменов=$domain_count"
+  fi
   return 0
 }
 
 apply_routing_rules() {
-  local warp_uids="$1" uid app_count=0 pref tmp="$WARP_RULE_STATE.tmp.$$"
-  log_i "Применение Policy Routing: приложения из списка в WARP ($DEV)..."
+  log_i "Применение маршрутизации WARP: домены и подсети в туннель ($DEV)..."
   cleanup_routing_rules
-  : > "$tmp" || return 1
 
-  ip -4 route replace default dev "$DEV" table "$TABLE" 2>/dev/null || { rm -f "$tmp"; log_e "Не удалось создать IPv4 default route table=$TABLE"; return 1; }
+  ip -4 route replace default dev "$DEV" table "$TABLE" 2>/dev/null || { log_e "Не удалось создать IPv4 default route table=$TABLE"; return 1; }
   if ip -6 addr show dev "$DEV" 2>/dev/null | grep -q 'inet6 '; then
-    ip -6 route replace default dev "$DEV" table "$TABLE" 2>/dev/null || { rm -f "$tmp"; log_e "Не удалось создать IPv6 default route table=$TABLE"; return 1; }
+    ip -6 route replace default dev "$DEV" table "$TABLE" 2>/dev/null || { log_e "Не удалось создать IPv6 default route table=$TABLE"; return 1; }
   else
-    # Fail closed: selected WARP apps must not fall back to the system IPv6 route.
-    ip -6 route replace unreachable default table "$TABLE" 2>/dev/null || { rm -f "$tmp"; log_e "Не удалось создать IPv6 fail-closed route table=$TABLE"; return 1; }
+    # Fail closed: трафик, направленный в туннель, не должен уходить
+    # по системному IPv6-маршруту, если у туннеля IPv6 нет.
+    ip -6 route replace unreachable default table "$TABLE" 2>/dev/null || { log_e "Не удалось создать IPv6 fail-closed route table=$TABLE"; return 1; }
   fi
 
-  # Резервные прямые маршруты и правила на все диапазоны Telegram (Core + CDN Media) в таблицу WARP
-  local TG_SUBNETS="91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20"
-  local TG_SUBNETS_V6="2001:b28:f23d::/48 2001:67c:4e8::/48"
-  for subnet in $TG_SUBNETS; do
-    ip -4 route replace "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
-    ip -4 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
-  done
-  for subnet in $TG_SUBNETS_V6; do
-    ip -6 route replace "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
-    ip -6 rule add to "$subnet" lookup "$TABLE" pref "$PREF_DEST" 2>/dev/null || true
-  done
+  # Правила по адресу назначения (домены + подсети) ставятся отдельной функцией:
+  # они зависят от живости туннеля и переустанавливаются watchdog'ом.
+  # Отбор по приложениям убран: маршрутизация идёт только по адресу назначения,
+  # поэтому Telegram и прочее уводится подсетями из warp_bypass_nets.list, а не
+  # правилами по UID конкретного клиента.
+  install_dest_rules || true
 
-  for uid in $warp_uids; do
-    case "$uid" in ''|0|*[!0-9]*) continue ;; esac
-    pref=$(next_warp_pref "$((PREF_BASE + app_count))") || { rm -f "$tmp"; cleanup_routing_rules; log_e "Нет свободного policy-rule priority для WARP"; return 1; }
-    ip -4 rule add uidrange "$uid-$uid" lookup "$TABLE" pref "$pref" 2>/dev/null || { rm -f "$tmp"; cleanup_routing_rules; log_e "IPv4 uid rule failed uid=$uid pref=$pref"; return 1; }
-    printf '4|%s|%s|%s\n' "$pref" "$uid" "$TABLE" >> "$tmp"
-    ip -6 rule add uidrange "$uid-$uid" lookup "$TABLE" pref "$pref" 2>/dev/null || { rm -f "$tmp"; cleanup_routing_rules; log_e "IPv6 uid rule failed uid=$uid"; return 1; }
-    printf '6|%s|%s|%s\n' "$pref" "$uid" "$TABLE" >> "$tmp"
-    app_count=$((app_count + 1))
-  done
-
-  # Optional per-UID DNS forcing for classic DNS (UDP/TCP 53).
-  # DoH/DoT are intentionally not rewritten because they carry application TLS semantics.
-  if [ "${WARP_DNS_FORCE:-1}" = "1" ] && [ -n "$warp_uids" ]; then
-    dns_target=$(collect_warp_dns | awk '{print $1}')
-    if validate_ipv4 "$dns_target"; then
-      { iptables -t nat -N ZAPRET2_WARP_DNS 2>/dev/null || iptables -t nat -F ZAPRET2_WARP_DNS 2>/dev/null; } || { rm -f "$tmp"; cleanup_routing_rules; log_e "Не удалось создать WARP DNS chain"; return 1; }
-      { iptables -t nat -C OUTPUT -j ZAPRET2_WARP_DNS 2>/dev/null || iptables -t nat -I OUTPUT 1 -j ZAPRET2_WARP_DNS 2>/dev/null; } || { rm -f "$tmp"; cleanup_routing_rules; log_e "Не удалось подключить WARP DNS chain"; return 1; }
-      for uid in $warp_uids; do
-        iptables -t nat -A ZAPRET2_WARP_DNS -m owner --uid-owner "$uid" -p udp --dport 53 -j DNAT --to-destination "$dns_target:53" 2>/dev/null || { rm -f "$tmp"; cleanup_routing_rules; log_e "WARP DNS UDP rule failed uid=$uid"; return 1; }
-        iptables -t nat -A ZAPRET2_WARP_DNS -m owner --uid-owner "$uid" -p tcp --dport 53 -j DNAT --to-destination "$dns_target:53" 2>/dev/null || { rm -f "$tmp"; cleanup_routing_rules; log_e "WARP DNS TCP rule failed uid=$uid"; return 1; }
-      done
-    else
-      rm -f "$tmp"; cleanup_routing_rules; log_e "WARP_DNS_FORCE включён, но валидный IPv4 DNS не найден"; return 1
-    fi
-  fi
+  # Принудительный DNS по UID убран вместе с отбором по приложениям. Домены,
+  # которые должны идти через туннель, задаются в warp_domains.list, и их адреса
+  # уводятся в туннель напрямую — подменять резолвер для этого не требуется.
 
   iptables -t mangle -N ZAPRET2_WARP_MANGLE 2>/dev/null || iptables -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null || true
   iptables -t mangle -A ZAPRET2_WARP_MANGLE -o "$DEV" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240 2>/dev/null || \
@@ -458,36 +655,47 @@ apply_routing_rules() {
     ip6tables -t mangle -C OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null || ip6tables -t mangle -I OUTPUT 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
     ip6tables -t mangle -C POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null || ip6tables -t mangle -I POSTROUTING 1 -j ZAPRET2_WARP_MANGLE 2>/dev/null || true
 
-    # Мгновенный REJECT для IPv6 сокетов WARP-приложений, чтобы исключить зависание Dual-Stack (Happy Eyeballs)
-    ip6tables -t filter -N ZAPRET2_WARP_FILTER 2>/dev/null || ip6tables -t filter -F ZAPRET2_WARP_FILTER 2>/dev/null || true
-    for uid in $warp_uids; do
-      ip6tables -t filter -A ZAPRET2_WARP_FILTER -m owner --uid-owner "$uid" -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null || true
-    done
-    ip6tables -t filter -C OUTPUT -j ZAPRET2_WARP_FILTER 2>/dev/null || ip6tables -t filter -I OUTPUT 1 -j ZAPRET2_WARP_FILTER 2>/dev/null || true
   fi
 
-  mv -f "$tmp" "$WARP_RULE_STATE" || { rm -f "$tmp"; cleanup_routing_rules; return 1; }
-  chmod 0600 "$WARP_RULE_STATE" 2>/dev/null || true
-  verify_routing_rules "$warp_uids" || { log_e "Финальная проверка WARP policy routing не прошла"; cleanup_routing_rules; return 1; }
   ip -4 route flush cache 2>/dev/null || true
   ip -6 route flush cache 2>/dev/null || true
-  log_i "Policy Routing проверен: $app_count UID направлены в WARP ($DEV)"
   return 0
 }
 
 cleanup_routing_rules() {
-  local fam pref uid table n
-  local TG_SUBNETS="91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20"
-  local TG_SUBNETS_V6="2001:b28:f23d::/48 2001:67c:4e8::/48"
-  for subnet in $TG_SUBNETS; do
+  local fam pref uid table n subnet domain addr
+  # Подсети берём из того же файла, что и при установке. Дополнительно снимаем
+  # исторический захардкоженный набор: он мог остаться от прежних версий модуля,
+  # и без этого его правила пережили бы обновление.
+  for subnet in $(collect_warp_bypass_nets 4) 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
     ip -4 rule del to "$subnet" 2>/dev/null || true
     ip -4 route del "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
   done
-  for subnet in $TG_SUBNETS_V6; do
+  for subnet in $(collect_warp_bypass_nets 6) 2001:b28:f23d::/48 2001:67c:4e8::/48; do
     ip -6 rule del to "$subnet" 2>/dev/null || true
     ip -6 route del "$subnet" dev "$DEV" table "$TABLE" 2>/dev/null || true
   done
 
+  # Адреса доменных правил снимаем по сохранённому состоянию: пересчитать их
+  # заново нельзя, DNS мог вернуть уже другие IP, и правило осталось бы висеть.
+  if [ -f "$WARP_DOMAIN_IPS_STATE" ]; then
+    while IFS='|' read -r fam domain addr; do
+      [ -n "$addr" ] || continue
+      case "$addr" in *[!0-9A-Fa-f.:]*) continue ;; esac
+      if [ "$fam" = 6 ]; then
+        ip -6 rule del to "$addr" 2>/dev/null || true
+        ip -6 route del "$addr" dev "$DEV" table "$TABLE" 2>/dev/null || true
+      else
+        ip -4 rule del to "$addr" 2>/dev/null || true
+        ip -4 route del "$addr" dev "$DEV" table "$TABLE" 2>/dev/null || true
+      fi
+    done < "$WARP_DOMAIN_IPS_STATE"
+    rm -f "$WARP_DOMAIN_IPS_STATE" 2>/dev/null
+  fi
+
+  # Правила по UID остались от версий, где туннель отбирал трафик по приложениям.
+  # Файл состояния переживает обновление модуля, поэтому снимаем их по нему —
+  # иначе такие правила висели бы вечно.
   if [ -f "$WARP_RULE_STATE" ]; then
     while IFS='|' read -r fam pref uid table; do
       case "$fam:$pref:$uid:$table" in *[!0-9:]*|'') continue ;; esac
@@ -497,22 +705,22 @@ cleanup_routing_rules() {
   fi
   rm -f "$WARP_RULE_STATE" 2>/dev/null
 
-  while iptables -t nat -D OUTPUT -j ZAPRET2_WARP_DNS 2>/dev/null; do :; done
-  while iptables -t nat -D POSTROUTING -o "$DEV" -j MASQUERADE 2>/dev/null; do :; done
+  del_bounded iptables -t nat -D OUTPUT -j ZAPRET2_WARP_DNS
+  del_bounded iptables -t nat -D POSTROUTING -o "$DEV" -j MASQUERADE
   iptables -t nat -F ZAPRET2_WARP_DNS 2>/dev/null || true
   iptables -t nat -X ZAPRET2_WARP_DNS 2>/dev/null || true
 
-  while iptables -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
-  while iptables -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+  del_bounded iptables -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE
+  del_bounded iptables -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE
   iptables -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null || true
   iptables -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null || true
   if command -v ip6tables >/dev/null 2>&1; then
-    while ip6tables -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
-    while ip6tables -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+    del_bounded ip6tables -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE
+    del_bounded ip6tables -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE
     ip6tables -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null || true
     ip6tables -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null || true
 
-    while ip6tables -t filter -D OUTPUT -j ZAPRET2_WARP_FILTER 2>/dev/null; do :; done
+    del_bounded ip6tables -t filter -D OUTPUT -j ZAPRET2_WARP_FILTER
     ip6tables -t filter -F ZAPRET2_WARP_FILTER 2>/dev/null || true
     ip6tables -t filter -X ZAPRET2_WARP_FILTER 2>/dev/null || true
   fi
@@ -877,6 +1085,12 @@ adaptive_bootstrap() {
     return 2
   fi
 
+  # Без несущей сети матрицу не проходим: сорок кандидатов гарантированно
+  # провалятся, а состояние уедет в failed и утащит за собой backoff.
+  if ! underlay_available; then
+    log_i "WARP adaptive: нет несущей сети, перебор профилей отложен"
+    return 1
+  fi
   result=$(adapt_state_value result)
   if [ "$result" = failed ] && ! adapt_retry_due; then return 2; fi
   if [ "$result" = failed ]; then step=0; else step=$(adapt_state_step); fi
@@ -885,7 +1099,9 @@ adaptive_bootstrap() {
   # instead of depending on a watcher that may be stale or delayed.
   tries="${WARP_STARTUP_TRIES:-40}"
   case "$tries" in ''|*[!0-9]*) tries="$total" ;; esac
-  [ "$tries" -ge "$total" ] 2>/dev/null || tries="$total"
+  # Нижняя граница — 1, а не $total: две проверки против $total подряд
+  # всегда давали ровно $total, и настройка не действовала вовсе.
+  [ "$tries" -ge 1 ] 2>/dev/null || tries="$total"
   [ "$tries" -le "$total" ] 2>/dev/null || tries="$total"
 
   while [ "$n" -lt "$tries" ]; do
@@ -999,9 +1215,7 @@ start_tunnel() {
   ip link set mtu 1280 dev "$DEV" 2>/dev/null || log_w "Не удалось установить MTU=1280"
 
   # Маршрутизация приложений
-  local uids
-  uids=$(collect_warp_uids)
-  apply_routing_rules "$uids" || { stop_tunnel_internal; release_warp_lock; return 1; }
+  apply_routing_rules || { stop_tunnel_internal; release_warp_lock; return 1; }
 
   local adapt_rc=0
   adaptive_bootstrap || adapt_rc=$?
@@ -1035,7 +1249,7 @@ stop_tunnel_internal() {
   local pid cmd exe
   pid=$(cat "$WARP_PID_FILE" 2>/dev/null)
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    cmd=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+    cmd=$(pid_cmdline "$pid")
     exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
     if { [ "$exe" = "$BIN_DIR/amneziawg-go" ] || printf '%s' "$cmd" | grep -Fq "$BIN_DIR/amneziawg-go"; } && printf '%s' "$cmd" | grep -Fq "$DEV"; then
       kill -TERM "$pid" 2>/dev/null || true
@@ -1067,9 +1281,7 @@ sync_apps() {
     release_warp_lock
     return "$rc"
   fi
-  local uids
-  uids=$(collect_warp_uids)
-  apply_routing_rules "$uids"
+  apply_routing_rules
   rc=$?
   release_warp_lock
   return "$rc"
@@ -1125,23 +1337,107 @@ disable_sip_mode() {
   return "$rc"
 }
 
+# Отметка «туннель нездоров с такого-то момента». По ней решается, пора ли
+# перестать перебирать шаги и перезапустить туннель целиком.
+warp_mark_unhealthy() {
+  [ -s "$WARP_UNHEALTHY_SINCE" ] || date +%s > "$WARP_UNHEALTHY_SINCE" 2>/dev/null
+  chmod 0600 "$WARP_UNHEALTHY_SINCE" 2>/dev/null || true
+}
+warp_clear_unhealthy() { rm -f "$WARP_UNHEALTHY_SINCE" 2>/dev/null; }
+warp_unhealthy_age() {
+  local since now
+  since=$(cat "$WARP_UNHEALTHY_SINCE" 2>/dev/null)
+  case "$since" in ''|*[!0-9]*) echo 0; return 0 ;; esac
+  now=$(date +%s 2>/dev/null || echo 0)
+  [ "$now" -ge "$since" ] 2>/dev/null && echo $((now - since)) || echo 0
+}
+
 check_and_heal_warp() {
   [ "${ENABLE_WARP:-0}" = "1" ] || return 0
-  acquire_warp_lock || return 1
+  # Стартовый перебор держит блокировку минутами (до WARP_STARTUP_TRIES шагов
+  # по несколько секунд каждый). Раньше watchdog в это время молча возвращал
+  # ошибку, и со стороны это выглядело как зависший на одном шаге туннель:
+  # ни движения, ни строчки в логе. Теперь причина хотя бы видна.
+  if ! acquire_warp_lock; then
+    log_w "WARP watchdog: операция с туннелем уже выполняется (перебор профилей), проверка пропущена"
+    return 1
+  fi
   [ -x "$BIN_DIR/awg" ] || { release_warp_lock; return 1; }
   ip link show dev "$DEV" >/dev/null 2>&1 || { release_warp_lock; return 1; }
 
-  local hs now diff step next result batch i=0
+  local hs now diff step next result batch stall i=0
+
+  # Единая проверка живости: свежий handshake И реально идущие данные.
+  # Раньше здесь смотрели только на возраст handshake, поэтому состояние
+  # «рукопожатие обновляется, а полезный трафик не ходит» считалось нормой:
+  # туннель формально жив, а весь трафик, направленный в него, пропадает.
+  if warp_tunnel_healthy; then
+    step=$(adapt_state_step)
+    write_adapt_state "$step" ok || true
+    warp_clear_unhealthy
+    # Туннель работает. Если маршруты по адресу назначения были сняты на
+    # прошлой итерации — возвращаем их. Проверяем именно наличие правил с нашим
+    # приоритетом, а не файл состояния: он пуст и в штатной ситуации, когда
+    # доменов в списке нет, и по нему нельзя отличить «сняли» от «нечего ставить».
+    if dest_rules_wanted && ! dest_rules_present; then
+      log_i "WARP watchdog: туннель восстановился, возвращаю маршруты по адресу назначения"
+      install_dest_rules || true
+    fi
+    release_warp_lock
+    return 0
+  fi
+
+  # Туннель нерабочий. Первым делом убираем маршруты по адресу назначения, чтобы
+  # трафик не пропадал, пока идёт восстановление: подсети и домены вернутся на
+  # обычный маршрут, где действует обход DPI. Снимаем один раз, а не каждый тик:
+  # прежде эта ветка на каждой проверке заново обходила 15 подсетей и писала
+  # строку в журнал, даже когда снимать уже было нечего.
+  if dest_rules_present; then
+    log_w "WARP watchdog: ${WARP_HEALTH_REASON:-туннель не отвечает}; снимаю маршруты по адресу назначения на время восстановления"
+    remove_dest_rules
+  fi
+  warp_mark_unhealthy
+
+  # Нет несущей сети — засыпаем. Ни перебора кандидатов, ни полного перезапуска:
+  # чинить нечего, пока чинить не через что. Возвращение сети поднимет обычную
+  # логику, а отметка «нездоров с такого-то момента» продолжает идти, поэтому
+  # после длинного обрыва туннель будет поднят с нуля — это и нужно, состояние
+  # интерфейса за время отсутствия несущей сети всё равно устарело.
+  if ! underlay_available; then
+    if [ ! -f "$RUN_DIR/warp-nolink.flag" ]; then
+      : > "$RUN_DIR/warp-nolink.flag" 2>/dev/null
+      chmod 0600 "$RUN_DIR/warp-nolink.flag" 2>/dev/null || true
+      log_i "WARP watchdog: нет несущей сети, перебор профилей приостановлен до её появления"
+    fi
+    release_warp_lock
+    return 1
+  fi
+  if [ -f "$RUN_DIR/warp-nolink.flag" ]; then
+    rm -f "$RUN_DIR/warp-nolink.flag" 2>/dev/null
+    log_i "WARP watchdog: несущая сеть вернулась, восстановление продолжается"
+  fi
+
+  # Если туннель не оживает слишком долго, пошаговый перебор уже не помогает:
+  # состояние интерфейса или процесса могло испортиться так, что его не чинит
+  # смена профиля. Поднимаем всё заново с нуля вместо бесконечного перебора.
+  stall=$(warp_unhealthy_age)
+  if [ "$stall" -ge "${WARP_STALL_RESTART_SEC:-600}" ] 2>/dev/null; then
+    log_w "WARP watchdog: туннель не работает ${stall}с — полный перезапуск с нуля"
+    stop_tunnel_internal
+    rm -f "$WARP_ADAPT_STATE" 2>/dev/null
+    warp_clear_unhealthy
+    release_warp_lock
+    start_tunnel >/dev/null 2>&1 &
+    return 0
+  fi
+
   hs=$(get_latest_handshake_epoch)
   now=$(date +%s 2>/dev/null || echo 0)
   if [ "$hs" -gt 0 ] 2>/dev/null; then diff=$((now - hs)); else diff=999999; fi
 
-  if [ "$hs" -gt 0 ] 2>/dev/null && [ "$diff" -lt 180 ] 2>/dev/null; then
-    step=$(adapt_state_step)
-    write_adapt_state "$step" ok || true
-    release_warp_lock
-    return 0
-  fi
+  # Чёрная дыра при свежем рукопожатии ожиданием не лечится: пересогласование
+  # не поможет, нужен другой профиль или endpoint. Поэтому идём в адаптивный
+  # перебор ниже наравне со случаем «рукопожатие не проходит вовсе».
 
   if [ "${WARP_ADAPTIVE:-1}" != 1 ]; then
     if probe_handshake "$WARP_PROBE_TIMEOUT"; then write_adapt_state 0 ok || true; release_warp_lock; return 0; fi
@@ -1193,6 +1489,16 @@ case "$1" in
   start) start_tunnel ;;
   stop) stop_tunnel ;;
   restart|reload) start_tunnel ;;
+  # Полный перезапуск по требованию: сбрасывает перебор профилей на начало.
+  # Нужен, когда туннель завис на одном шаге и сам не выбирается.
+  force-restart)
+    acquire_warp_lock || { log_w "Перезапуск отложен: операция с туннелем уже выполняется"; exit 1; }
+    log_i "Полный перезапуск туннеля по запросу пользователя"
+    stop_tunnel_internal
+    rm -f "$WARP_ADAPT_STATE" "$WARP_UNHEALTHY_SINCE" 2>/dev/null
+    release_warp_lock
+    start_tunnel
+    ;;
   sync) sync_apps ;;
   status) status_tunnel ;;
   watchdog|heal) check_and_heal_warp ;;

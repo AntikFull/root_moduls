@@ -6,10 +6,18 @@ MODDIR="/data/adb/modules/zapret2-android"
 CONTROL="$MODDIR/bin/zapret2-control"
 MAX_BODY=65536
 
-# Native manager bridge may execute api.sh directly with already-separated argv.
+# Нативный мост менеджера root (KernelSU / APatch / MMRL) вызывает api.sh
+# напрямую с уже разобранным argv — HTTP-слой при этом не участвует, и вызов
+# заведомо идёт от процесса с правами root.
 if [ $# -gt 0 ]; then
   exec "$CONTROL" "$@"
 fi
+
+# Всё, что ниже, — HTTP-путь. Здесь reload обязан быть асинхронным, иначе
+# CGI-процесс держит соединение весь перезапуск службы (десятки секунд), и
+# WebUI отваливается по таймауту. Прогресс страница читает из json-status.
+Z2_ASYNC=1
+export Z2_ASYNC
 
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g'; }
 send_response() {
@@ -24,13 +32,13 @@ send_response() {
 
 is_read_action() {
   case "$1" in
-    status|json-status|json-hotspot-settings|json-strategies|json-apps|json-app-lists|json-diagnostics|json-warp-status|app-state|module-version|auto-status|log|nfqws-log) return 0 ;;
+    status|json-status|json-hotspot-settings|json-strategies|json-diagnostics|json-warp-status|json-hostlist|json-learned|module-version|auto-status|log|nfqws-log) return 0 ;;
     *) return 1 ;;
   esac
 }
 is_write_action() {
   case "$1" in
-    scope|settings|hotspot-settings|save-smart|save-strategies|app-state-set|sync-apps|replace-list|nfqws-debug|diag|export-logs|auto-run|auto-clear|warp-toggle|warp-sip|warp-rekey|warp-save|restart|mode|forcetcp|quicmode|add|del|add-exclude|del-exclude) return 0 ;;
+    hotspot-settings|save-smart|save-strategies|replace-list|nfqws-debug|diag|export-logs|auto-run|auto-clear|warp-toggle|warp-sip|warp-rekey|warp-restart|warp-save|restart|forcetcp|quicmode|hostlist-mode|hostlist-clear) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -69,14 +77,31 @@ case "$METHOD" in GET|POST) ;; OPTIONS) send_response '405 Method Not Allowed' '
 
 DATA="$QUERY_STRING"
 if [ "$METHOD" = POST ]; then
-  # Transparent CSRF guard: no login/password, but only the bundled WebUI JS can
-  # mutate state. A cross-origin HTML form cannot set this custom header, and
-  # cross-origin fetch is blocked because this endpoint intentionally exposes no CORS.
-  [ "${HTTP_X_ZAPRET2_WEBUI:-}" = "1" ] || { send_response '403 Forbidden' '{"ok":false,"error":"missing WebUI request marker"}'; exit 1; }
   case "${CONTENT_TYPE:-}" in application/x-www-form-urlencoded*) BODY=$(head -c "$MAX_BODY" 2>/dev/null || cat); DATA="$BODY" ;; *) send_response '415 Unsupported Media Type' '{"ok":false,"error":"use application/x-www-form-urlencoded"}'; exit 1 ;; esac
 fi
 ACTION=$(param_dec action "$DATA")
 [ -n "$ACTION" ] || ACTION=json-status
+
+# ------------------------------------------------------------------------------
+# Проверка происхождения запроса.
+#
+# Заголовок-маркер закрывает браузерный cross-origin: сторонняя страница не может
+# выставить кастомный заголовок в форме, а fetch к нам блокируется отсутствием CORS.
+#
+# ЧЕГО ОН НЕ ЗАКРЫВАЕТ: приложение на самом устройстве спокойно выставит любой
+# заголовок. Локальный TCP-сокет доступен всем приложениям без единого
+# разрешения, и HTTP на localhost в принципе не отличает вызывающего.
+# Поэтому настоящая защита — это ENABLE_HTTP_API="0" по умолчанию: у
+# KernelSU / APatch / MMRL работает нативный мост выше, и сокет не нужен вовсе.
+#
+# Маркер требуется и для чтения: json-apps отдаёт полный список установленных
+# приложений, а log/nfqws-log — SSID, оператора и UID. Раньше read-команды
+# принимались вообще без проверок, так что их забирал любой GET.
+# ------------------------------------------------------------------------------
+if [ "${HTTP_X_ZAPRET2_WEBUI:-}" != "1" ]; then
+  send_response '403 Forbidden' '{"ok":false,"error":"missing WebUI request marker"}'
+  exit 1
+fi
 
 # Mutations are POST-only. Read-only commands may use GET.
 if [ "$METHOD" = GET ] && ! is_read_action "$ACTION"; then

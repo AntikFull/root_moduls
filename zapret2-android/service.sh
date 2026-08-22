@@ -7,13 +7,16 @@ SERVICE_ACTION="$1"
 CONF_FILE="$MODDIR/zapret2.conf"
 LISTS_DIR="$MODDIR/lists"
 [ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
-APPS_LIST="$LISTS_DIR/apps.list"
-APPS_USER_LIST="$LISTS_DIR/apps.user.list"
-AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
-EXCLUDE_LIST="$LISTS_DIR/exclude.list"
-SMART_YOUTUBE_FILE="$LISTS_DIR/smart_youtube.list"
-AUTO_DOMAINS_FILE="$LISTS_DIR/auto_domains.list" # legacy/user compatibility; SMART uses built-in service profiles
 EXCLUDE_DOMAINS_FILE="$LISTS_DIR/exclude_domains.list"
+# Доменные списки в терминологии nfqws2-keenetic.
+USER_DOMAINS_FILE="$LISTS_DIR/user.list"
+# Подсети (CIDR): аналог ipset.list / ipset_exclude.list из nfqws2-keenetic.
+IPSET_FILE="$LISTS_DIR/ipset.list"
+IPSET_EXCLUDE_FILE="$LISTS_DIR/ipset_exclude.list"
+# auto.list пишет сам nfqws2, поэтому он лежит В STATE, а не в lists: каталог
+# lists/ под наблюдением inotify, и запись выученного домена немедленно вызывала
+# бы перезапуск службы, который стёр бы ещё не сохранённое состояние обучения.
+LEARNED_DOMAINS_FILE="$MODDIR/state/auto.list"
 LOG_DIR="$MODDIR/logs"
 LOG_FILE="$LOG_DIR/zapret2_debug.log"
 NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
@@ -24,8 +27,6 @@ WATCHER_PID_FILE="$RUN_DIR/watcher.pid"
 VPN_WATCHER_PID_FILE="$RUN_DIR/vpn-watcher.pid"
 HEALTH_WATCHER_PID_FILE="$RUN_DIR/health-watcher.pid"
 SERVICE_LOCK="$RUN_DIR/service.lock"
-PACKAGE_UID_CACHE="$RUN_DIR/package_uids.cache"
-PACKAGE_SOURCE_FILE="$RUN_DIR/package_source"
 HEALTH_FILE="$RUN_DIR/health.env"
 START_STATE_FILE="$RUN_DIR/startup.env"
 LATE_START_PID_FILE="$RUN_DIR/late-start.pid"
@@ -55,7 +56,7 @@ init_boot_epoch() {
       "$RUN_DIR/auto-probe.pid" "$RUN_DIR/auto-test-nfqws.pid" "$AUTO_RESULT_FILE" \
       "$HEALTH_FILE" "$START_STATE_FILE" "$RUN_DIR/tether-runtime.conf" "$RUN_DIR/tether-downstreams.state" \
       "$RUN_DIR/vpn-routing.state" "$RUN_DIR/vpn-routing.meta" "$RUN_DIR/network-event.flag" "$RUN_DIR/control-write.ts" \
-      "$PACKAGE_UID_CACHE" "$PACKAGE_SOURCE_FILE" 2>/dev/null
+      2>/dev/null
     rm -rf "$SERVICE_LOCK" "$RUN_DIR/app-sync.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/on_change.lock" "$RUN_DIR/auto-select.lock" 2>/dev/null
     tmp="$BOOT_ID_FILE.tmp.$$"
     printf '%s\n' "$current" > "$tmp" 2>/dev/null && mv -f "$tmp" "$BOOT_ID_FILE" 2>/dev/null
@@ -132,18 +133,27 @@ health_error() {
   HEALTH_WARNINGS="${HEALTH_WARNINGS}${HEALTH_WARNINGS:+; }$*"
   log_e "$*"
 }
+# Число непустых строк списка. Отдельной функцией, потому что grep -c при
+# отсутствующем файле не печатает ничего, и в health.env попадало пустое значение.
+list_count() {
+  local n
+  n=$(grep -cvE '^[[:space:]]*(#|$)' "$1" 2>/dev/null)
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
 write_health() {
   local tmp="$HEALTH_FILE.tmp.$$"
   {
     echo "HEALTH=$HEALTH"
     printf 'WARNINGS=%s\n' "$HEALTH_WARNINGS"
-    printf 'PACKAGE_SOURCE=%s\n' "$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
     printf 'STRATEGY_EFFECTIVE=%s\n' "${STRATEGY_EFFECTIVE:-${STRATEGY_MODE:-UNKNOWN}}"
     printf 'SMART_ENGINE=%s\n' "${STRATEGY_EFFECTIVE:-UNKNOWN}"
-    printf 'AUTO_APPS_ENABLED=%s\n' "${AUTO_APPS_ENABLED:-1}"
-    printf 'AUTO_APP_UIDS=%s\n' "${AUTO_APP_UID_COUNT:-0}"
-    printf 'MANUAL_APP_UIDS=%s\n' "${MANUAL_APP_UID_COUNT:-0}"
-    printf 'SMART_YOUTUBE_DOMAINS=%s\n' "$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)"
+    printf 'IPSET_NETS=%s\n' "$(list_count "$IPSET_FILE")"
+    printf 'IPSET_EXCLUDE_NETS=%s\n' "$(list_count "$IPSET_EXCLUDE_FILE")"
+    printf 'HOSTLIST_MODE=%s\n' "${HOSTLIST_MODE:-AUTO}"
+    printf 'USER_DOMAINS=%s\n' "$(list_count "$USER_DOMAINS_FILE")"
+    printf 'LEARNED_DOMAINS=%s\n' "$(list_count "$LEARNED_DOMAINS_FILE")"
     printf 'AUTO_PROFILE=%s\n' "${AUTO_PROFILE:-UNKNOWN}"
     printf 'AUTO_PROFILE_NAME=%s\n' "${AUTO_PROFILE_NAME:-UNKNOWN}"
     printf 'AUTO_STRATEGY_SIGNATURE=%s\n' "${AUTO_STRATEGY_SIGNATURE:-UNKNOWN}"
@@ -157,26 +167,60 @@ write_health() {
     printf 'CONNBYTES4=%s\n' "${CONNBYTES4:-0}"
     printf 'CONNMARK4=%s\n' "${CONNMARK4:-0}"
     printf 'NFQUEUE4=%s\n' "${NFQ4:-0}"
-    printf 'OWNER4=%s\n' "${OWNER4:-0}"
     printf 'CONNBYTES6=%s\n' "${CONNBYTES6:-0}"
     printf 'CONNMARK6=%s\n' "${CONNMARK6:-0}"
     printf 'NFQUEUE6=%s\n' "${NFQ6:-0}"
-    printf 'OWNER6=%s\n' "${OWNER6:-0}"
   } > "$tmp" && mv -f "$tmp" "$HEALTH_FILE"
   chmod 0600 "$HEALTH_FILE" 2>/dev/null || true
 }
 
-pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+# Чтение /proc/PID/cmdline у умирающего процесса способно заблокироваться
+# навсегда: ядру нужна блокировка памяти задачи, которую в этот момент уже
+# разбирают, и вернуть данные оно не может. Один такой PID (недобитый
+# health-watcher) подвесил reload целиком — служба осталась без nfqws2, пока
+# процессы не сняли вручную. Отсюда две ступени защиты:
+#   1) /proc/PID/stat читается без этой блокировки, зомби видно сразу;
+#   2) само чтение уходит в фон с потолком по времени, чтобы даже зависший
+#      read не остановил перезапуск.
+pid_cmdline() {
+  local pid="$1" st tmp child n=0
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$pid/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tmp="$RUN_DIR/.cmdline.$$.$pid"
+  ( tr '\000' ' ' < "/proc/$pid/cmdline" >"$tmp" 2>/dev/null ) &
+  child=$!
+  while kill -0 "$child" 2>/dev/null && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
+  if kill -0 "$child" 2>/dev/null; then
+    kill -9 "$child" 2>/dev/null
+    rm -f "$tmp" 2>/dev/null
+    log_w "Чтение cmdline PID $pid не завершилось за 2 с; процесс считается чужим"
+    return 1
+  fi
+  wait "$child" 2>/dev/null
+  cat "$tmp" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+}
+# Боевой и тестовый (auto-select) nfqws2 имеют одинаковые comm и cwd. Отличает их
+# только номер очереди: без этой проверки reload во время probe подхватывал PID
+# тестового процесса и убивал его вместе с состоянием подбора.
+pid_is_service_nfqws() {
+  local pid="$1" comm cwd cmd
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+  [ "$comm" = "nfqws2" ] || return 1
+  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
+  [ "$cwd" = "$BIN_DIR" ] || return 1
+  cmd=$(pid_cmdline "$pid")
+  case " $cmd " in *" --qnum=$QNUM "*) return 0 ;; *) return 1 ;; esac
+}
 pid_is_owned() {
   local pid="$1" kind="$2" cmd cwd comm
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
   case "$kind" in
-    nfqws2)
-      comm=$(cat "/proc/$pid/comm" 2>/dev/null)
-      cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
-      [ "$comm" = "nfqws2" ] && [ "$cwd" = "$BIN_DIR" ]
-      ;;
+    nfqws2) pid_is_service_nfqws "$pid" ;;
     config-watch) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/on_change.sh" ;;
     vpn-watch) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/vpn-watch.sh" ;;
     health-watch) cmd=$(pid_cmdline "$pid"); printf '%s' "$cmd" | grep -Fq "$MODDIR/service-watch.sh" ;;
@@ -191,14 +235,11 @@ pid_is_owned() {
 }
 
 find_owned_nfqws_pid() {
-  local proc pid best=0 comm cwd
+  local proc pid best=0
   for proc in /proc/[0-9]*; do
-    comm=$(cat "$proc/comm" 2>/dev/null)
-    [ "$comm" = "nfqws2" ] || continue
-    cwd=$(readlink "$proc/cwd" 2>/dev/null)
-    [ "$cwd" = "$BIN_DIR" ] || continue
     pid=${proc##*/}
     case "$pid" in ''|*[!0-9]*) continue ;; esac
+    pid_is_service_nfqws "$pid" || continue
     [ "$pid" -gt "$best" ] 2>/dev/null && best=$pid
   done
   [ "$best" -gt 1 ] 2>/dev/null && printf '%s\n' "$best"
@@ -230,13 +271,14 @@ stop_pid() {
   rm -f "$pid_file"
 }
 
+# Добивает осиротевшие боевые nfqws2. Тестовый процесс auto-select (другой qnum)
+# намеренно не трогаем: им владеет auto-select.sh и он снимет его сам.
 stop_owned_nfqws() {
-  local proc pid cwd n
+  local proc pid n
   for proc in /proc/[0-9]*; do
-    [ "$(cat "$proc/comm" 2>/dev/null)" = "nfqws2" ] || continue
-    cwd=$(readlink "$proc/cwd" 2>/dev/null)
-    [ "$cwd" = "$BIN_DIR" ] || continue
     pid=${proc##*/}
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    pid_is_service_nfqws "$pid" || continue
     kill -TERM "$pid" 2>/dev/null
     n=0
     while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 10 ]; do sleep 0.1; n=$((n + 1)); done
@@ -244,6 +286,175 @@ stop_owned_nfqws() {
     log_i "Остановлен осиротевший nfqws2 (PID $pid)"
   done
 }
+
+# ------------------------------------------------------------------------------
+# Единая точка запуска nfqws2. Раньше эта команда была скопирована восемь раз
+# (четыре ветки в основном пути, три в быстрой смене профиля, одна в auto-select),
+# из-за чего ветки успели разойтись по составу аргументов.
+# Возвращает PID запущенного процесса в NFQWS_SPAWNED_PID.
+# ------------------------------------------------------------------------------
+NFQWS_SPAWNED_PID=""
+NFQWS_SPAWN_METHOD=""
+spawn_nfqws() {
+  local launcher
+  NFQWS_SPAWNED_PID=""; NFQWS_SPAWN_METHOD=""
+  [ -x "$BIN_DIR/nfqws2" ] || return 1
+  cd "$BIN_DIR" || return 1
+  if command -v setsid >/dev/null 2>&1; then
+    NFQWS_SPAWN_METHOD=setsid
+    setsid "$BIN_DIR/nfqws2" "$@" >> "$LOG_FILE" 2>&1 &
+    launcher=$!
+  elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
+    NFQWS_SPAWN_METHOD=busybox-setsid
+    busybox setsid "$BIN_DIR/nfqws2" "$@" >> "$LOG_FILE" 2>&1 &
+    launcher=$!
+  elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; then
+    NFQWS_SPAWN_METHOD=toybox-setsid
+    toybox setsid "$BIN_DIR/nfqws2" "$@" >> "$LOG_FILE" 2>&1 &
+    launcher=$!
+  else
+    NFQWS_SPAWN_METHOD=nohup-fallback
+    nohup "$BIN_DIR/nfqws2" "$@" >> "$LOG_FILE" 2>&1 &
+    launcher=$!
+  fi
+  sleep 1
+  # При setsid $! указывает на обёртку, а не на сам nfqws2 — доразрешаем по /proc.
+  if pid_is_service_nfqws "$launcher"; then
+    NFQWS_SPAWNED_PID="$launcher"
+  else
+    NFQWS_SPAWNED_PID=$(find_owned_nfqws_pid)
+  fi
+  pid_is_service_nfqws "$NFQWS_SPAWNED_PID"
+}
+
+# ------------------------------------------------------------------------------
+# Выбор доменов, к которым применяется обход. Три режима, как в nfqws2-keenetic:
+#
+#   LIST — только домены из user.list. Обучение выключено.
+#   AUTO — user.list + auto.list, который nfqws2 пополняет сам: домен попадает
+#          туда, если недоступность зафиксирована HOSTLIST_AUTO_FAIL_THRESHOLD
+#          раз за HOSTLIST_AUTO_FAIL_TIME секунд.
+#   ALL  — все домены, кроме exclude_domains.list.
+#
+# exclude_domains.list действует во всех режимах.
+# ------------------------------------------------------------------------------
+# Исключения действуют во всех режимах и обязаны стоять в КАЖДОМ профиле.
+build_exclude_args() {
+  local args=""
+  [ "$(list_count "$EXCLUDE_DOMAINS_FILE")" -gt 0 ] 2>/dev/null && args="$args --hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
+  [ "$(list_count "$IPSET_EXCLUDE_FILE")" -gt 0 ] 2>/dev/null && args="$args --ipset-exclude=$IPSET_EXCLUDE_FILE"
+  printf '%s' "${args# }"
+}
+
+# $DESYNC_ARGS_* и пользовательские CUSTOM-аргументы содержат собственные --new,
+# то есть описывают НЕСКОЛЬКО профилей. Фильтры внутри профиля не наследуются,
+# поэтому --hostlist-exclude/--ipset-exclude, указанные один раз, защищали
+# только первый из них: домен из exclude_domains.list спокойно попадал под
+# десинхронизацию в следующем профиле. Здесь исключения дописываются в начало
+# каждого профиля многопрофильной строки, КРОМЕ первого: его голову вызывающий
+# формирует сам ($HOST_ARGS исключения уже содержит, дублировать их не нужно).
+inject_exclude_args() {
+  local excl="$1" out="" word
+  shift
+  [ "$#" -gt 0 ] || return 0
+  [ -n "$excl" ] || { printf '%s' "$*"; return 0; }
+  for word in "$@"; do
+    if [ "$word" = "--new" ]; then
+      out="$out --new $excl"
+    else
+      out="$out $word"
+    fi
+  done
+  printf '%s' "${out# }"
+}
+
+# Первый профиль многопрофильной строки. Нужен там, где строка обязана
+# описывать ровно ОДИН профиль (--ipset): внутренний --new иначе создал бы
+# ещё один профиль уже без фильтра по подсети, то есть catch-all.
+first_profile_args() {
+  local out="" word
+  for word in "$@"; do
+    [ "$word" = "--new" ] && break
+    out="$out $word"
+  done
+  printf '%s' "${out# }"
+}
+
+# Отдельный профиль для подсетей из ipset.list.
+#
+# Он выносится ЗА --new намеренно. И --hostlist, и --ipset — это include-фильтры
+# одного профиля, и внутри профиля они складываются по И: пакет должен подойти
+# сразу под оба. Нам же нужно ИЛИ — «либо домен из списка, либо адрес из списка».
+# Отдельный профиль даёт именно это, без догадок о внутренней логике фильтров.
+build_ipset_profile_args() {
+  local strategy="$1" excl ports
+  # Проверяем именно записи, а не размер: файл-шаблон состоит из комментариев,
+  # и -s считал бы его непустым, создавая профиль, который ничего не матчит.
+  [ "$(list_count "$IPSET_FILE")" -gt 0 ] 2>/dev/null || return 0
+  # Профиль подсетей обязан остаться одним профилем, иначе хвост после
+  # внутреннего --new превратится во второй catch-all уже без --ipset.
+  strategy=$(first_profile_args $strategy)
+  [ -n "$strategy" ] || return 0
+  excl=$(build_exclude_args)
+  # Свой --filter-tcp ставим, только если стратегия не принесла собственный:
+  # два --filter-tcp в одном профиле — это конфликт, и более узкий из них
+  # (например, --filter-tcp=443 у стратегии) молча отрезал бы порт 80.
+  case " $strategy " in *' --filter-tcp='*) ports="" ;; *) ports="--filter-tcp=$PORTS_TCP " ;; esac
+  # --new в КОНЦЕ: профиль подсетей идёт первым, и разделитель нужен после него.
+  printf '%s' "${ports}--ipset=$IPSET_FILE${excl:+ $excl} $strategy --new"
+}
+
+build_hostlist_args() {
+  local args
+  args=$(build_exclude_args)
+  case "$HOSTLIST_MODE" in
+    ALL)
+      log_i "Hostlist: режим ALL — обрабатываются все домены, кроме exclude_domains.list"
+      ;;
+    LIST)
+      if [ "$(list_count "$USER_DOMAINS_FILE")" -gt 0 ] 2>/dev/null; then
+        args="$args --hostlist=$USER_DOMAINS_FILE"
+        log_i "Hostlist: режим LIST — доменов в user.list=$(list_count "$USER_DOMAINS_FILE")"
+      else
+        health_warn "HOSTLIST_MODE=LIST, но user.list пуст: обход не применится ни к одному домену"
+      fi
+      ;;
+    *)
+      # AUTO — режим по умолчанию.
+      [ "$(list_count "$USER_DOMAINS_FILE")" -gt 0 ] 2>/dev/null && args="$args --hostlist=$USER_DOMAINS_FILE"
+      mkdir -p "${LEARNED_DOMAINS_FILE%/*}" 2>/dev/null
+      [ -f "$LEARNED_DOMAINS_FILE" ] || : > "$LEARNED_DOMAINS_FILE" 2>/dev/null
+      chmod 0600 "$LEARNED_DOMAINS_FILE" 2>/dev/null || true
+      args="$args --hostlist-auto=$LEARNED_DOMAINS_FILE"
+      args="$args --hostlist-auto-fail-threshold=${HOSTLIST_AUTO_FAIL_THRESHOLD:-3}"
+      args="$args --hostlist-auto-fail-time=${HOSTLIST_AUTO_FAIL_TIME:-60}"
+      log_i "Hostlist: режим AUTO — user.list=$(list_count "$USER_DOMAINS_FILE") выучено=$(list_count "$LEARNED_DOMAINS_FILE") порог=${HOSTLIST_AUTO_FAIL_THRESHOLD:-3}/${HOSTLIST_AUTO_FAIL_TIME:-60}с"
+      ;;
+  esac
+  printf '%s' "${args# }"
+}
+
+# Постоянная часть командной строки nfqws2 (без стратегии).
+nfqws_base_args() {
+  printf '%s' "--user=root --qnum=$QNUM --bind-fix4 --bind-fix6"
+  printf ' %s' "--lua-init=@$BIN_DIR/zapret-lib.lua" \
+               "--lua-init=@$BIN_DIR/zapret-antidpi.lua" \
+               "--lua-init=@$BIN_DIR/zapret-auto.lua"
+}
+
+# Список подсетей туннеля (lists/warp_bypass_nets.list) читает только
+# warp-tunnel.sh: он решает, что заворачивать в туннель. Здесь он больше не
+# нужен — трафик, ушедший в awg99, ловится правилом на интерфейс.
+
+# ------------------------------------------------------------------------------
+# Подпись применённой конфигурации.
+# inotify не видит атомарную замену файла (mv -f) при наблюдении за самим файлом,
+# а набор поддерживаемых масок различается между сборками busybox. Поэтому поверх
+# inotify работает дешёвая проверка контрольной суммы в health-watcher: раз в
+# HEALTH_WATCH_INTERVAL он сверяет подпись и запускает реконсиляцию, если конфиг
+# изменился в обход вотчера (правка через adb push, файловый менеджер и т.п.).
+# ------------------------------------------------------------------------------
+CONFIG_SIG_FILE="$RUN_DIR/config.sig"
 
 command_path() {
   command -v "$1" 2>/dev/null || {
@@ -287,6 +498,11 @@ delete_jump_bounded() {
 
 cleanup_iptables() {
   [ -n "$IPT" ] && {
+    # Переходные цепочки от прежних версий модуля, где правила строились по UID.
+    delete_jump_bounded 4 mangle OUTPUT ZAPRET2_MANGLE_NEW
+    ipt4_quiet -t mangle -F ZAPRET2_MANGLE_NEW; ipt4_quiet -t mangle -X ZAPRET2_MANGLE_NEW
+    delete_jump_bounded 4 filter OUTPUT ZAPRET2_FILTER_NEW
+    ipt4_quiet -t filter -F ZAPRET2_FILTER_NEW; ipt4_quiet -t filter -X ZAPRET2_FILTER_NEW
     delete_jump_bounded 4 mangle OUTPUT ZAPRET2_MANGLE
     delete_jump_bounded 4 mangle INPUT ZAPRET2_MANGLE_IN
     delete_jump_bounded 4 mangle FORWARD ZAPRET2_MANGLE_FORWARD
@@ -301,6 +517,10 @@ cleanup_iptables() {
     ipt4_quiet -t nat -F ZAPRET2_NAT_PREROUTING; ipt4_quiet -t nat -X ZAPRET2_NAT_PREROUTING
   }
   [ -n "$IP6T" ] && {
+    delete_jump_bounded 6 mangle OUTPUT ZAPRET2_MANGLE_NEW
+    ipt6_quiet -t mangle -F ZAPRET2_MANGLE_NEW; ipt6_quiet -t mangle -X ZAPRET2_MANGLE_NEW
+    delete_jump_bounded 6 filter OUTPUT ZAPRET2_FILTER_NEW
+    ipt6_quiet -t filter -F ZAPRET2_FILTER_NEW; ipt6_quiet -t filter -X ZAPRET2_FILTER_NEW
     delete_jump_bounded 6 mangle OUTPUT ZAPRET2_MANGLE
     delete_jump_bounded 6 mangle INPUT ZAPRET2_MANGLE_IN
     delete_jump_bounded 6 mangle FORWARD ZAPRET2_MANGLE_FORWARD
@@ -316,213 +536,18 @@ cleanup_iptables() {
   ip -6 route flush cache 2>/dev/null || true
 }
 
-normalize_pm_output() {
-  local raw="$1" user="$2" line body pkg uid
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in package:*) ;; *) continue ;; esac
-    body=${line#package:}
-    case "$body" in *" uid:"*) ;; *) continue ;; esac
-    uid=${body##* uid:}; uid=${uid%%[!0-9]*}
-    pkg=${body%% uid:*}; pkg=${pkg##*=}; pkg=${pkg%%[[:space:]]*}
-    case "$uid" in ''|*[!0-9]*) continue ;; esac
-    [ -n "$pkg" ] || continue
-    printf '%s %s %s\n' "$pkg" "$uid" "$user" >> "$PACKAGE_UID_CACHE.tmp"
-  done < "$raw"
-}
-
-list_users() {
-  local users
-  users=$(cmd user list 2>/dev/null | sed -n 's/.*UserInfo{\([0-9][0-9]*\):.*/\1/p' | sort -nu)
-  if [ -z "$users" ] && [ -d /data/system/users ]; then
-    users=$(find /data/system/users -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sed 's#.*/##' | grep -E '^[0-9]+$' | sort -nu)
-  fi
-  [ -n "$users" ] && printf '%s\n' "$users" || echo 0
-}
-
-append_packages_list_all_users() {
-  local dest="$1" user pkg uid usr
-  [ -r /data/system/packages.list ] || return 1
-  for user in $(list_users); do
-    if [ "$user" = "0" ]; then
-      awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list >> "$dest" 2>/dev/null
-      continue
-    fi
-    # packages.list — общесистемный файл; он не говорит, в каких профилях пакет
-    # реально установлен. Без этой проверки во вторичном/клон-профиле (ColorOS
-    # MultiApp = user 999, рабочий профиль = 10 и т.п.) генерировались правила
-    # для несуществующих UID вида 99910447. Каталог данных профиля есть только
-    # у реально установленных там пакетов и читается root на любой прошивке.
-    [ -d "/data/user/$user" ] || continue
-    awk -v u="$user" 'NF>=2 && $2 ~ /^[0-9]+$/ {appid=$2%100000; uid=u*100000+appid; print $1,uid,u}' /data/system/packages.list 2>/dev/null | \
-    while read -r pkg uid usr; do
-      [ -d "/data/user/$usr/$pkg" ] && printf '%s %s %s\n' "$pkg" "$uid" "$usr"
-    done >> "$dest" 2>/dev/null
-  done
-}
-
-build_package_cache_once() {
-  local tmp_raw="$RUN_DIR/pm_raw.$$" user pm_ok=0 cmd_ok=0 fs_ok=0 count=0 source=""
-  : > "$PACKAGE_UID_CACHE.tmp"
-  for user in $(list_users); do
-    : > "$tmp_raw"
-    if pm list packages -U --user "$user" > "$tmp_raw" 2>&1 && grep -q '^package:' "$tmp_raw"; then
-      normalize_pm_output "$tmp_raw" "$user"; pm_ok=1
-    fi
-    : > "$tmp_raw"
-    if cmd package list packages -U --user "$user" > "$tmp_raw" 2>&1 && grep -q '^package:' "$tmp_raw"; then
-      normalize_pm_output "$tmp_raw" "$user"; cmd_ok=1
-    fi
-  done
-  rm -f "$tmp_raw"
-
-  if [ -r /data/system/packages.list ]; then
-    append_packages_list_all_users "$PACKAGE_UID_CACHE.tmp" && fs_ok=1
-  fi
-
-  if [ -s "$PACKAGE_UID_CACHE.tmp" ]; then
-    sort -u "$PACKAGE_UID_CACHE.tmp" > "$PACKAGE_UID_CACHE"
-    rm -f "$PACKAGE_UID_CACHE.tmp"
-    count=$(wc -l < "$PACKAGE_UID_CACHE" 2>/dev/null | tr -d ' ')
-    [ "$pm_ok" = 1 ] && source="pm"
-    [ "$cmd_ok" = 1 ] && source="${source}${source:+}+cmd"
-    [ "$fs_ok" = 1 ] && source="${source}${source:+}+packages.list"
-    [ -n "$source" ] || source="unknown"
-    echo "$source" > "$PACKAGE_SOURCE_FILE"
-    log_i "Package UID cache: sources=$source, UID-записей=$count"
-    return 0
-  fi
-  rm -f "$PACKAGE_UID_CACHE.tmp"
-  return 1
-}
-
-seed_package_cache_fast() {
-  if [ -r /data/system/packages.list ]; then
-    : > "$PACKAGE_UID_CACHE.fast"
-    append_packages_list_all_users "$PACKAGE_UID_CACHE.fast"
-    sort -u "$PACKAGE_UID_CACHE.fast" > "$PACKAGE_UID_CACHE.fast.sorted" 2>/dev/null || true
-    if [ -s "$PACKAGE_UID_CACHE.fast.sorted" ]; then
-      mv -f "$PACKAGE_UID_CACHE.fast.sorted" "$PACKAGE_UID_CACHE"
-      rm -f "$PACKAGE_UID_CACHE.fast" 2>/dev/null
-      echo "packages.list-fast" > "$PACKAGE_SOURCE_FILE"
-      log_i "Package UID cache: быстрый boot source=packages.list, UID-записей=$(wc -l < "$PACKAGE_UID_CACHE" 2>/dev/null | tr -d ' ')"
-      return 0
-    fi
-    rm -f "$PACKAGE_UID_CACHE.fast" "$PACKAGE_UID_CACHE.fast.sorted" 2>/dev/null
-  fi
-  return 1
-}
-
-prepare_package_cache() {
-  local elapsed=0 wait_max="${PACKAGE_WAIT_SECONDS:-60}"
-  seed_package_cache_fast && return 0
-  case "$wait_max" in ''|*[!0-9]*) wait_max=60 ;; esac
-  while [ "$elapsed" -le "$wait_max" ]; do
-    build_package_cache_once && return 0
-    [ "$elapsed" -ge "$wait_max" ] && break
-    log_w "PackageManager/пакетная база ещ не дают UID; повтор через 2с ($elapsed/$wait_max)"
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
-  if [ -s "$PACKAGE_UID_CACHE" ]; then
-    echo "stale-cache" > "$PACKAGE_SOURCE_FILE"
-    health_warn "Источники UID недоступны; используется предыдущий UID-кэш"
-    return 0
-  fi
-  echo "none" > "$PACKAGE_SOURCE_FILE"
-  health_warn "Не удалось получить UID приложений ни одним способом"
-  return 1
-}
-
-resolve_pkg_direct() {
-  local pkg="$1" user raw="$RUN_DIR/pkg_direct.$$" before after
-  [ -n "$pkg" ] || return 1
-  before=$(wc -l < "$PACKAGE_UID_CACHE" 2>/dev/null | tr -d ' ')
-  case "$before" in ''|*[!0-9]*) before=0 ;; esac
-  : > "$PACKAGE_UID_CACHE.tmp"
-  for user in $(list_users); do
-    : > "$raw"
-    if pm list packages -U --user "$user" "$pkg" > "$raw" 2>/dev/null && grep -q '^package:' "$raw"; then
-      normalize_pm_output "$raw" "$user"
-    fi
-    : > "$raw"
-    if cmd package list packages -U --user "$user" "$pkg" > "$raw" 2>/dev/null && grep -q '^package:' "$raw"; then
-      normalize_pm_output "$raw" "$user"
-    fi
-  done
-  rm -f "$raw"
-  if [ -s "$PACKAGE_UID_CACHE.tmp" ]; then
-    cat "$PACKAGE_UID_CACHE.tmp" >> "$PACKAGE_UID_CACHE"
-    sort -u "$PACKAGE_UID_CACHE" > "$PACKAGE_UID_CACHE.sorted" 2>/dev/null && mv -f "$PACKAGE_UID_CACHE.sorted" "$PACKAGE_UID_CACHE"
-    rm -f "$PACKAGE_UID_CACHE.tmp" "$PACKAGE_UID_CACHE.sorted"
-  fi
-  after=$(wc -l < "$PACKAGE_UID_CACHE" 2>/dev/null | tr -d ' ')
-  case "$after" in ''|*[!0-9]*) after=0 ;; esac
-  [ "$after" -gt "$before" ]
-}
-
-pkg_is_excluded() {
-  local pkg="$1"
-  [ -f "$EXCLUDE_LIST" ] && grep -qxF "$pkg" "$EXCLUDE_LIST" 2>/dev/null
-}
-
-get_app_uids() {
-  local target_list="$1" honor_exclude="${2:-0}" app uid uids="" found missing=0 matched="$RUN_DIR/uids-matched.$$"
-  [ -f "$target_list" ] || { echo ""; return 0; }
-  if [ "${PACKAGE_DIRECT_LOOKUP:-0}" != "1" ]; then
-    awk -v list="$target_list" -v exclude="$EXCLUDE_LIST" -v honor="$honor_exclude" '
-      BEGIN {
-        if (honor == 1) while ((getline line < exclude) > 0) {
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-          if (line != "" && line !~ /^#/) excluded[line]=1
-        }
-        close(exclude)
-        while ((getline line < list) > 0) {
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-          if (line != "" && line !~ /^#/ && !(honor == 1 && line in excluded)) wanted[line]=1
-        }
-        close(list)
-      }
-      ($1 in wanted) && $2 ~ /^[0-9]+$/ {print $1, $2; seen[$1]=1}
-      END {for (pkg in wanted) if (!(pkg in seen)) missing++}
-    ' "$PACKAGE_UID_CACHE" > "$matched" 2>/dev/null
-    uids=$(awk '$2 ~ /^[0-9]+$/ {print $2}' "$matched" 2>/dev/null | sort -nu | tr '\n' ' ')
-    missing=$(awk -v list="$target_list" -v matched="$matched" -v exclude="$EXCLUDE_LIST" -v honor="$honor_exclude" '
-      BEGIN {
-        if (honor == 1) while ((getline line < exclude) > 0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if(line!="" && line !~ /^#/) x[line]=1}
-        while ((getline line < matched) > 0) {split(line,a," "); ok[a[1]]=1}
-        while ((getline line < list) > 0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if(line!="" && line !~ /^#/ && !(honor==1 && line in x) && !(line in ok)) n++}
-        print n+0
-      }
-    ' /dev/null 2>/dev/null)
-    rm -f "$matched" 2>/dev/null
-    [ "$missing" -gt 0 ] 2>/dev/null && log_i "UID resolver: отсутствующих записей в $(basename "$target_list")=$missing"
-    echo "$uids"
-    return 0
-  fi
-  while IFS= read -r app || [ -n "$app" ]; do
-    app=$(echo "$app" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    case "$app" in \#*|'') continue ;; esac
-    if [ "$honor_exclude" = "1" ] && pkg_is_excluded "$app"; then
-      log_d "EXCLUDE имеет приоритет: $app пропущен"
-      continue
-    fi
-    found=$(awk -v p="$app" '$1==p {print $2}' "$PACKAGE_UID_CACHE" 2>/dev/null | sort -nu)
-    if [ -z "$found" ] && [ "${PACKAGE_DIRECT_LOOKUP:-0}" = "1" ]; then
-      resolve_pkg_direct "$app" >/dev/null 2>&1 || true
-      found=$(awk -v p="$app" '$1==p {print $2}' "$PACKAGE_UID_CACHE" 2>/dev/null | sort -nu)
-      [ -n "$found" ] && log_i "UID resolver direct fallback: $app -> $(echo $found | tr '\n' ',')"
-    fi
-    if [ -n "$found" ]; then
-      for uid in $found; do uids="$uids $uid"; log_d "UID: $app -> $uid"; done
-    else
-      missing=$((missing + 1))
-      log_d "Пакет из списка не установлен/UID не найден: $app"
-    fi
-  done < "$target_list"
-  [ "$missing" -gt 0 ] && log_i "UID resolver: отсутствующих записей в $(basename "$target_list")=$missing"
-  echo "$uids"
-}
-
+# ------------------------------------------------------------------------------
+# Отбор трафика идёт по ДОМЕНАМ и подсетям, а не по приложениям.
+#
+# Здесь раньше жило разрешение UID: разбор /data/system/packages.list, опрос
+# PackageManager, обход профилей пользователя, кэш и его доверификация — свыше
+# двухсот строк. Всё это ушло вместе с режимами INCLUDE/EXCLUDE/GLOBAL.
+#
+# Причина проста: каталог приложений неизбежно отстаёт от того, что реально
+# установлено (на тестовом устройстве из 74 записей совпали 3), и правило по
+# UID не помогает, если пользователь поставил другой клиент того же сервиса.
+# Домен же заблокирован одинаково для любого приложения, которое к нему ходит.
+# ------------------------------------------------------------------------------
 probe_firewall() {
   local chain="ZAPRET2_PROBE_$$" out
   [ -n "$IPT" ] || { health_error "iptables не найден"; return 1; }
@@ -531,12 +556,8 @@ probe_firewall() {
     health_error "Не удалось создать тестовую IPv4 mangle-цепочку"
     return 1
   fi
-  if "$IPT" -w 5 -t mangle -A "$chain" -m owner --uid-owner 0 -j RETURN >/dev/null 2>&1; then
-    OWNER4=1
-  else
-    OWNER4=0; health_warn "IPv4 xt_owner/owner match недоступен"
-  fi
-  "$IPT" -w 5 -t mangle -F "$chain" >/dev/null 2>&1
+  # Проверка xt_owner убрана вместе с правилами по приложениям: отбор идёт по
+  # доменам и подсетям внутри nfqws2, netfilter владельца сокета не различает.
   if "$IPT" -w 5 -t mangle -A "$chain" -p tcp -m connbytes --connbytes 1:2 --connbytes-dir reply --connbytes-mode packets -j RETURN >/dev/null 2>&1; then
     CONNBYTES4=1
   else
@@ -562,12 +583,10 @@ probe_firewall() {
   "$IPT" -w 5 -t mangle -F "$chain" >/dev/null 2>&1
   "$IPT" -w 5 -t mangle -X "$chain" >/dev/null 2>&1
 
-  OWNER6=0; NFQ6=0; CONNBYTES6=0; CONNMARK6=0; QBYPASS6=""
+  NFQ6=0; CONNBYTES6=0; CONNMARK6=0; QBYPASS6=""
   if [ -n "$IP6T" ]; then
     log_i "Firewall IPv6: $IP6T; $($IP6T -V 2>&1)"
     if "$IP6T" -w 5 -t mangle -N "$chain" >/dev/null 2>&1; then
-      "$IP6T" -w 5 -t mangle -A "$chain" -m owner --uid-owner 0 -j RETURN >/dev/null 2>&1 && OWNER6=1
-      "$IP6T" -w 5 -t mangle -F "$chain" >/dev/null 2>&1
       if "$IP6T" -w 5 -t mangle -A "$chain" -p tcp -m connbytes --connbytes 1:2 --connbytes-dir reply --connbytes-mode packets -j RETURN >/dev/null 2>&1; then CONNBYTES6=1; fi
       "$IP6T" -w 5 -t mangle -F "$chain" >/dev/null 2>&1
       if "$IP6T" -w 5 -t mangle -A "$chain" -p tcp -j CONNMARK --set-xmark "$FLOW_CONNMARK" >/dev/null 2>&1; then
@@ -587,11 +606,10 @@ probe_firewall() {
       "$IP6T" -w 5 -t mangle -X "$chain" >/dev/null 2>&1
     fi
     [ "$NFQ6" = "1" ] || health_warn "IPv6 NFQUEUE недоступен — IPv6 обход будет пропущен"
-    [ "$OWNER6" = "1" ] || health_warn "IPv6 owner match недоступен — per-app IPv6 правила будут пропущены"
   else
     health_warn "ip6tables не найден — IPv6 правила недоступны"
   fi
-  log_i "Firewall capabilities: IPv4 NFQUEUE=$NFQ4 owner=$OWNER4 connbytes=$CONNBYTES4 connmark=$CONNMARK4 qBypass=${QBYPASS4:-no}; IPv6 NFQUEUE=$NFQ6 owner=$OWNER6 connbytes=$CONNBYTES6 connmark=$CONNMARK6 qBypass=${QBYPASS6:-no}"
+  log_i "Firewall capabilities: IPv4 NFQUEUE=$NFQ4  connbytes=$CONNBYTES4 connmark=$CONNMARK4 qBypass=${QBYPASS4:-no}; IPv6 NFQUEUE=$NFQ6  connbytes=$CONNBYTES6 connmark=$CONNMARK6 qBypass=${QBYPASS6:-no}"
   [ "$NFQ4" = "1" ]
 }
 
@@ -685,33 +703,48 @@ if [ -z "$SERVICE_ACTION" ]; then
   sleep 2
 fi
 
-if [ "$SERVICE_ACTION" != "reload" ] && [ "$SERVICE_ACTION" != "boot" ] && [ "$SERVICE_ACTION" != "reload-apps" ] && [ "$SERVICE_ACTION" != "reload-profile" ]; then
+if [ "$SERVICE_ACTION" != "reload" ] && [ "$SERVICE_ACTION" != "boot" ] && [ "$SERVICE_ACTION" != "reload-profile" ]; then
   write_start_state "WAITING" "Ожидание sys.boot_completed" 5
   until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 2; done
   SERVICE_ACTION="boot"; write_start_state "STARTING" "Android загружен · подготовка службы" 10; sleep 1
 fi
 [ -f "$CONF_FILE" ] && . "$CONF_FILE"
-: "${MODE:=INCLUDE}" "${STRATEGY_MODE:=SMART}" "${AUTO_APPS_ENABLED:=1}" "${FORCE_TCP:=1}" "${QUIC_MODE:=SELECTED}" "${PORTS_TCP:=80,443}" "${QNUM:=200}" "${ENABLE_HOTSPOT:=1}" "${DNS_FORWARD_HOTSPOT:=0}" "${DNS_FORWARD_SERVER:=1.1.1.1}"
-: "${FORCE_TCP_HOTSPOT:=1}" "${VPN_FALLBACK_MODE:=ANTIDPI}" "${NFQWS_DEBUG:=0}" "${LOG_VERBOSE:=1}" "${PACKAGE_WAIT_SECONDS:=60}" "${PACKAGE_DIRECT_LOOKUP:=0}"
+: "${STRATEGY_MODE:=SMART}" "${FORCE_TCP:=1}" "${QUIC_MODE:=ON}" "${PORTS_TCP:=80,443}" "${QNUM:=200}" "${ENABLE_HOTSPOT:=1}" "${DNS_FORWARD_HOTSPOT:=0}" "${DNS_FORWARD_SERVER:=1.1.1.1}"
+: "${FORCE_TCP_HOTSPOT:=1}" "${VPN_FALLBACK_MODE:=ANTIDPI}" "${NFQWS_DEBUG:=0}" "${LOG_VERBOSE:=1}"
+: "${ENABLE_WARP:=0}" "${ENABLE_HTTP_API:=0}" "${LOG_EXPORT_ON_BOOT:=0}" "${AUTO_SELECT_ENABLED:=1}" "${HEALTH_WATCH_INTERVAL:=60}"
+: "${HOSTLIST_MODE:=AUTO}" "${HOSTLIST_AUTO_FAIL_THRESHOLD:=3}" "${HOSTLIST_AUTO_FAIL_TIME:=60}"
+case "$HOSTLIST_MODE" in LIST|AUTO|ALL) ;; *) HOSTLIST_MODE=AUTO ;; esac
+# Прежние версии знали QUIC_MODE=SELECTED/GLOBAL: выборочность зависела от
+# списка приложений. Теперь имя хоста в UDP/443 недоступно, поэтому режимов
+# два. Любое старое значение, кроме OFF, означало «блокировать».
+case "$QUIC_MODE" in
+  OFF|off) QUIC_MODE=OFF ;;
+  *) QUIC_MODE=ON ;;
+esac
+case "$HOSTLIST_AUTO_FAIL_THRESHOLD" in ''|*[!0-9]*) HOSTLIST_AUTO_FAIL_THRESHOLD=3 ;; esac
+case "$HOSTLIST_AUTO_FAIL_TIME" in ''|*[!0-9]*) HOSTLIST_AUTO_FAIL_TIME=60 ;; esac
 : "${TETHER_IFACES:=ap+ swlan+ softap+ ap_br_wlan+ ap_br_softap+ rndis+ usb+ ncm+ bnep+ bt-pan+ pan+ tether+ wlan1 wlan2 wlan3 wlan4 wifi1 wifi2 wifi3 wifi4}" "${VPN_WATCH_INTERVAL:=2}" "${VPN_RETRY_INTERVAL:=1}" "${VPN_ROLE_RECHECK:=30}" "${VPN_EVENT_DEBOUNCE:=2}" "${VPN_NETLINK_MONITOR:=1}"
 : "${AUTO_REPLY_PACKETS:=12}" "${FLOW_CONNMARK:=0x10000000/0x10000000}"
-case "$AUTO_APPS_ENABLED" in 0|1) ;; *) AUTO_APPS_ENABLED=1 ;; esac
 case "$STRATEGY_MODE" in SIMPLE|AUTO|'') STRATEGY_MODE=SMART ;; SMART|CUSTOM) ;; *) STRATEGY_MODE=SMART ;; esac
 
-if [ "$SERVICE_ACTION" = "reload-apps" ]; then
-  boot_trace "fast app-only sync requested"
-  exec sh "$MODDIR/app-sync.sh" apply
-fi
-
+# mkdir атомарен, а запись pid внутрь — уже нет. Пустой pid означает одно из
+# двух: блокировка брошена, или её владелец только что сделал mkdir и ещё не
+# успел записать себя. Прежний код сносил её сразу — и оба процесса уходили
+# работать одновременно. Теперь пустой pid должен продержаться две итерации
+# (секунду): владелец пишет pid в следующей же команде, за микросекунды.
 acquire_lock() {
-  local lock_attempt=0 lock_pid lock_started now lock_age n
+  local lock_attempt=0 lock_pid lock_started now lock_age n empty_seen=0
   [ "$(cat "$SERVICE_LOCK/pid" 2>/dev/null)" = "$$" ] && return 0
   while ! mkdir "$SERVICE_LOCK" 2>/dev/null; do
     lock_pid=$(cat "$SERVICE_LOCK/pid" 2>/dev/null)
     [ "$lock_pid" = "$$" ] && return 0
     case "$lock_pid" in
-      ''|0|*[!0-9]*) rm -rf "$SERVICE_LOCK" 2>/dev/null ;;
+      ''|0|*[!0-9]*)
+        empty_seen=$((empty_seen + 1))
+        [ "$empty_seen" -ge 2 ] && { rm -rf "$SERVICE_LOCK" 2>/dev/null; empty_seen=0; }
+        ;;
       *)
+        empty_seen=0
         if ! kill -0 "$lock_pid" 2>/dev/null || ! pid_is_owned "$lock_pid" service; then
           rm -rf "$SERVICE_LOCK" 2>/dev/null
         else
@@ -747,50 +780,114 @@ acquire_lock() {
 release_service_lock() {
   [ "$(cat "$SERVICE_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$SERVICE_LOCK" 2>/dev/null
 }
+# ------------------------------------------------------------------------------
+# Подъём сторожевых процессов.
+#
+# Вынесено в функцию и вызывается из ловушки EXIT, а не только по успешному
+# пути. Раньше watcher-ы гасились в начале реконсиляции, а поднимались в самом
+# конце — и все аварийные выходы между этими точками (нет NFQUEUE, nfqws2 не
+# стартовал, критическая ошибка правил) оставляли модуль вообще без надзора:
+# ни самовосстановления, ни реакции на смену сети до перезагрузки телефона.
+# Функция идемпотентна: живой процесс не трогается.
+# ------------------------------------------------------------------------------
+ensure_watchers() {
+  local watch_pid vpn_wpid health_wpid
+  watch_pid=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
+  if [ -z "$watch_pid" ] || ! pid_is_owned "$watch_pid" config-watch; then
+    rm -f "$WATCHER_PID_FILE" 2>/dev/null
+    # Наблюдаем за КАТАЛОГАМИ, а не за отдельными файлами: все писатели модуля
+    # заменяют файлы атомарно (mv -f tmp file), после чего watch на файле
+    # остаётся висеть на удалённом иноде и больше никогда не срабатывает.
+    # Маска wnd = close_write | create | delete; события чтения не подписываем,
+    # иначе каждый разбор списка самим модулем поднимал бы реконсиляцию.
+    WATCH_TARGETS="$MODDIR:wnd $LISTS_DIR:wnd $STRATEGY_DIR:wnd"
+    if command -v inotifyd >/dev/null 2>&1; then
+      inotifyd "$MODDIR/on_change.sh" $WATCH_TARGETS 2>/dev/null &
+      echo $! > "$WATCHER_PID_FILE"
+    elif command -v busybox >/dev/null 2>&1; then
+      busybox inotifyd "$MODDIR/on_change.sh" $WATCH_TARGETS 2>/dev/null &
+      echo $! > "$WATCHER_PID_FILE"
+    else
+      health_warn "inotifyd не найден: изменения списков подхватит health-watcher (до ${HEALTH_WATCH_INTERVAL:-60} сек)"
+      write_health
+    fi
+  fi
+
+  # Сетевой watcher отвечает не только за раздачу: именно он будит автоподбор
+  # при смене Wi-Fi/соты и синхронизирует WARP.
+  if [ "${ENABLE_HOTSPOT:-0}" = "1" ] || [ "${AUTO_SELECT_ENABLED:-1}" = "1" ] || [ "${ENABLE_WARP:-0}" = "1" ]; then
+    vpn_wpid=$(cat "$VPN_WATCHER_PID_FILE" 2>/dev/null)
+    if [ -z "$vpn_wpid" ] || ! pid_is_owned "$vpn_wpid" vpn-watch; then
+      sh "$MODDIR/vpn-watch.sh" >/dev/null 2>&1 &
+      echo $! > "$VPN_WATCHER_PID_FILE"
+      log_i "Сетевой watcher запущен: netlink/inotify event-driven, hotspot=${ENABLE_HOTSPOT:-0} auto_select=${AUTO_SELECT_ENABLED:-1} warp=${ENABLE_WARP:-0}"
+    fi
+  else
+    stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
+  fi
+
+  health_wpid=$(cat "$HEALTH_WATCHER_PID_FILE" 2>/dev/null)
+  if [ -z "$health_wpid" ] || ! pid_is_owned "$health_wpid" health-watch; then
+    sh "$MODDIR/service-watch.sh" >/dev/null 2>&1 &
+    echo $! > "$HEALTH_WATCHER_PID_FILE"
+  fi
+}
+
 if ! acquire_lock; then
   boot_trace "service lock busy; another trigger owns startup"
   exit 0
 fi
 trap 'release_service_lock; exit 1' HUP INT TERM
-trap release_service_lock EXIT
+trap 'ensure_watchers; release_service_lock' EXIT
 
+# Горячая смена AUTO-профиля без пересборки firewall и UID-правил.
+# Возврат 1 означает "быстрый путь неприменим" — вызывающий делает полный reload.
 reload_active_profile() {
-  local profile profile_name profile_signature youtube_args special host debug_arg launcher pid tmp
+  local profile profile_name profile_signature special host excl general ipset_args debug_arg pid tmp runtime_engine
+  # Движок определяется probe_firewall, который быстрый путь намеренно пропускает,
+  # поэтому берём его из снимка, оставленного последним полным стартом.
+  runtime_engine=""
+  [ -f "$RUN_DIR/tether-runtime.conf" ] && runtime_engine=$(sed -n 's/^STRATEGY_EFFECTIVE="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$RUN_DIR/tether-runtime.conf" | head -n1)
+
+  # Per-network профили существуют только в SMART_ACTIVE. В CUSTOM у пользователя
+  # свои аргументы, в SMART_NATIVE стратегию выбирает circular внутри nfqws2 —
+  # подменять их результатом probe нельзя.
+  if [ "$STRATEGY_MODE" != "SMART" ]; then
+    log_w "Быстрая смена профиля отклонена: STRATEGY_MODE=$STRATEGY_MODE (профиль пользователя не подменяется)"
+    return 1
+  fi
+  if [ -n "$runtime_engine" ] && [ "$runtime_engine" != "SMART_ACTIVE" ]; then
+    log_w "Быстрая смена профиля отклонена: активен движок $runtime_engine, per-network профиль не применяется"
+    return 1
+  fi
+
   [ -f "$AUTO_RESULT_FILE" ] && . "$AUTO_RESULT_FILE"
   profile=${AUTO_PROFILE:-$AUTO_PROFILE_DEFAULT}
   strategy_read "$profile" || { log_w "Быстрый reload отклонён: невалидный AUTO_PROFILE=$profile"; return 1; }
   profile_name=$STRATEGY_FILE_NAME
   profile_signature=$(strategy_catalog_signature)
-  # Переход в DIRECT или из него меняет сам состав netfilter-правил, а быстрый
+  # Переход в DIRECT или из него меняет сам состав netfilter-правил (снимаются
+  # NFQUEUE-хуки), поэтому он требует полного reload, а не подмены процесса.
   [ "$STRATEGY_FILE_MODE" = DIRECT ] && return 1
   [ -f "$RUN_DIR/direct.flag" ] && return 1
-  youtube_args=$STRATEGY_FILE_ARGS
-  host=""
-  [ -s "$EXCLUDE_DOMAINS_FILE" ] && host="--hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
-  special="$youtube_args --new"
+
+  # Тот же состав аргументов, что и в полном старте ветки SMART_ACTIVE,
+  # включая выбор доменов (--hostlist / --hostlist-auto), исключения в каждом
+  # профиле и профиль подсетей: без последнего быстрая смена профиля тихо
+  # теряла ipset.list до следующего полного reload.
+  host=$(build_hostlist_args)
+  excl=$(build_exclude_args)
+  special="$host $STRATEGY_FILE_ARGS --new"
+  general="$host $(inject_exclude_args "$excl" $DESYNC_ARGS_SMART_COMPAT_GENERAL)"
+  ipset_args=$(build_ipset_profile_args "$STRATEGY_FILE_ARGS")
   debug_arg=""; [ "$NFQWS_DEBUG" = 1 ] && debug_arg="--debug=@$NFQWS_LOG"
   [ -x "$BIN_DIR/nfqws2" ] || return 1
   stop_pid "$NFQWS_PID_FILE" "nfqws2 для смены AUTO-профиля" nfqws2
-  cd "$BIN_DIR" || return 1
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $host $special $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
-  elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
-    busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $host $special $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
-  else
-    nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $debug_arg \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $host $special $DESYNC_ARGS_SMART_COMPAT_GENERAL >> "$LOG_FILE" 2>&1 &
-  fi
-  launcher=$!; sleep 1; pid=$launcher
-  pid_is_owned "$pid" nfqws2 || pid=$(find_owned_nfqws_pid)
-  if ! pid_is_owned "$pid" nfqws2; then
-    log_e "Быстрая смена AUTO-профиля не запустила nfqws2"
+  if ! spawn_nfqws $(nfqws_base_args) $debug_arg $ipset_args $special $general; then
+    log_e "Быстрая смена AUTO-профиля не запустила nfqws2 (метод ${NFQWS_SPAWN_METHOD:-none})"
     return 1
   fi
+  pid="$NFQWS_SPAWNED_PID"
   echo "$pid" > "$NFQWS_PID_FILE"; chmod 0600 "$NFQWS_PID_FILE" 2>/dev/null || true
   if [ -f "$HEALTH_FILE" ]; then
     tmp="$HEALTH_FILE.tmp.$$"
@@ -823,17 +920,13 @@ boot_trace "service lock acquired"
 log_environment "$SERVICE_ACTION"
 log_network_modules
 write_start_state "STARTING" "$([ "$SERVICE_ACTION" = "reload" ] && echo "Перезапуск службы" || echo "Подготовка после загрузки Android")" 12
-write_start_state "STARTING" "Чтение списка приложений и UID" 22
-package_cache_ok=1
-prepare_package_cache || package_cache_ok=0
-if [ "$package_cache_ok" != "1" ] && [ "${MODE:-INCLUDE}" != "GLOBAL" ]; then
-  health_error "Для MODE=${MODE:-INCLUDE} нет рабочего UID-кэша; per-app правила нельзя применить безопасно"
-fi
-
+write_start_state "STARTING" "Чтение списков доменов и подсетей" 22
 stop_pid "$NFQWS_PID_FILE" "nfqws2" nfqws2
-stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
+stop_pid "$VPN_WATCHER_PID_FILE" "сетевой watcher" vpn-watch
 stop_pid "$HEALTH_WATCHER_PID_FILE" "health watcher" health-watch
-stop_pid "$RUN_DIR/httpd.pid" "httpd" httpd
+# httpd намеренно НЕ трогаем: он не участвует в перестройке правил, а его
+# перезапуск здесь убивал сервер, обслуживающий запрос, который этот reload и
+# запросил (см. ensure_httpd в конце файла).
 stop_owned_nfqws
 [ -x "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" stop >/dev/null 2>&1 || true
 write_start_state "STARTING" "Очистка предыдущих netfilter-правил" 30
@@ -859,7 +952,6 @@ else
   if [ "$CONNTRACK_ACCT" = "1" ] && [ "$CONNBYTES4" = "1" ] && [ "$CONNMARK4" = "1" ]; then
     STRATEGY_EFFECTIVE="SMART_NATIVE"
     DESYNC_ARGS="$DESYNC_ARGS_SMART_NATIVE_GENERAL"
-    SMART_YOUTUBE_ARGS="$DESYNC_ARGS_SMART_NATIVE_YOUTUBE"
     COMPAT_STATUS="NATIVE"
     COMPAT_NOTES="SMART_NATIVE: circular получает ограниченный reply-feed"
   else
@@ -883,7 +975,6 @@ else
     if [ "$AUTO_PROFILE_NAME" = "INVALID" ]; then
       AUTO_PROFILE="${AUTO_PROFILE_DEFAULT:-strategy_2}"
       SMART_AUTO_ARGS=""
-      SMART_YOUTUBE_ARGS="$DESYNC_ARGS_SMART_COMPAT_YOUTUBE"
       health_warn "Каталог стратегий пуст или невалиден; используется встроенный SMART_COMPAT профиль"
     else
       AUTO_PROFILE_NAME=$STRATEGY_FILE_NAME
@@ -894,7 +985,6 @@ else
         # Стратегия, прошедшая probe, обслуживает ВЕСЬ TLS/443 трафик, а не только
         # подхватывает то, что не попало под первый фильтр (в первую очередь HTTP/80).
         SMART_AUTO_ARGS=$STRATEGY_FILE_ARGS
-        SMART_YOUTUBE_ARGS=""
       fi
     fi
     missing=""
@@ -918,12 +1008,10 @@ if [ "$SMART_DIRECT" = "1" ]; then
 fi
 log_i "SMART capabilities: acct=$CONNTRACK_ACCT connmark=$CONNMARK4 connbytes=$CONNBYTES4; requested=$STRATEGY_MODE engine=$STRATEGY_EFFECTIVE compat=$COMPAT_STATUS"
 log_i "SMART active selection: profile=${AUTO_PROFILE:-native} status=${AUTO_STATUS:-native} network=${AUTO_NETWORK_KEY:-none} iface=${AUTO_NETWORK_IFACE:-none}"
-log_i "Config: MODE=$MODE auto_apps=$AUTO_APPS_ENABLED strategy=$STRATEGY_MODE engine=$STRATEGY_EFFECTIVE QUIC_MODE=$QUIC_MODE FORCE_TCP=$FORCE_TCP HOTSPOT=$ENABLE_HOTSPOT VPN_HOTSPOT=${ENABLE_VPN_HOTSPOT:-0} VPN_FALLBACK=${VPN_FALLBACK_MODE:-ANTIDPI} QNUM=$QNUM TCP_PORTS=$PORTS_TCP NFQWS_DEBUG=$NFQWS_DEBUG"
+log_i "Config: hostlist=$HOSTLIST_MODE strategy=$STRATEGY_MODE engine=$STRATEGY_EFFECTIVE QUIC_MODE=$QUIC_MODE FORCE_TCP=$FORCE_TCP HOTSPOT=$ENABLE_HOTSPOT VPN_HOTSPOT=${ENABLE_VPN_HOTSPOT:-0} VPN_FALLBACK=${VPN_FALLBACK_MODE:-ANTIDPI} QNUM=$QNUM TCP_PORTS=$PORTS_TCP NFQWS_DEBUG=$NFQWS_DEBUG"
 cat > "$RUN_DIR/tether-runtime.conf.tmp.$$" <<EOF
 STRATEGY_EFFECTIVE="$STRATEGY_EFFECTIVE"
 NFQ6="$NFQ6"
-OWNER4="$OWNER4"
-OWNER6="$OWNER6"
 CONNBYTES4="$CONNBYTES4"
 CONNBYTES6="$CONNBYTES6"
 CONNMARK4="$CONNMARK4"
@@ -935,39 +1023,12 @@ mv -f "$RUN_DIR/tether-runtime.conf.tmp.$$" "$RUN_DIR/tether-runtime.conf" 2>/de
 chmod 0600 "$RUN_DIR/tether-runtime.conf" 2>/dev/null || true
 
 write_start_state "STARTING" "Подготовка правил приложений" 50
-MANUAL_APP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$APPS_LIST" 1)" "$(get_app_uids "$APPS_USER_LIST" 1)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-AUTO_APP_UIDS=""
-[ "$AUTO_APPS_ENABLED" = "1" ] && AUTO_APP_UIDS=$(get_app_uids "$AUTO_APPS_LIST" 1)
-APP_UIDS=$(printf '%s\n%s\n' "$AUTO_APP_UIDS" "$MANUAL_APP_UIDS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-EXCLUDE_UIDS=$(get_app_uids "$EXCLUDE_LIST" 0)
-WARP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_app_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-
-# Автоматическое правило: всё, что идёт в туннель WARP, полностью исключается из AntiDPI (nfqws2)
-if [ "${ENABLE_WARP:-0}" = "1" ] && [ -n "$WARP_UIDS" ]; then
-  filtered_app_uids=""
-  for uid in $APP_UIDS; do
-    case " $WARP_UIDS " in
-      *" $uid "*) continue ;;
-      *) filtered_app_uids="$filtered_app_uids $uid" ;;
-    esac
-  done
-  APP_UIDS=$(printf '%s\n' "$filtered_app_uids" | tr -s ' ' | sed 's/^ //;s/ $//')
-fi
-
-AUTO_APP_UID_COUNT=$(echo "$AUTO_APP_UIDS" | wc -w | tr -d ' ')
-MANUAL_APP_UID_COUNT=$(echo "$MANUAL_APP_UIDS" | wc -w | tr -d ' ')
-APP_UID_COUNT=$(echo "$APP_UIDS" | wc -w | tr -d ' ')
-EXCLUDE_UID_COUNT=$(echo "$EXCLUDE_UIDS" | wc -w | tr -d ' ')
-WARP_UID_COUNT=$(echo "$WARP_UIDS" | wc -w | tr -d ' ')
-log_i "Resolved UIDs: SMART effective=$APP_UID_COUNT auto=$AUTO_APP_UID_COUNT manual=$MANUAL_APP_UID_COUNT exclude=$EXCLUDE_UID_COUNT warp=$WARP_UID_COUNT source=$(cat "$PACKAGE_SOURCE_FILE" 2>/dev/null)"
-[ "$MODE" = "INCLUDE" ] && [ "$APP_UID_COUNT" -eq 0 ] 2>/dev/null && health_warn "INCLUDE активен, но ни один UID из AUTO/ручных приложений не разрешён"
-
+write_start_state "STARTING" "Установка AntiDPI/NFQUEUE правил" 50
 DIRECT_MODE_FILE="$RUN_DIR/direct.flag"
 rm -f "$DIRECT_MODE_FILE" 2>/dev/null
 if [ "$SMART_DIRECT" = "1" ]; then
-  # Ни одной записи в netfilter и ни одного userspace-процесса nfqws: на этой сети
-  # AntiDPI обход не нужен. Флаг direct.flag говорит health-watcher, что отсутствие
-  # nfqws2 — это штатное состояние, а не сбой.
+  # Ни одной записи в netfilter и ни одного процесса nfqws2: на этой сети обход
+  # не нужен. Флаг говорит health-watcher, что отсутствие nfqws2 — норма.
   : > "$DIRECT_MODE_FILE" 2>/dev/null
   chmod 0600 "$DIRECT_MODE_FILE" 2>/dev/null || true
   write_start_state "STARTING" "DIRECT: обход на этой сети не требуется" 90
@@ -979,68 +1040,29 @@ else
   [ "$NFQ6" = "1" ] && ipt6 -t mangle -N ZAPRET2_MANGLE || true
   [ -n "$IP6T" ] && ipt6 -t filter -N ZAPRET2_FILTER || true
 
-  # Пропуск трафика WARP туннеля, Telegram подсетей и WARP UID из AntiDPI/QUIC-блокировки
+  # Трафик, уже ушедший в интерфейс туннеля, повторно не обрабатываем.
+  # Цепочка mangle OUTPUT выполняется после выбора маршрута, поэтому исходящий
+  # интерфейс здесь уже известен.
   ipt4 -t mangle -A ZAPRET2_MANGLE -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
   ipt4 -t filter -A ZAPRET2_FILTER -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
   [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
   [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
 
-  for subnet in 91.108.0.0/16 149.154.160.0/20 185.76.151.0/24 95.161.64.0/20; do
-    ipt4 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
-    ipt4 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
-  done
-  for subnet in 2001:b28:f23d::/48 2001:67c:4e8::/48; do
-    [ -n "$IP6T" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -d "$subnet" -j RETURN 2>/dev/null || true
-    [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -d "$subnet" -j RETURN 2>/dev/null || true
-  done
-
-  WARP_UIDS=$(printf '%s\n%s\n' "$(get_app_uids "$LISTS_DIR/warp_apps.list" 0)" "$(get_app_uids "$LISTS_DIR/warp_apps.user.list" 0)" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-  for uid in $WARP_UIDS; do
-    case "$uid" in ''|0|*[!0-9]*) continue ;; esac
-    ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-    ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-    [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-    [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN 2>/dev/null || true
-  done
-
-  case "$MODE" in
-    GLOBAL)
-      if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 GLOBAL CONNMARK rule failed"; fi
-      ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 GLOBAL NFQUEUE"
-      if [ "$NFQ6" = "1" ]; then
-        [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-        ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
-      fi ;;
-    EXCLUDE)
-      if [ "$OWNER4" = "1" ]; then
-        for uid in $EXCLUDE_UIDS; do ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || health_error "Не удалось исключить IPv4 UID=$uid"; done
-        if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 EXCLUDE CONNMARK rule failed"; fi
-        ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 EXCLUDE NFQUEUE"
-      else
-        health_error "EXCLUDE не применён: owner match недоступен, иначе исключённые приложения попали бы в NFQUEUE"
-      fi
-      if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
-        for uid in $EXCLUDE_UIDS; do ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -j RETURN || true; done
-        [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-        ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
-      fi ;;
-    INCLUDE)
-      if [ "$OWNER4" = "1" ]; then
-        for uid in $APP_UIDS; do
-          if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 INCLUDE CONNMARK UID=$uid failed"; fi
-          ipt4 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 INCLUDE UID=$uid"
-        done
-      else
-        health_error "INCLUDE требует owner match, но он недоступен"
-      fi
-      if [ "$OWNER6" = "1" ] && [ "$NFQ6" = "1" ]; then
-        for uid in $APP_UIDS; do
-          [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-          ipt6 -t mangle -A ZAPRET2_MANGLE -m owner --uid-owner "$uid" -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
-        done
-      fi ;;
-    *) health_error "Недопустимый MODE=$MODE" ;;
-  esac
+  # ---------------------------------------------------------------------------
+  # Одно правило на весь исходящий трафик указанных портов.
+  #
+  # Отбор «что именно трогать» целиком внутри nfqws2: домены через --hostlist,
+  # подсети через --ipset. Netfilter больше не различает приложения, поэтому
+  # здесь нет ни owner match, ни режимов INCLUDE/EXCLUDE/GLOBAL.
+  # ---------------------------------------------------------------------------
+  if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
+    ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 CONNMARK rule failed"
+  fi
+  ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 NFQUEUE"
+  if [ "$NFQ6" = "1" ]; then
+    [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
+    ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+  fi
   ipt4 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || health_error "Не удалось подключить ZAPRET2_MANGLE к OUTPUT"
   [ "$NFQ6" = "1" ] && ipt6 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || true
 
@@ -1056,29 +1078,17 @@ else
     log_i "SMART_NATIVE conntrack feed: server replies 1..$AUTO_REPLY_PACKETS queued on INPUT/FORWARD"
   fi
 
-  if [ "$FORCE_TCP" = "1" ]; then
-    case "$QUIC_MODE:$MODE" in
-      GLOBAL:*|SELECTED:GLOBAL)
-        ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "Не удалось блокировать QUIC IPv4"
-        [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true ;;
-      SELECTED:INCLUDE)
-        if [ "$OWNER4" = "1" ]; then
-          for uid in $APP_UIDS; do ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT || health_error "QUIC IPv4 UID=$uid rule failed"; done
-        else health_error "INCLUDE QUIC требует owner match"; fi
-        if [ "$OWNER6" = "1" ]; then for uid in $APP_UIDS; do ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -p udp --dport 443 -j REJECT || true; done; fi ;;
-      SELECTED:EXCLUDE)
-        if [ "$OWNER4" = "1" ]; then
-          for uid in $EXCLUDE_UIDS; do ipt4 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN || health_error "QUIC exclude IPv4 UID=$uid failed"; done
-          ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "EXCLUDE QUIC global fallback failed"
-        else health_error "EXCLUDE QUIC требует owner match"; fi
-        if [ "$OWNER6" = "1" ]; then
-          for uid in $EXCLUDE_UIDS; do ipt6 -t filter -A ZAPRET2_FILTER -m owner --uid-owner "$uid" -j RETURN || true; done
-          ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true
-        fi ;;
-      OFF:*) : ;;
-    esac
+  # Блокировка QUIC. Приложения больше не различаются, поэтому режим сводится к
+  # «блокировать или нет»: QUIC_MODE=OFF выключает, любое другое значение
+  # блокирует UDP/443 целиком. Домены и подсети, которые трогать нельзя, и так
+  # выведены из-под обхода на уровне nfqws2 (--hostlist-exclude / --ipset-exclude),
+  # но QUIC они не спасают: имя хоста в UDP/443 модулю недоступно.
+  if [ "$FORCE_TCP" = "1" ] && [ "${QUIC_MODE:-ON}" != "OFF" ]; then
+    ipt4 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || health_error "Не удалось блокировать QUIC IPv4"
+    [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -p udp --dport 443 -j REJECT || true
     ipt4 -t filter -A OUTPUT -j ZAPRET2_FILTER || health_error "Не удалось подключить ZAPRET2_FILTER к OUTPUT"
     [ -n "$IP6T" ] && ipt6 -t filter -A OUTPUT -j ZAPRET2_FILTER || true
+    log_i "QUIC: UDP/443 блокируется для всей системы (QUIC_MODE=${QUIC_MODE:-ON})"
   fi
 fi
 
@@ -1130,18 +1140,31 @@ if [ "$ENABLE_HOTSPOT" = "1" ]; then
 fi
 
 if [ "$SMART_DIRECT" != "1" ]; then
-  HOST_ARGS=""
-  [ -s "$EXCLUDE_DOMAINS_FILE" ] && HOST_ARGS="$HOST_ARGS --hostlist-exclude=$EXCLUDE_DOMAINS_FILE"
+  EXCLUDE_ARGS=$(build_exclude_args)
+  HOST_ARGS=$(build_hostlist_args)
   SPECIAL_ARGS=""
+  # Общий профиль получает исключения в каждом своём подпрофиле: без этого
+  # exclude_domains.list действовал только на первый из них.
+  GENERAL_ARGS=$(inject_exclude_args "$EXCLUDE_ARGS" $DESYNC_ARGS)
+  # HOSTLIST_MODE навешивается на ПЕРВЫЙ профиль общей стратегии — тот, что
+  # работает с ClientHello и http-запросом, где имя хоста известно. Без этого
+  # режимы LIST и AUTO были неотличимы от ALL: общий профиль ловил всё подряд,
+  # и выбор доменов не значил ничего. Хвостовой подпрофиль общей стратегии
+  # (--payload=all,empty, synack/ipfrag) остаётся без --hostlist сознательно:
+  # он действует на этапе рукопожатия, когда имени хоста ещё не существует,
+  # и доменные ворота просто выключили бы его.
+  GENERAL_ARGS="$HOST_ARGS $GENERAL_ARGS"
   if [ "$STRATEGY_MODE" = "SMART" ] && [ -n "${SMART_AUTO_ARGS:-}" ]; then
     SPECIAL_ARGS="$HOST_ARGS $SMART_AUTO_ARGS --new"
-    log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён ко всему TLS/443 (не только YouTube); fallback profile=SMART_COMPAT_GENERAL"
-  elif [ "$STRATEGY_MODE" = "SMART" ] && [ -s "$SMART_YOUTUBE_FILE" ] && [ -n "$SMART_YOUTUBE_ARGS" ]; then
-    SPECIAL_ARGS="--hostlist=$SMART_YOUTUBE_FILE $HOST_ARGS $SMART_YOUTUBE_ARGS --new"
-    log_i "SMART profile: YouTube=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0) domains engine=$STRATEGY_EFFECTIVE; fallback profile=GENERAL"
+    log_i "SMART profile: AUTO=$AUTO_PROFILE/$AUTO_PROFILE_NAME применён к доменам из списков; fallback profile=SMART_COMPAT_GENERAL (hostlist=$HOSTLIST_MODE)"
   else
-    log_i "SMART service profile unavailable or CUSTOM selected; using general profile only"
+    log_i "Per-network профиль недоступен ($STRATEGY_EFFECTIVE): общая стратегия работает по доменам (hostlist=$HOSTLIST_MODE)"
   fi
+  # Профиль по подсетям из ipset.list. Идёт ПЕРВЫМ, как в nfqws-keenetic:
+  # адрес назначения известен раньше имени хоста из ClientHello, поэтому
+  # совпадение по подсети должно решаться до доменных профилей.
+  IPSET_ARGS=$(build_ipset_profile_args "${SMART_AUTO_ARGS:-$DESYNC_ARGS}")
+  [ -n "$IPSET_ARGS" ] && log_i "IPSET profile: подсетей=$(list_count "$IPSET_FILE") обрабатываются отдельным профилем"
   NFQWS_DEBUG_ARG=""
   [ "$NFQWS_DEBUG" = "1" ] && NFQWS_DEBUG_ARG="--debug=@$NFQWS_LOG"
 
@@ -1162,46 +1185,21 @@ if [ "$SMART_DIRECT" != "1" ]; then
     health_error "nfqws2 отсутствует/не исполняемый: $BIN_DIR/nfqws2"; write_health; write_start_state "ERROR" "nfqws2 отсутствует или не исполняемый" 100
     cleanup_iptables; "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true; exit 1
   fi
-  log_i "nfqws2 command: qnum=$QNUM debug=$NFQWS_DEBUG smart_engine=$STRATEGY_EFFECTIVE youtube_profile=$([ -n "$SPECIAL_ARGS" ] && echo yes || echo no) exclude-hostlist=$([ -s "$EXCLUDE_DOMAINS_FILE" ] && echo yes || echo no)"
-  nfqws_launcher_pid=""
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-    nfqws_launcher_pid=$!
-    boot_trace "nfqws2 launch method=setsid launcher_pid=$nfqws_launcher_pid"
-  elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
-    busybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-    nfqws_launcher_pid=$!
-    boot_trace "nfqws2 launch method=busybox-setsid launcher_pid=$nfqws_launcher_pid"
-  elif command -v toybox >/dev/null 2>&1 && toybox setsid true >/dev/null 2>&1; then
-    toybox setsid "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-    nfqws_launcher_pid=$!
-    boot_trace "nfqws2 launch method=toybox-setsid launcher_pid=$nfqws_launcher_pid"
-  else
-    health_warn "setsid недоступен: nfqws2 запущен через nohup compatibility fallback"
-    nohup "$BIN_DIR/nfqws2" --user=root --qnum="$QNUM" --bind-fix4 --bind-fix6 $NFQWS_DEBUG_ARG \
-      --lua-init="@$BIN_DIR/zapret-lib.lua" --lua-init="@$BIN_DIR/zapret-antidpi.lua" --lua-init="@$BIN_DIR/zapret-auto.lua" \
-      $SPECIAL_ARGS $HOST_ARGS $DESYNC_ARGS >> "$LOG_FILE" 2>&1 &
-    nfqws_launcher_pid=$!
-    boot_trace "nfqws2 launch method=nohup-fallback launcher_pid=$nfqws_launcher_pid"
-  fi
-  sleep 1
-  nfqws_pid="$nfqws_launcher_pid"
-  if ! pid_is_owned "$nfqws_pid" nfqws2; then
-    nfqws_pid=$(find_owned_nfqws_pid)
-  fi
+  log_i "nfqws2 command: qnum=$QNUM debug=$NFQWS_DEBUG smart_engine=$STRATEGY_EFFECTIVE service_profile=$([ -n "$SPECIAL_ARGS" ] && echo yes || echo no) hostlist=$HOSTLIST_MODE user-domains=$(list_count "$USER_DOMAINS_FILE") exclude-hostlist=$(list_count "$EXCLUDE_DOMAINS_FILE") ipset=$(list_count "$IPSET_FILE")"
+  # $HOST_ARGS уже входит либо в $SPECIAL_ARGS, либо в $GENERAL_ARGS — второй
+  # раз не подставляем, иначе --hostlist-exclude дублируется в командной строке.
+  spawn_nfqws $(nfqws_base_args) $NFQWS_DEBUG_ARG $IPSET_ARGS $SPECIAL_ARGS $GENERAL_ARGS
+  nfqws_spawn_rc=$?
+  [ "$NFQWS_SPAWN_METHOD" = "nohup-fallback" ] && health_warn "setsid недоступен: nfqws2 запущен через nohup compatibility fallback"
+  boot_trace "nfqws2 launch method=${NFQWS_SPAWN_METHOD:-none} pid=${NFQWS_SPAWNED_PID:-none}"
+  nfqws_pid="$NFQWS_SPAWNED_PID"
   write_start_state "STARTING" "Проверка процесса и NFQUEUE" 94
-  if ! pid_is_owned "$nfqws_pid" nfqws2; then
+  if [ "$nfqws_spawn_rc" -ne 0 ] || ! pid_is_owned "$nfqws_pid" nfqws2; then
     health_error "nfqws2 не запустился или завершился сразу; см. внутренний лог $LOG_FILE"
     rm -f "$NFQWS_PID_FILE"
     write_health
     write_start_state "ERROR" "nfqws2 не запустился или завершился сразу" 100
-    boot_trace "nfqws2 launch failed launcher_pid=${nfqws_launcher_pid:-none}"
+    boot_trace "nfqws2 launch failed method=${NFQWS_SPAWN_METHOD:-none}"
     cleanup_iptables
     "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
     exit 1
@@ -1225,32 +1223,10 @@ if [ "$SMART_DIRECT" != "1" ]; then
 fi
 write_health
 
-watch_pid=$(cat "$WATCHER_PID_FILE" 2>/dev/null)
-if [ -z "$watch_pid" ] || ! pid_is_owned "$watch_pid" config-watch; then
-  rm -f "$WATCHER_PID_FILE" 2>/dev/null
-  WATCH_TARGETS="$CONF_FILE:w $APPS_LIST:w $AUTO_APPS_LIST:w $LISTS_DIR/warp_apps.list:w $LISTS_DIR/warp_apps.user.list:w $LISTS_DIR/dns.list:w $LISTS_DIR/dns.user.list:w $EXCLUDE_LIST:w $SMART_YOUTUBE_FILE:w $EXCLUDE_DOMAINS_FILE:w"
-  if command -v inotifyd >/dev/null 2>&1; then
-    inotifyd "$MODDIR/on_change.sh" $WATCH_TARGETS 2>/dev/null &
-    echo $! > "$WATCHER_PID_FILE"
-  elif command -v busybox >/dev/null 2>&1; then
-    busybox inotifyd "$MODDIR/on_change.sh" $WATCH_TARGETS 2>/dev/null &
-    echo $! > "$WATCHER_PID_FILE"
-  else
-    health_warn "inotifyd не найден: автоматическая перезагрузка списков недоступна"
-    write_health
-  fi
-fi
-
-if [ "${ENABLE_HOTSPOT:-0}" = "1" ]; then
-  vpn_wpid=$(cat "$VPN_WATCHER_PID_FILE" 2>/dev/null)
-  if [ -z "$vpn_wpid" ] || ! pid_is_owned "$vpn_wpid" vpn-watch; then
-    sh "$MODDIR/vpn-watch.sh" >/dev/null 2>&1 &
-    echo $! > "$VPN_WATCHER_PID_FILE"
-    log_i "VPN watcher запущен: netlink/inotify event-driven + control loop ${VPN_WATCH_INTERVAL:-2} сек + safety role recheck ${VPN_ROLE_RECHECK:-30} сек"
-  fi
-else
-  stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
-fi
+# Сторожа поднимает ensure_watchers из ловушки EXIT — в том числе на аварийных
+# путях выше. Здесь вызываем явно, чтобы на успешном старте они были живы ещё
+# до записи READY, а не в момент завершения процесса.
+ensure_watchers
 if [ "$HEALTH" = "ERROR" ]; then
   write_health
   write_start_state "ERROR" "Критическая ошибка правил; см. диагностику" 100
@@ -1260,65 +1236,97 @@ if [ "$HEALTH" = "ERROR" ]; then
   "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
   exit 1
 fi
-health_wpid=$(cat "$HEALTH_WATCHER_PID_FILE" 2>/dev/null)
-if [ -z "$health_wpid" ] || ! pid_is_owned "$health_wpid" health-watch; then
-  sh "$MODDIR/service-watch.sh" >/dev/null 2>&1 &
-  echo $! > "$HEALTH_WATCHER_PID_FILE"
-fi
+write_config_signature
 write_start_state "READY" "Служба работает" 100
 boot_trace "service READY nfqws2_pid=$nfqws_pid health=$HEALTH"
 log_i "Служба запущена: nfqws2 PID=$nfqws_pid health=$HEALTH"
 
 # Запуск AmneziaWG v3 Cloudflare WARP туннеля для списка приложений
-if [ "${ENABLE_WARP:-1}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
   log_i "Запуск точечного туннеля AmneziaWG v3 (WARP)..."
   sh "$MODDIR/warp-tunnel.sh" start >> "$LOG_FILE" 2>&1 &
 fi
 
-# Запуск встроенного веб-сервера для WebUI (Magisk / Webroot Manager / Браузер)
-if [ -d "$MODDIR/webroot" ]; then
-  stop_pid "$RUN_DIR/httpd.pid" "webui-httpd" "httpd"
+# ------------------------------------------------------------------------------
+# HTTP-мост WebUI.
+#
+# KernelSU / APatch / MMRL вызывают webroot/api.sh напрямую через argv — им
+# TCP-сокет не нужен вообще. HTTP-сервер нужен только для Magisk без WebUI-моста
+# и для доступа из браузера, поэтому он вынесен в явную опцию: слушающий
+# 127.0.0.1 сокет доступен ЛЮБОМУ приложению на устройстве без единого
+# разрешения, и включать его вслепую неправильно.
+#
+# Сервер идемпотентен: если он уже жив с прошлого reload, мы его не трогаем.
+# Раньше reload безусловно убивал httpd в самом начале — в том числе тот, что
+# обслуживал вызвавший этот reload запрос, — а затем поднимал заново, из-за чего
+# порт мог смениться с 8080 на 8088 и WebUI терял бэкенд.
+# ------------------------------------------------------------------------------
+ensure_httpd() {
+  local b hpid cmd comm port
+  [ -d "$MODDIR/webroot" ] || return 0
+  if [ "${ENABLE_HTTP_API:-0}" != "1" ]; then
+    stop_pid "$RUN_DIR/httpd.pid" "webui-httpd" "httpd"
+    rm -f "$RUN_DIR/webui.port" 2>/dev/null
+    log_d "HTTP API выключен (ENABLE_HTTP_API=0); используется нативный мост менеджера root"
+    return 0
+  fi
+  hpid=$(cat "$RUN_DIR/httpd.pid" 2>/dev/null)
+  if pid_is_owned "$hpid" httpd; then
+    log_d "WebUI HTTPD уже работает (PID $hpid), перезапуск не требуется"
+    return 0
+  fi
+  rm -f "$RUN_DIR/httpd.pid" 2>/dev/null
   BB_BIN=""
   for b in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox /system/bin/busybox $(command -v busybox 2>/dev/null); do
-    if [ -x "$b" ] && "$b" httpd --help >/dev/null 2>&1; then
-      BB_BIN="$b"
-      break
-    fi
+    if [ -x "$b" ] && "$b" httpd --help >/dev/null 2>&1; then BB_BIN="$b"; break; fi
   done
-  if [ -n "$BB_BIN" ]; then
-    chmod 0755 "$MODDIR/webroot/api.sh" 2>/dev/null || true
-    chmod 0644 "$MODDIR/webroot/index.html" "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
-    httpd_started=0
-    # Привязываем httpd строго к 127.0.0.1 (локальный loopback) для предотвращения неавторизованного внешнего доступа
-    if "$BB_BIN" httpd -p 127.0.0.1:8080 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null; then
-      httpd_started=1
-    elif "$BB_BIN" httpd -p 127.0.0.1:8088 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null; then
-      httpd_started=1
-    fi
-    if [ "$httpd_started" = "1" ]; then
-      hpid=""
-      for proc in /proc/[0-9]*; do
-        comm=$(cat "$proc/comm" 2>/dev/null)
-        cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
-        if { [ "$comm" = "httpd" ] || printf '%s' "$cmd" | grep -Fq "httpd"; } && printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot"; then
-          hpid=${proc##*/}
-          break
-        fi
-      done
-      [ -n "$hpid" ] && echo "$hpid" > "$RUN_DIR/httpd.pid"
-      log_i "WebUI HTTPD сервер запущен (PID ${hpid:-unknown})"
-    else
-      log_w "Не удалось запустить WebUI HTTPD сервер"
-    fi
+  [ -n "$BB_BIN" ] || { log_w "busybox httpd не найден: HTTP API недоступен"; return 1; }
+  chmod 0755 "$MODDIR/webroot/api.sh" 2>/dev/null || true
+  chmod 0644 "$MODDIR/webroot/index.html" "$MODDIR/webroot/httpd.conf" 2>/dev/null || true
+  # Здесь генерировался run/webui.token с комментарием «второй барьер поверх
+  # проверки заголовка WebUI». Барьером он не был: его никто никогда не
+  # проверял — ни api.sh, ни страница. Реализовать проверку тоже нечем: сервер
+  # отдаёт index.html без авторизации, поэтому встроенный в страницу токен
+  # прочитало бы любое приложение тем же запросом. Настоящая защита — это
+  # ENABLE_HTTP_API="0" по умолчанию, о чём написано в api.sh.
+  rm -f "$RUN_DIR/webui.token" 2>/dev/null
+  port=""
+  if "$BB_BIN" httpd -p 127.0.0.1:8080 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null; then
+    port=8080
+  elif "$BB_BIN" httpd -p 127.0.0.1:8088 -h "$MODDIR/webroot" -c "$MODDIR/webroot/httpd.conf" 2>/dev/null; then
+    port=8088
   fi
-fi
+  if [ -z "$port" ]; then log_w "Не удалось запустить WebUI HTTPD сервер"; return 1; fi
+  # Сначала дешёвое чтение comm, и только для похожих процессов — cmdline.
+  # Прежний вариант звал pid_cmdline для КАЖДОГО процесса в системе, а тот
+  # форкает фоновую подоболочку с ожиданием: на обычном Android это 700-900
+  # форков на один reload.
+  hpid=""
+  for proc in /proc/[0-9]*; do
+    comm=$(cat "$proc/comm" 2>/dev/null)
+    case "$comm" in *httpd*|*busybox*) ;; *) continue ;; esac
+    cmd=$(pid_cmdline "${proc##*/}")
+    printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot" || continue
+    hpid=${proc##*/}; break
+  done
+  [ -n "$hpid" ] && { echo "$hpid" > "$RUN_DIR/httpd.pid"; chmod 0600 "$RUN_DIR/httpd.pid" 2>/dev/null || true; }
+  printf '%s\n' "$port" > "$RUN_DIR/webui.port" 2>/dev/null
+  chmod 0644 "$RUN_DIR/webui.port" 2>/dev/null || true
+  log_i "WebUI HTTPD слушает 127.0.0.1:$port (PID ${hpid:-unknown})"
+}
+ensure_httpd
 
 # Активный подбор не блокирует загрузку. Сначала всегда работает кэшированный
 # профиль, затем фоновый probe меняет его только после полного успешного набора.
 if [ "$STRATEGY_EFFECTIVE" = "SMART_ACTIVE" ] && [ "${AUTO_SELECT_ENABLED:-1}" = 1 ] && [ -x "$MODDIR/auto-select.sh" ]; then
   sh "$MODDIR/auto-select.sh" schedule >/dev/null 2>&1 || true
 fi
-if [ -x "$MODDIR/log-export.sh" ]; then
+
+# Автоматический экспорт логов в общее хранилище отключён по умолчанию:
+# /sdcard читает любое приложение с доступом к хранилищу, а в логах есть SSID,
+# оператор, полный список пакетов и UID. Кнопка «Экспорт логов» в WebUI и
+# `zapret2-control export-logs` работают всегда, независимо от этого флага.
+if [ "${LOG_EXPORT_ON_BOOT:-0}" = "1" ] && [ -x "$MODDIR/log-export.sh" ]; then
   if command -v setsid >/dev/null 2>&1; then
     setsid sh "$MODDIR/log-export.sh" once >/dev/null 2>&1 &
   elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then

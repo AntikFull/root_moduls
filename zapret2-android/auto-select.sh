@@ -8,6 +8,11 @@ RUN_DIR="$MODDIR/run"
 STATE_DIR="$MODDIR/state"
 LOG_DIR="$MODDIR/logs"
 LOG_FILE="$LOG_DIR/zapret2_auto.log"
+# Лог самого nfqws2. Без этого пути детектор Lua-ошибок у кандидатов молча
+# отключался: candidate_had_lua_error проверял [ -f "" ] и всегда возвращал
+# «ошибок нет», из-за чего заведомо сломанная стратегия проходила отбор.
+NFQWS_LOG="$LOG_DIR/zapret2_nfqws.log"
+RUNTIME_FILE="$RUN_DIR/tether-runtime.conf"
 LOCK_DIR="$RUN_DIR/auto-select.lock"
 RESULT_FILE="$RUN_DIR/auto-current.env"
 HEALTH_FILE="$RUN_DIR/health.env"
@@ -25,13 +30,26 @@ chmod 0700 "$RUN_DIR" "$STATE_DIR" "$LOG_DIR" 2>/dev/null || true
 : "${AUTO_TEST_PORT_MIN:=39000}" "${AUTO_TEST_PORT_MAX:=39049}" "${AUTO_TEST_TIMEOUT:=5}"
 : "${AUTO_PROFILE_DEFAULT:=strategy_2}"
 : "${AUTO_ALLOW_DIRECT:=1}"
-: "${AUTO_PROBE_HOSTS_GENERAL:=discord.com=200// www.instagram.com=200// x.com=200//}"
-: "${AUTO_PROBE_HOSTS_GOOGLE:=www.youtube.com=204//generate_204 youtubei.googleapis.com=204//generate_204 redirector.googlevideo.com=200//report_mapping}"
+: "${AUTO_PROBE_HOSTS_GENERAL:=discord.com www.instagram.com x.com mega.nz}"
+: "${AUTO_PROBE_HOSTS_GOOGLE:=www.youtube.com=204//generate_204 youtubei.googleapis.com=204//generate_204}"
+: "${AUTO_MIN_PROBE_INTERVAL:=900}"
 PROBE_SPEC_FILE="$RUN_DIR/auto-probe-spec.$$"
 BASELINE_FILE="$RUN_DIR/auto-probe-base.$$"
 CANDIDATE_FILE="$RUN_DIR/auto-probe-cand.$$"
 : "${AUTO_PROBE_MAX_CANDIDATES:=0}"
 [ -f "$STRATEGY_LIB" ] && . "$STRATEGY_LIB"
+
+# Зомби и умирающие процессы не отдают cmdline: ядро держит блокировку памяти
+# задачи, и чтение виснет без таймаута — однажды это подвесило перезапуск целиком.
+# /proc/PID/stat читается без этой блокировки, поэтому сначала спрашиваем
+# состояние. Полный вариант с потолком по времени — в service.sh.
+pid_cmdline() {
+  local st
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
@@ -225,6 +243,11 @@ IPT=$(command -v iptables 2>/dev/null); [ -n "$IPT" ] || IPT=/system/bin/iptable
 IP6T=$(command -v ip6tables 2>/dev/null); [ -n "$IP6T" ] || IP6T=/system/bin/ip6tables
 TEST_PID=""
 TEST_RULE_MODE=""
+# --queue-bypass поддерживается не всяким ядром. service.sh уже выяснил это при
+# probe_firewall и сохранил результат; раньше тестовые правила ставили флаг
+# безусловно и на таких ядрах молча не применялись вообще.
+[ -f "$RUNTIME_FILE" ] && . "$RUNTIME_FILE"
+: "${QBYPASS4:=--queue-bypass}" "${QBYPASS6:=--queue-bypass}"
 
 pid_is_test_nfqws() {
   local pid="$1" cmdline
@@ -232,15 +255,19 @@ pid_is_test_nfqws() {
   kill -0 "$pid" 2>/dev/null || return 1
   [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = nfqws2 ] || return 1
   [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$BIN_DIR" ] || return 1
-  cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+  cmdline=$(pid_cmdline "$pid")
   case " $cmdline " in *" --qnum=$AUTO_TEST_QNUM "*) return 0 ;; *) return 1 ;; esac
 }
 
 cleanup_test() {
   local stale_pid n
+  # Снимаем оба варианта NFQUEUE-правила: с --queue-bypass и без него, потому что
+  # флаг зависит от возможностей ядра и мог отличаться между прогонами.
   delete_test_rule_bounded "$IPT" -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+  delete_test_rule_bounded "$IPT" -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM"
   delete_test_rule_bounded "$IPT" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
   delete_test_rule_bounded "$IP6T" -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+  delete_test_rule_bounded "$IP6T" -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM"
   delete_test_rule_bounded "$IP6T" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
   delete_test_rule_bounded "$IPT" -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
   delete_test_rule_bounded "$IPT" -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN
@@ -267,11 +294,32 @@ delete_test_rule_bounded() {
   return 0
 }
 
+# Весь механизм подбора держится на `-m owner --uid-owner 0`: и эталон, и
+# правила кандидата уводят в очередь именно трафик root, то есть наш curl.
+# Проверка xt_owner когда-то была в service.sh::probe_firewall, но её убрали
+# вместе с правилами по приложениям — а зависимость осталась. На ядре без
+# xt_owner подбор падал с невнятным «не удалось установить правило baseline».
+# Проверяем явно и один раз за прогон, во временной цепочке.
+owner_match_available() {
+  local chain="ZAPRET2_OWNER_PROBE_$$" rc=1
+  [ -x "$IPT" ] || return 1
+  "$IPT" -w 5 -t mangle -N "$chain" >/dev/null 2>&1 || return 1
+  "$IPT" -w 5 -t mangle -A "$chain" -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN >/dev/null 2>&1 && rc=0
+  "$IPT" -w 5 -t mangle -F "$chain" >/dev/null 2>&1
+  "$IPT" -w 5 -t mangle -X "$chain" >/dev/null 2>&1
+  return "$rc"
+}
+
+# Эталон «без обхода». Правило RETURN уводит трафик root (то есть наш curl) из
+# боевых цепочек ZAPRET2_*, поэтому baseline измеряется на действительно чистой
+# сети. Без него в режимах GLOBAL/EXCLUDE baseline снимался при уже работающем
+# nfqws2 и показывал, что «сеть не фильтруется», после чего модуль уходил в DIRECT.
 install_direct_rule() {
   cleanup_test
-  "$IPT" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
+  "$IPT" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN || return 1
   "$IP6T" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null || true
   TEST_RULE_MODE=DIRECT
+  return 0
 }
 
 install_candidate_rule() {
@@ -288,10 +336,13 @@ install_candidate_rule() {
   echo "$TEST_PID" > "$TEST_NFQ_PID_FILE"
   sleep 1
   pid_is_test_nfqws "$TEST_PID" || { cleanup_test; return 1; }
+  # Порядок важен: RETURN ставится первым, затем NFQUEUE вставляется перед ним,
+  # поэтому пакет сначала уходит в очередь кандидата, а после вердикта выходит
+  # из OUTPUT, не попадая в боевые цепочки.
   "$IPT" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN || { cleanup_test; return 1; }
-  "$IPT" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass || { cleanup_test; return 1; }
+  "$IPT" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" $QBYPASS4 || { cleanup_test; return 1; }
   "$IP6T" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null || true
-  "$IP6T" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null || true
+  "$IP6T" -w 5 -t mangle -I OUTPUT 1 -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" $QBYPASS6 2>/dev/null || true
   TEST_RULE_MODE="$profile"
 }
 
@@ -349,14 +400,21 @@ resolve_host_ipv6() {
   return 1
 }
 
+# Формат записи: host[=КОД//путь]. Голое имя домена означает «сайт открылся»
+# (любой ответ 2xx/3xx), а не строго 200: большинство сайтов на корневом пути
+# отдают редирект, и требование ровно 200 делало такие хосты вечно «неудачными» —
+# baseline никогда не был чистым и ни один кандидат не мог набрать полный балл.
 parse_probe_entry() {
   local entry="$1" rest
   P_HOST=${entry%%=*}
   rest=${entry#*=}
-  [ "$rest" = "$entry" ] && rest="200//"
+  [ "$rest" = "$entry" ] && rest="any//"
   P_CODE=${rest%%//*}
   P_PATH=${rest#*//}
-  case "$P_CODE" in ''|*[!0-9]*) P_CODE=200 ;; esac
+  case "$P_CODE" in
+    any|ANY) P_CODE=any ;;
+    ''|*[!0-9]*) P_CODE=any ;;
+  esac
   case "$P_HOST" in ''|*[!A-Za-z0-9.-]*) return 1 ;; esac
   case "$P_PATH" in *[!A-Za-z0-9._~/-]*) return 1 ;; esac
   return 0
@@ -421,6 +479,11 @@ probe_url() {
   code=$(curl "-$family" --http1.1 -sS -o /dev/null --interface "$iface" \
     --resolve "$host:443:$resolved" \
     --connect-timeout 3 --max-time "$AUTO_TEST_TIMEOUT" -w '%{http_code}' "$url" 2>/dev/null)
+  if [ "$expected" = any ]; then
+    # Код 000 означает, что соединение вообще не установилось (RST/таймаут от
+    # DPI) — именно это и есть признак блокировки.
+    case "$code" in 2[0-9][0-9]|3[0-9][0-9]) return 0 ;; *) return 1 ;; esac
+  fi
   [ "$code" = "$expected" ]
 }
 
@@ -466,6 +529,69 @@ score_against_baseline() {
   return 0
 }
 
+# ------------------------------------------------------------------------------
+# Классификация недоступного хоста: DPI-блокировка или гео-блок.
+#
+# Различие принципиальное. Гео-блок ставит САМ сайт: путь до сервера есть, TLS
+# честный, сервер отвечает 403/451 «в вашей стране недоступно». Туннель WARP
+# выходит в ближайшей точке Cloudflare и страну обычно не меняет, поэтому
+# уводить туда гео-блок бессмысленно — трафик просто пойдёт длиннее.
+#
+# DPI-блокировка ставится на пути: HTTP-ответа нет вовсе (код 000), либо
+# рукопожатие завершается подставным сертификатом. Вот это туннель лечит.
+#
+# Возвращает в stdout: OK | GEO | DPI
+# ------------------------------------------------------------------------------
+classify_host_block() {
+  local host="$1" iface="$2" code
+  code=$(curl -4 -sS -o /dev/null --interface "$iface" --connect-timeout 4 --max-time 10 \
+         -w '%{http_code}' "https://$host/" 2>/dev/null)
+  case "$code" in
+    2[0-9][0-9]|3[0-9][0-9]) printf 'OK\n'; return 0 ;;
+    403|451) printf 'GEO\n'; return 0 ;;
+  esac
+  # HTTP-ответа не было. Повторяем без проверки сертификата: если теперь ответ
+  # есть — значит рукопожатие проходит, но сертификат подменён (DPI). Если сервер
+  # при этом отвечает 403/451, решает он сам, и это всё-таки гео-блок.
+  code=$(curl -4 -sS -k -o /dev/null --interface "$iface" --connect-timeout 4 --max-time 10 \
+         -w '%{http_code}' "https://$host/" 2>/dev/null)
+  case "$code" in
+    403|451) printf 'GEO\n' ;;
+    2[0-9][0-9]|3[0-9][0-9]) printf 'DPI\n' ;;
+    *) printf 'DPI\n' ;;
+  esac
+}
+
+# Домены, которые не поднял ни один кандидат, уводим в туннель — если он включён
+# и если это не гео-блок.
+promote_unfixed_to_warp() {
+  local iface="$1" hosts="$2" host verdict added=0 file="$STATE_DIR/warp_auto_domains.list"
+  [ -n "$hosts" ] || return 0
+  [ "${WARP_DOMAIN_FALLBACK:-1}" = "1" ] || return 0
+  if [ "${ENABLE_WARP:-0}" != "1" ]; then
+    log "AUTO: не поддались обходу [$hosts], но туннель выключен (ENABLE_WARP=0) — оставляем как есть"
+    return 0
+  fi
+  for host in $(printf '%s' "$hosts" | tr ',' ' '); do
+    [ -n "$host" ] || continue
+    grep -qxF "$host" "$file" 2>/dev/null && continue
+    verdict=$(classify_host_block "$host" "$iface")
+    case "$verdict" in
+      OK)  log "AUTO: $host заработал сам, в туннель не уводим" ;;
+      GEO) log "AUTO: $host — гео-блокировка (сервер отвечает), туннель не поможет, пропускаем" ;;
+      DPI)
+        printf '%s\n' "$host" >> "$file" 2>/dev/null && added=$((added + 1))
+        log "AUTO: $host не поддался ни одной стратегии и заблокирован на пути -> уводим в WARP"
+        ;;
+    esac
+  done
+  if [ "$added" -gt 0 ]; then
+    chmod 0600 "$file" 2>/dev/null || true
+    [ -x "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" sync >/dev/null 2>&1 || true
+    log "AUTO: в туннель добавлено доменов=$added"
+  fi
+}
+
 log_size() {
   local f="$1"
   [ -f "$f" ] && wc -c < "$f" 2>/dev/null | tr -d ' ' || echo 0
@@ -480,7 +606,7 @@ candidate_had_lua_error() {
 }
 
 save_cache() {
-  local key="$1" profile="$2" iface="$3" status="$4" updated tmp
+  local key="$1" profile="$2" iface="$3" status="$4" hosts="$5" updated tmp
   updated=$(now_epoch)
   tmp="$STATE_DIR/auto-$key.env.tmp.$$"
   {
@@ -489,6 +615,12 @@ save_cache() {
     printf 'IFACE=%s\n' "$iface"
     printf 'STATUS=%s\n' "$status"
     printf 'UPDATED=%s\n' "$updated"
+    # Хосты, которые этот профиль реально починил на данной сети. Именно по ним
+    # проверяется, что он ещё работает: проверять что-то другое бессмысленно.
+    # Читается ИМЕННО $5: все вызовы передают список пятым аргументом, а
+    # прежнее ${6:-} всегда давало пустую строку, и verify_cached_strategy
+    # уходил в ветку «проверять нечем» — проверка кэша не выполнялась.
+    printf 'VERIFY_HOSTS=%s\n' "$hosts"
   } > "$tmp" && mv -f "$tmp" "$STATE_DIR/auto-$key.env"
   chmod 0600 "$STATE_DIR/auto-$key.env" 2>/dev/null || true
   write_result "$profile" "$key" "$iface" "$status" "$updated"
@@ -509,18 +641,39 @@ prune_stale_caches() {
   done
 }
 
+# Проверка, что кэшированный профиль ещё делает свою работу.
+#
+# Раньше здесь был захардкожен www.youtube.com. Если на сети есть хоть один хост,
+# который не чинит НИ ОДНА стратегия (обычная ситуация: ok=1 fail=5, лучший
+# кандидат fixed=4/5), и этим хостом оказывался YouTube, проверка не могла пройти
+# никогда. Каждая периодическая сверка заканчивалась полным перебором стратегий,
+# перебор просил reload, reload планировал новую сверку — модуль часами гонял
+# probe по кругу, расходуя батарею и мобильный трафик.
+#
+# Теперь проверяются ровно те хосты, ради которых профиль был выбран, и профиль
+# считается живым, пока работает хотя бы половина из них. Полный перебор
+# запускается только когда сеть действительно изменилась.
 verify_cached_strategy() {
-  local iface="$1" profile="$2" host="www.youtube.com" code
-  code=$(curl -4 -sS -o /dev/null --interface "$iface" --connect-timeout 3 --max-time 5 -w '%{http_code}' "https://$host/" 2>/dev/null)
-  case "$code" in
-    200|301|302|204|404|403) return 0 ;;
-    *) return 1 ;;
-  esac
+  local iface="$1" profile="$2" hosts="$3" host code ok=0 total=0
+  [ -n "$hosts" ] || hosts="$VERIFY_HOSTS"
+  # Профиль из старого кэша (до появления VERIFY_HOSTS) — проверять нечем,
+  # считаем рабочим и ждём планового переподбора по TTL.
+  [ -n "$hosts" ] || { log "AUTO verification: список контрольных хостов пуст, профиль принят как есть"; return 0; }
+  for host in $(printf '%s' "$hosts" | tr ',' ' '); do
+    [ -n "$host" ] || continue
+    total=$((total + 1))
+    code=$(curl -4 -sS -o /dev/null --interface "$iface" --connect-timeout 3 --max-time 6 -w '%{http_code}' "https://$host/" 2>/dev/null)
+    case "$code" in 2[0-9][0-9]|3[0-9][0-9]) ok=$((ok + 1)) ;; esac
+  done
+  [ "$total" -gt 0 ] || return 0
+  log "AUTO verification: профиль $profile, рабочих контрольных хостов $ok/$total"
+  [ $((ok * 2)) -ge "$total" ]
 }
 
 run_probe() {
   local force="$1" snapshot iface identity key cache previous previous_updated now age profile selected="" service_pid ttl packets catalog number path \
-    direct_profile baseline_fail best best_fixed tried fixed broken log_before
+    direct_profile baseline_fail best best_fixed best_hosts unfixed_hosts previous_hosts tried fixed broken log_before \
+    last_probe_key last_probe_ts probe_age
   trap 'cleanup_test; rm -rf "$LOCK_DIR" 2>/dev/null; rm -f "$PROBE_PID_FILE" "$PROBE_SPEC_FILE" "$BASELINE_FILE" "$CANDIDATE_FILE" 2>/dev/null; exit 1' HUP INT TERM
   trap 'cleanup_test; rm -rf "$LOCK_DIR" 2>/dev/null; rm -f "$PROBE_PID_FILE" "$PROBE_SPEC_FILE" "$BASELINE_FILE" "$CANDIDATE_FILE" 2>/dev/null' EXIT
   [ "$AUTO_SELECT_ENABLED" = 1 ] || { resolve_current >/dev/null; return 0; }
@@ -532,7 +685,28 @@ run_probe() {
     ''|0|*[!0-9]*) ;;
     *) if kill -0 "$service_pid" 2>/dev/null; then log "AUTO пропуск: service.sh занят (PID $service_pid)"; resolve_current >/dev/null; return 0; fi ;;
   esac
-  command -v curl >/dev/null 2>&1 || { log "AUTO отмена: curl не найден"; resolve_current >/dev/null; return 1; }
+  # curl не входит в комплект модуля и есть не в каждой прошивке. Раньше его
+  # отсутствие тихо отключало весь автоподбор — теперь это видно в WebUI.
+  if ! command -v curl >/dev/null 2>&1; then
+    log "AUTO отмена: curl не найден в системе; автоподбор и проверка сети недоступны"
+    resolve_current >/dev/null
+    write_result "$(sed -n 's/^AUTO_PROFILE=//p' "$RESULT_FILE" 2>/dev/null | head -n1)" \
+      "$(sed -n 's/^AUTO_NETWORK_KEY=//p' "$RESULT_FILE" 2>/dev/null | head -n1)" \
+      "$(sed -n 's/^AUTO_NETWORK_IFACE=//p' "$RESULT_FILE" 2>/dev/null | head -n1)" \
+      NO_CURL 0
+    sync_health_result
+    return 1
+  fi
+  if ! owner_match_available; then
+    log "AUTO отмена: ядро без xt_owner (модуль netfilter owner match). Подбор стратегии невозможен: и эталон, и кандидаты отбирают трафик root по --uid-owner."
+    resolve_current >/dev/null
+    write_result "$(sed -n 's/^AUTO_PROFILE=//p' "$RESULT_FILE" 2>/dev/null | head -n1)" \
+      "$(sed -n 's/^AUTO_NETWORK_KEY=//p' "$RESULT_FILE" 2>/dev/null | head -n1)" \
+      "$(sed -n 's/^AUTO_NETWORK_IFACE=//p' "$RESULT_FILE" 2>/dev/null | head -n1)" \
+      NO_OWNER_MATCH 0
+    sync_health_result
+    return 1
+  fi
   [ -x "$BIN_DIR/nfqws2" ] || { log "AUTO отмена: nfqws2 не найден"; resolve_current >/dev/null; return 1; }
   snapshot=$(active_network_snapshot)
   iface=$(snapshot_field "$snapshot" 1)
@@ -545,7 +719,8 @@ run_probe() {
   ttl=$(cache_ttl_for_iface "$iface")
   case "$ttl" in ''|*[!0-9]*) ttl=$AUTO_CACHE_TTL ;; esac
   cache=$(cache_file_for "$key"); previous=""; previous_updated=0
-  if [ -f "$cache" ]; then . "$cache"; previous=${PROFILE:-}; previous_updated=${UPDATED:-0}; fi
+  previous_hosts=""
+  if [ -f "$cache" ]; then . "$cache"; previous=${PROFILE:-}; previous_updated=${UPDATED:-0}; previous_hosts=${VERIFY_HOSTS:-}; fi
   now=$(now_epoch); case "$previous_updated" in ''|*[!0-9]*) previous_updated=0 ;; esac
   age=$((now - previous_updated))
   if [ "$force" != force ] && valid_profile "$previous" && [ "$age" -ge 0 ] 2>/dev/null && [ "$age" -le "$ttl" ] 2>/dev/null; then
@@ -553,13 +728,33 @@ run_probe() {
     log "AUTO cache hit: key=$key iface=$iface profile=$previous age=$age"
     request_profile_reload "$previous" || true
     sleep 2
-    if verify_cached_strategy "$iface" "$previous"; then
+    if verify_cached_strategy "$iface" "$previous" "$previous_hosts"; then
       log "AUTO verification OK: кэшированный профиль $previous активен и работает на $iface"
-      save_cache "$key" "$previous" "$iface" CACHED
+      # Список контрольных хостов обязан пережить обновление кэша, иначе
+      # следующая проверка окажется без критерия и профиль будет принят вслепую.
+      save_cache "$key" "$previous" "$iface" CACHED "$previous_hosts"
       return 0
     else
       log "AUTO verification FAILED: кэшированный профиль $previous дал сбой на $iface; запускается полный повторный подбор"
       rm -f "$cache" 2>/dev/null
+    fi
+  fi
+
+  # Защита от повторного перебора. Полный цикл — это шесть стратегий по шесть
+  # HTTPS-запросов каждая, несколько минут работы радиомодуля. Запускать его
+  # чаще, чем раз в AUTO_MIN_PROBE_INTERVAL на одной и той же сети, бессмысленно:
+  # результат будет тот же. Смена сети меняет ключ и снимает ограничение,
+  # ручной запуск (`auto-select.sh force`) — тоже.
+  if [ "$force" != force ]; then
+    last_probe_key=$(cat "$RUN_DIR/auto-last-probe.key" 2>/dev/null)
+    last_probe_ts=$(cat "$RUN_DIR/auto-last-probe.ts" 2>/dev/null)
+    case "$last_probe_ts" in ''|*[!0-9]*) last_probe_ts=0 ;; esac
+    probe_age=$((now - last_probe_ts))
+    if [ "$key" = "$last_probe_key" ] && [ "$probe_age" -ge 0 ] 2>/dev/null && \
+       [ "$probe_age" -lt "${AUTO_MIN_PROBE_INTERVAL:-900}" ] 2>/dev/null; then
+      log "AUTO: полный перебор пропущен — предыдущий был ${probe_age}с назад на этой же сети (лимит ${AUTO_MIN_PROBE_INTERVAL:-900}с)"
+      resolve_current >/dev/null
+      return 0
     fi
   fi
 
@@ -570,6 +765,11 @@ run_probe() {
   fi
 
   log "AUTO probe start: key=$key iface=$iface previous=${previous:-none} catalog=$catalog"
+  # Отметка ставится в начале: если перебор прервётся (смена сети, kill), повтор
+  # всё равно не начнётся раньше лимита и не устроит гонку из недобитых probe.
+  printf '%s\n' "$key" > "$RUN_DIR/auto-last-probe.key" 2>/dev/null
+  printf '%s\n' "$(now_epoch)" > "$RUN_DIR/auto-last-probe.ts" 2>/dev/null
+  chmod 0600 "$RUN_DIR/auto-last-probe.key" "$RUN_DIR/auto-last-probe.ts" 2>/dev/null || true
 
   direct_profile=""
   strategy_list > "$RUN_DIR/auto-strategies.$$"
@@ -597,8 +797,18 @@ run_probe() {
     esac
   fi
 
+  # Эталон снимается ПРИ ВЫВЕДЕННОМ ИЗ-ПОД ОБХОДА трафике root, иначе в режимах
+  # GLOBAL/EXCLUDE его уже обрабатывает боевой nfqws2 и «чистая» сеть меряется
+  # через работающий обход.
+  if ! install_direct_rule; then
+    log "AUTO отмена: не удалось установить правило чистого baseline"
+    cleanup_test
+    resolve_current >/dev/null
+    return 1
+  fi
   probe_run_all "$iface" "$BASELINE_FILE"
   baseline_fail=$PROBE_FAIL
+  cleanup_test
   log "AUTO baseline (без обхода): ok=$PROBE_PASS fail=$PROBE_FAIL failed=$PROBE_FAILED_ON"
   if [ "$baseline_fail" -eq 0 ]; then
     if [ "${AUTO_ALLOW_DIRECT:-1}" = 1 ] && [ -n "$direct_profile" ]; then
@@ -608,10 +818,22 @@ run_probe() {
       rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" "$BASELINE_FILE" 2>/dev/null
       return 0
     fi
+    # DIRECT запрещён настройкой, а чинить нечего: перебор кандидатов ничего не
+    # даст (fixed заведомо 0) и только займёт сеть на десятки секунд.
+    selected=${AUTO_PROFILE_DEFAULT:-strategy_2}
+    valid_profile "$selected" || selected=$(strategy_first_valid)
+    if [ -n "$selected" ]; then
+      log "AUTO: сеть не фильтруется, но DIRECT запрещён (AUTO_ALLOW_DIRECT=0); остаёмся на $selected"
+      save_cache "$key" "$selected" "$iface" UNFILTERED
+      request_profile_reload "$selected" || true
+    fi
+    rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" "$BASELINE_FILE" 2>/dev/null
+    return 0
   fi
 
   best=""
   best_fixed=0
+  best_hosts=""
   while IFS='|' read -r number profile path; do
     strategy_read "$profile" || continue
     [ "$STRATEGY_FILE_MODE" = DIRECT ] && continue
@@ -642,9 +864,25 @@ run_probe() {
       continue
     fi
     log "AUTO candidate=$profile name=$STRATEGY_FILE_NAME result=SCORE fixed=$fixed/$baseline_fail"
-    if [ "$fixed" -gt "$best_fixed" ] 2>/dev/null; then best=$profile; best_fixed=$fixed; fi
+    if [ "$fixed" -gt "$best_fixed" ] 2>/dev/null; then
+      best=$profile; best_fixed=$fixed
+      # Запоминаем хосты, которые этот кандидат поднял из упавших. По ним потом
+      # проверяется, что профиль ещё живой, без повторного полного перебора.
+      best_hosts=$(awk -F'|' -v base="$BASELINE_FILE" '
+        BEGIN { while ((getline l < base) > 0) { split(l, a, "|"); if (a[1] != "") b[a[1]] = a[2] } close(base) }
+        $1 != "" && $2 == 1 && b[$1] == 0 { printf "%s%s", (n++ ? "," : ""), $1 }
+      ' "$CANDIDATE_FILE" 2>/dev/null)
+    fi
     [ "$best_fixed" -ge "$baseline_fail" ] 2>/dev/null && break
   done < "$RUN_DIR/auto-strategies.$$"
+
+  # Хосты, которые лежали в эталоне и которые победитель так и не поднял.
+  # Считаем ДО удаления BASELINE_FILE — дальше восстановить их будет неоткуда.
+  unfixed_hosts=$(awk -F'|' -v fixed="$best_hosts" '
+    BEGIN { n = split(fixed, a, ","); for (i = 1; i <= n; i++) if (a[i] != "") ok[a[i]] = 1 }
+    $1 != "" && $2 == 0 && !($1 in ok) { printf "%s%s", (m++ ? "," : ""), $1 }
+  ' "$BASELINE_FILE" 2>/dev/null)
+
   rm -f "$RUN_DIR/auto-strategies.$$" "$PROBE_SPEC_FILE" "$BASELINE_FILE" "$CANDIDATE_FILE" 2>/dev/null
   cleanup_test
 
@@ -655,23 +893,44 @@ run_probe() {
     log "AUTO: кандидаты не дали преимуществ, устанавливаем безопасный профиль по умолчанию $selected ($(profile_name "$selected"))"
     save_cache "$key" "$selected" "$iface" FALLBACK_DEFAULT
     request_profile_reload "$selected" || true
+    promote_unfixed_to_warp "$iface" "$unfixed_hosts"
     return 0
   fi
   if [ "$best_fixed" -ge "$baseline_fail" ] 2>/dev/null; then
-    save_cache "$key" "$best" "$iface" SELECTED
+    save_cache "$key" "$best" "$iface" SELECTED "$best_hosts"
     log "AUTO selected: key=$key iface=$iface profile=$best name=$(profile_name "$best") fixed=$best_fixed/$baseline_fail (полный)"
   else
-    save_cache "$key" "$best" "$iface" PARTIAL
+    save_cache "$key" "$best" "$iface" PARTIAL "$best_hosts"
     log "AUTO selected: key=$key iface=$iface profile=$best name=$(profile_name "$best") fixed=$best_fixed/$baseline_fail (частичный; остальные хосты не открыл ни один кандидат)"
   fi
   request_profile_reload "$best" || true
+  # Остаток, который обходом не лечится, пробуем увести в туннель.
+  promote_unfixed_to_warp "$iface" "$unfixed_hosts"
 }
 
+# Две поправки против прежней версии:
+#  1. Пустой pid не считается брошенной блокировкой сразу — владелец мог сделать
+#     mkdir и ещё не записать себя. Даём ему полсекунды.
+#  2. Живой pid проверяется на принадлежность auto-select.sh. Номера процессов
+#     переиспользуются, и посторонний процесс с тем же PID держал бы блокировку
+#     вечно, тихо выключив автоподбор до перезагрузки.
 acquire_lock() {
-  if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ > "$LOCK_DIR/pid"; return 0; fi
   local pid
+  if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ > "$LOCK_DIR/pid"; return 0; fi
   pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-  case "$pid" in ''|0|*[!0-9]*) rm -rf "$LOCK_DIR" 2>/dev/null ;; *) kill -0 "$pid" 2>/dev/null || rm -rf "$LOCK_DIR" 2>/dev/null ;; esac
+  case "$pid" in
+    ''|0|*[!0-9]*)
+      sleep 0.5
+      pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+      case "$pid" in ''|0|*[!0-9]*) rm -rf "$LOCK_DIR" 2>/dev/null ;; esac
+      ;;
+    *)
+      if ! kill -0 "$pid" 2>/dev/null || ! pid_cmdline "$pid" | grep -Fq "$MODDIR/auto-select.sh"; then
+        log "AUTO: снимаю брошенную блокировку PID=$pid"
+        rm -rf "$LOCK_DIR" 2>/dev/null
+      fi
+      ;;
+  esac
   mkdir "$LOCK_DIR" 2>/dev/null || return 1
   echo $$ > "$LOCK_DIR/pid"
 }
@@ -681,7 +940,7 @@ schedule_probe() {
   pid=$(cat "$PROBE_PID_FILE" 2>/dev/null)
   case "$pid" in
     ''|0|*[!0-9]*) ;;
-    *) if kill -0 "$pid" 2>/dev/null && tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Fq "$MODDIR/auto-select.sh"; then return 0; fi ;;
+    *) if kill -0 "$pid" 2>/dev/null && pid_cmdline "$pid" | grep -Fq "$MODDIR/auto-select.sh"; then return 0; fi ;;
   esac
   if command -v setsid >/dev/null 2>&1; then
     setsid sh "$MODDIR/auto-select.sh" scheduled </dev/null >/dev/null 2>&1 &
@@ -699,7 +958,7 @@ clear_state() {
   case "$pid" in
     ''|0|*[!0-9]*) ;;
     *)
-      if kill -0 "$pid" 2>/dev/null && tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Fq "$MODDIR/auto-select.sh"; then
+      if kill -0 "$pid" 2>/dev/null && pid_cmdline "$pid" | grep -Fq "$MODDIR/auto-select.sh"; then
         kill -TERM "$pid" 2>/dev/null
         n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 10 ]; do sleep 1; n=$((n + 1)); done
       fi

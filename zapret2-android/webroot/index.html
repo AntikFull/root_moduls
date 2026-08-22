@@ -91,22 +91,24 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
   </div>
 </header>
 <nav class="nav-rail" aria-label="Разделы">
-  <button type="button" class="nav-chip" data-target="scopeSection">Обход DPI</button><button type="button" class="nav-chip" data-target="warpSection">Точечный обход</button><button type="button" class="nav-chip" data-target="hotspotSection">Раздача интернета</button><button type="button" class="nav-chip" data-target="strategySection">Стратегии</button><button type="button" class="nav-chip" data-target="appsSection">Приложения</button><button type="button" class="nav-chip" data-target="diagSection">Диагностика</button><button type="button" class="nav-chip" data-target="faqSection">Справка / FAQ</button><button type="button" class="nav-chip tonal" id="toggleAllBtn" onclick="toggleAllCards()" title="Свернуть / Развернуть все">⇕ Свернуть</button>
+  <button type="button" class="nav-chip" data-target="scopeSection">Обход DPI</button><button type="button" class="nav-chip" data-target="warpSection">Точечный обход</button><button type="button" class="nav-chip" data-target="hotspotSection">Раздача интернета</button><button type="button" class="nav-chip" data-target="strategySection">Стратегии</button><button type="button" class="nav-chip" data-target="listsSection">Списки</button><button type="button" class="nav-chip" data-target="diagSection">Диагностика</button><button type="button" class="nav-chip" data-target="faqSection">Справка / FAQ</button><button type="button" class="nav-chip tonal" id="toggleAllBtn" onclick="toggleAllCards()" title="Свернуть / Развернуть все">⇕ Свернуть</button>
 </nav>
 <main class="content">
 <section class="card" id="scopeSection">
-  <div class="section-head" onclick="toggleCard('scopeSection')"><div class="section-icon">◈</div><div class="section-head-text"><h2 class="section-title">Область действия Zapret2</h2><p class="section-desc">Быстрый пресет или точная ручная настройка.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
+  <div class="section-head" onclick="toggleCard('scopeSection')"><div class="section-icon">◈</div><div class="section-head-text"><h2 class="section-title">Обход DPI</h2><div class="section-sub">Что делать с трафиком</div></div><div class="section-chevron">▾</div></div>
   <div class="card-body">
-    <div class="grid"><label class="field"><span>Пресет</span><select class="control" id="scope"><option value="SELECTED">Рекомендуемый — SMART + AUTO-приложения</option><option value="SAFE">Широкий — всё, кроме исключений</option><option value="ALL">Весь телефон</option><option value="CUSTOM">Ручная настройка</option></select></label></div>
-    <p class="hint"><strong>Рекомендуется SELECTED.</strong> В SMART установленное приложение из встроенного AUTO-каталога включается само; <code>apps.list</code> остаётся для ручных добавлений, а <code>exclude.list</code> всегда имеет высший приоритет.</p>
-    <div class="actions"><button type="button" class="md-button" id="applyScope" onclick="applyScope()">Применить пресет</button></div>
-    <div class="divider"></div><h3 class="subhead">Тонкая настройка</h3>
+    <p class="hint">Обход применяется ко всей системе. Какие именно домены и подсети трогать — задаётся в разделе «Списки доменов и подсетей».</p>
     <div class="grid">
-      <label class="field"><span>Режим</span><select class="control" id="mode"><option value="exclude">Всё, кроме исключений</option><option value="include">Только выбранные приложения</option><option value="global">Весь трафик</option></select></label>
-      <label class="field"><span>QUIC телефона</span><select class="control" id="quic"><option value="off">Не блокировать</option><option value="selected">По текущему охвату AntiDPI</option><option value="global">Весь телефон</option></select></label>
+      <label class="field"><span>QUIC (HTTP/3)</span>
+        <select class="control" id="quic">
+          <option value="on">Блокировать — заставить приложения работать по TCP</option>
+          <option value="off">Не блокировать</option>
+        </select>
+      </label>
       <input type="hidden" id="tcp" value="1">
     </div>
-    <div class="actions"><button type="button" class="md-button tonal" id="applyCore" onclick="applyCore()">Применить вручную</button><button type="button" class="md-button outlined" id="restart" onclick="runControl('restart')">Перезапустить модуль</button></div>
+    <p class="hint">Имя сайта внутри QUIC не видно, поэтому блокировка действует на весь UDP/443 либо не действует вовсе. Выборочно тут нельзя. Без блокировки браузеры уходят в QUIC, и обход DPI до них не достаёт.</p>
+    <div class="actions"><button type="button" class="md-button" id="applyCore" onclick="applyCore()">Применить</button></div>
   </div>
 </section>
 
@@ -141,7 +143,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
     <p class="hint"><strong>Точечный обход для приложений:</strong> Трафик любых выбранных вами приложений направляется через защищённый туннель без необходимости включать глобальный VPN на весь телефон. Список приложений настраивается во вкладке «Приложения» (кнопка ТУННЕЛЬ) или в <code>warp_apps.list</code>.</p>
     <div class="actions">
       <button type="button" class="md-button" id="saveWarpBtn" onclick="saveWarp()">Сохранить и применить</button>
-      <button type="button" class="md-button tonal" id="rekeyWarpBtn" onclick="rekeyWarp()">Сгенерировать новый ключ</button>
+      <button type="button" class="md-button tonal" id="restartWarpBtn" onclick="restartWarp()">Перезапустить туннель</button><button type="button" class="md-button tonal" id="rekeyWarpBtn" onclick="rekeyWarp()">Сгенерировать новый ключ</button>
       <button type="button" class="md-button outlined" id="refreshWarpBtn" onclick="manualRefreshWarp()">Обновить статус</button>
     </div>
   </div>
@@ -170,7 +172,6 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
   <div class="card-body">
     <div class="service-profiles"><span class="pill ok" id="compatBadge">Совместимость: 100% ✓</span><span class="pill info" id="smartYoutubeProfile">YouTube: Автоподбор</span><span class="pill" id="smartGeneralProfile">Сайты: General</span><span class="pill ok" id="smartAutoProfile">AUTO · Активен</span></div>
     <div class="grid" style="margin-top:14px">
-      <label class="field"><span>Автовыбор приложений</span><select class="control" id="autoAppsEnabled"><option value="1">Включён — рекомендуется</option><option value="0">Выключен — только ручные</option></select></label>
       <label class="field"><span>Режим</span><select class="control" id="smartMode" onchange="syncSmartControls()"><option value="SMART">SMART · автоматически</option><option value="CUSTOM">CUSTOM · экспертный</option></select></label>
     </div>
     <p class="hint"><strong>SMART_NATIVE</strong> и <strong>SMART_ACTIVE</strong> автоматически тестируют и подбирают профили под вашего оператора связи. При смене Wi-Fi на сотовую сеть переподбор происходит мгновенно в фоне.</p>
@@ -180,20 +181,50 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
   </div>
 </section>
 
-<section class="card" id="appsSection">
-  <div class="section-head" onclick="toggleCard('appsSection')"><div class="section-icon">▦</div><div class="section-head-text"><h2 class="section-title">Приложения</h2><p class="section-desc" id="appInfo">Загрузка приложений…</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
+<section class="card" id="listsSection">
+  <div class="section-head" onclick="toggleCard('listsSection')"><div class="section-icon">▤</div><div class="section-title">Списки доменов и подсетей</div><div class="section-chevron">▾</div></div>
   <div class="card-body">
-    <div class="app-summary"><span class="pill info" id="appSource">Источник: —</span><span class="pill" id="appSelected">AUTO — · ручных — · исключено —</span></div>
-    <div class="app-filter-chips">
-      <button type="button" class="filter-chip active" data-filter="all" onclick="setAppFilter('all')">Все</button>
-      <button type="button" class="filter-chip" data-filter="popular" onclick="setAppFilter('popular')">Популярные</button>
-      <button type="button" class="filter-chip" data-filter="tunnel" onclick="setAppFilter('tunnel')">В туннеле</button>
-      <button type="button" class="filter-chip" data-filter="include" onclick="setAppFilter('include')">В обходе</button>
-      <button type="button" class="filter-chip" data-filter="exclude" onclick="setAppFilter('exclude')">Исключения</button>
+    <div class="app-summary">
+      <span class="pill info" id="listMode">Режим: —</span>
+      <span class="pill" id="listUser">Свои домены: —</span>
+      <span class="pill" id="listLearned">Выучено: —</span>
+      <span class="pill" id="listNets">Подсети: —</span>
     </div>
-    <div class="searchbar"><input class="control" id="search" placeholder="Поиск по названию или пакету" oninput="renderApps()"><label class="switch-label"><input id="showSelected" type="checkbox" onchange="renderApps()"> Выбранные</label><label class="switch-label"><input id="showSystem" type="checkbox" onchange="loadApps()"> Системные</label><button type="button" class="md-button tonal" id="refreshApps" onclick="refreshApps()">Обновить</button></div>
-    <p class="hint"><strong>SMART подхватывает нужные установленные приложения автоматически.</strong> Метка AUTO означает встроенный каталог. «ВРУЧНУЮ» добавляет пакет в <code>apps.list</code>, «ТУННЕЛЬ» — в <code>warp_apps.list</code>, «ИСКЛЮЧИТЬ» — в <code>exclude.list</code>. Исключение всегда сильнее AUTO и ручного выбора. Изменения применяются сразу.</p>
-    <div id="apps"></div>
+
+    <label class="field">
+      <span>Режим выбора доменов</span>
+      <select class="control" id="hostlistMode" onchange="applyHostlistMode()">
+        <option value="AUTO">AUTO — свои домены плюс выученные автоматически</option>
+        <option value="LIST">LIST — только свои домены, без обучения</option>
+        <option value="ALL">ALL — все домены, кроме исключений</option>
+      </select>
+    </label>
+    <p class="hint">В режиме AUTO модуль сам замечает недоступный домен и добавляет его в свой список: три неудачи за минуту — и домен под обходом. Вести список вручную не обязательно.</p>
+
+    <div class="app-filter-chips">
+      <button type="button" class="filter-chip active" data-list="domains" onclick="selectList('domains')">Домены под обходом</button>
+      <button type="button" class="filter-chip" data-list="exclude-domains" onclick="selectList('exclude-domains')">Домены-исключения</button>
+      <button type="button" class="filter-chip" data-list="ipset" onclick="selectList('ipset')">Подсети под обходом</button>
+      <button type="button" class="filter-chip" data-list="ipset-exclude" onclick="selectList('ipset-exclude')">Подсети-исключения</button>
+      <button type="button" class="filter-chip" data-list="warp-domains" onclick="selectList('warp-domains')">Домены в туннель</button>
+      <button type="button" class="filter-chip" data-list="warp-nets" onclick="selectList('warp-nets')">Подсети в туннель</button>
+    </div>
+    <p class="hint" id="listHint">Одна запись на строку. Поддомены подхватываются сами: строка «youtube.com» покрывает и «www.youtube.com».</p>
+    <textarea class="control logbox" id="listEditor" rows="12" spellcheck="false" placeholder="Загрузка…"></textarea>
+    <div class="actions">
+      <button type="button" class="md-button" id="saveList" onclick="saveCurrentList()">Сохранить список</button>
+      <button type="button" class="md-button tonal" onclick="loadCurrentList()">Отменить правки</button>
+    </div>
+
+    <div class="app-summary" style="margin-top:14px">
+      <span class="pill" id="learnedCount">Выученные домены: —</span>
+    </div>
+    <p class="hint">Список, который модуль составил сам. Если провайдер снял блокировку, его можно очистить — он наполнится заново по факту.</p>
+    <div class="actions">
+      <button type="button" class="md-button tonal" onclick="showLearned()">Показать выученные</button>
+      <button type="button" class="md-button tonal" onclick="clearLearned()">Очистить обучение</button>
+    </div>
+    <textarea class="control logbox" id="learnedBox" rows="6" readonly placeholder="Нажмите «Показать выученные»"></textarea>
   </div>
 </section>
 
@@ -311,8 +342,8 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
             <li><strong>Не подключается Telegram/Exteragram:</strong> Откройте секцию «Точечный обход». Убедитесь, что статус — «Работает», а в списке приложений нажата кнопка «ТУННЕЛЬ». Если соединение застряло, нажмите «Сгенерировать новый ключ» или переключите «SIP DPI».</li>
             <li><strong>YouTube не воспроизводит 1080p/4K:</strong> Убедитесь, что переключатель <code>QUIC → TCP</code> включен. В секции «SMART AntiDPI» нажмите «Подобрать сейчас».</li>
             <li><strong>Не работает приложение банка / Госуслуг:</strong> Во вкладке «Приложения» найдите банк и нажмите «ИСКЛЮЧИТЬ».</li>
-            <li><strong>Как открыть WebUI на компьютере:</strong> Узнайте локальный IP-адрес телефона в Wi-Fi сети (например <code>192.168.1.83</code>) и откройте в браузере ПК адрес <code>http://192.168.1.83:8080/zapret2/</code>.</li>
-            <li><strong>Отправка логов для поддержки:</strong> Во вкладке «Диагностика» нажмите «Экспорт логов». Все журналы соберутся в папку <code>/sdcard/eCubz/logs/zapret2-android/</code>.</li>
+            <li><strong>Как открыть WebUI:</strong> обычный способ — страница модуля в KernelSU / APatch / MMRL, там ничего включать не нужно. Доступ через браузер — это отдельная опция <code>ENABLE_HTTP_API="1"</code> в <code>zapret2.conf</code>; после её включения и перезапуска адрес <code>http://127.0.0.1:8080/</code> открывается <em>на самом телефоне</em>. Сервер намеренно слушает только loopback и снаружи, с другого устройства в сети, недоступен.</li>
+            <li><strong>Отправка логов для поддержки:</strong> Во вкладке «Диагностика» нажмите «Экспорт логов» — журналы будут скопированы в <code>/sdcard/eCubz/</code>. Автоматически при загрузке логи туда больше не копируются: <code>/sdcard</code> читает любое приложение с доступом к хранилищу, а в журналах есть имя Wi-Fi сети, оператор и список установленных приложений.</li>
           </ul>
         </div>
       </details>
@@ -337,7 +368,7 @@ button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-labe
 <div id="notice" class="snackbar" role="status" aria-live="polite"></div>
 <button type="button" class="fab-top" id="fabTop" aria-label="Наверх" title="Наверх">↑</button>
 <script>
-const byId=id=>document.getElementById(id);let apps=[];let appLists={manual:new Set(),auto:new Set(),exclude:new Set(),autoEnabled:true};let appIcons=new Map();let iconLoadGeneration=0;let modDir='/data/adb/modules/zapret2-android';let noticeTimer;let startupPollTimer=0;let asyncExecSeq=0;const appApplyQueue=new Map();let appApplyTimer=0;let appApplyInFlight=false;
+const byId=id=>document.getElementById(id);let modDir='/data/adb/modules/zapret2-android';let noticeTimer;let startupPollTimer=0;let asyncExecSeq=0;
 let latestWarpHandshake=0;let latestWarpRunning=false;let latestWarpRx=0;let latestWarpTx=0;let liveTickerTimer=null;let livePollingTimer=null;let isPollingActive=false;let appVisibilitySyncTimer=0;let warpFormDirty=false;let warpSaveInFlight=false;
 const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
 
@@ -373,8 +404,8 @@ async function httpExec(command, args=[]){
   if(!action) return null;
   const argv = Array.from(args || []).slice(1).map(v=>String(v));
   const readOnly = new Set([
-    'status','json-status','json-hotspot-settings','json-strategies','json-apps',
-    'json-app-lists','json-diagnostics','json-warp-status','app-state',
+    'status','json-status','json-hotspot-settings','json-strategies',
+    'json-diagnostics','json-warp-status','json-hostlist','json-learned',
     'module-version','auto-status','log','nfqws-log'
   ]);
 
@@ -405,8 +436,10 @@ async function httpExec(command, args=[]){
       let resp;
       if(readOnly.has(action)){
         const sep=ep.includes('?')?'&':'?';
+        // Маркер обязателен и для чтения: без него api.sh отвечает 403.
         resp=await fetch(ep+sep+form.toString(), {
           method:'GET',
+          headers:{'X-Zapret2-WebUI':'1'},
           credentials:'same-origin',
           signal:ctrl?ctrl.signal:undefined
         });
@@ -595,9 +628,13 @@ async function loadStatus(options={}){
     if(data.version&&byId('heroVersion'))byId('heroVersion').textContent=data.version;
     
     const active=document.activeElement;
-    if(active!==byId('scope'))byId('scope').value=data.scope;
-    if(active!==byId('mode'))byId('mode').value=data.mode.toLowerCase();
-    if(active!==byId('quic'))byId('quic').value=data.quic_mode.toLowerCase();
+    if(active!==byId('quic'))byId('quic').value=String(data.quic_mode||'ON').toLowerCase();
+    if(active!==byId('hostlistMode'))byId('hostlistMode').value=String(data.hostlist_mode||'AUTO');
+    byId('listMode').textContent='Режим: '+String(data.hostlist_mode||'AUTO');
+    byId('listUser').textContent='Свои домены: '+(data.user_domains??0);
+    byId('listLearned').textContent='Выучено: '+(data.learned_domains??0);
+    byId('listNets').textContent='Подсети: '+(data.ipset_nets??0)+' / искл. '+(data.ipset_exclude_nets??0);
+    byId('learnedCount').textContent='Выученные домены: '+(data.learned_domains??0);
     if(byId('tcp'))byId('tcp').value=data.force_tcp||'1';
 
     byId('roleDown').textContent='Подключение: '+(data.tether_downstream||'Wi-Fi / USB');
@@ -654,7 +691,7 @@ async function runControl(command){
   scheduleStartupPoll();
   try{
     await control(command);
-    await Promise.all([loadStatus(),loadHotspot(),loadApps(),loadDiagnostics(),loadWarp()]);
+    await Promise.all([loadStatus(),loadHotspot(),loadDiagnostics(),loadWarp(),loadCurrentList()]);
     hideStartup();
     done('restart','Модуль перезапущен');
   }catch(error){
@@ -666,7 +703,7 @@ async function runControl(command){
 async function applyCore(){
   await busy('applyCore','Применение…');
   try{
-    await control('settings',byId('mode').value,byId('quic').value,byId('tcp').value);
+    await control('quicmode',byId('quic').value);
     await loadStatus();
     done('applyCore','Настройки телефона применены');
   }catch(error){
@@ -674,21 +711,6 @@ async function applyCore(){
   }
 }
 
-async function applyScope(){
-  if(byId('scope').value==='CUSTOM'){
-    toast('Для CUSTOM используйте тонкую настройку ниже');
-    return;
-  }
-  await busy('applyScope','Применение пресета…');
-  try{
-    await control('scope',byId('scope').value.toLowerCase());
-    await loadStatus();
-    await loadStrategies();
-    done('applyScope','Пресет применён');
-  }catch(error){
-    done('applyScope','Ошибка: '+error.message);
-  }
-}
 
 function validIpv4(value){const p=String(value).split('.');return p.length===4&&p.every(x=>/^\d{1,3}$/.test(x)&&Number(x)>=0&&Number(x)<=255)}
 function validDnsPool(value){const parts=String(value).trim().split(/\s+/).filter(Boolean);return parts.length>0&&parts.every(validIpv4)}
@@ -718,7 +740,6 @@ async function loadStrategies(){
     const data=JSON.parse(await control('json-strategies'));
     const active=document.activeElement;
     if(active!==byId('smartMode'))byId('smartMode').value=data.active==='CUSTOM'?'CUSTOM':'SMART';
-    if(active!==byId('autoAppsEnabled'))byId('autoAppsEnabled').value=String(data.auto_apps_enabled??'1');
     if(active!==byId('strategyCustom'))byId('strategyCustom').value=data.custom||'';
     byId('smartYoutubeProfile').textContent='YouTube / Google Video · '+(data.youtube_domains||0)+' доменов';
     byId('smartGeneralProfile').textContent=data.auto_profile_name==='DIRECT'?'Обход отключён · DIRECT':'AUTO — весь TLS/443 · General — HTTP/80';
@@ -733,9 +754,9 @@ async function loadStrategies(){
 async function saveSmart(){
   await busy('saveSmart','Сохранение SMART и перезапуск nfqws2…');
   try{
-    const mode=byId('smartMode').value,autoApps=byId('autoAppsEnabled').value,custom=byId('strategyCustom').value.trim();
-    await control('save-smart',autoApps,mode,custom);
-    await Promise.all([loadStatus(),loadStrategies(),loadApps()]);
+    const mode=byId('smartMode').value,custom=byId('strategyCustom').value.trim();
+    await control('save-smart',mode,custom);
+    await Promise.all([loadStatus(),loadStrategies()]);
     done('saveSmart',(mode==='SMART'?'SMART включён':'CUSTOM включён')+' · AUTO-приложения '+(autoApps==='1'?'ON':'OFF'));
   }catch(error){
     done('saveSmart','Ошибка: '+error.message);
@@ -830,280 +851,100 @@ async function showNfqwsLog(){
 function extractFirstJson(text){const src=String(text??'').trim();let start=-1,open='',close='';for(let i=0;i<src.length;i++){if(src[i]==='['||src[i]==='{'){start=i;open=src[i];close=open==='['?']':'}';break}}if(start<0)return null;let depth=0,inString=false,escaped=false;for(let i=start;i<src.length;i++){const ch=src[i];if(inString){if(escaped){escaped=false;continue}if(ch==='\\'){escaped=true;continue}if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch===open)depth++;else if(ch===close){depth--;if(depth===0)return src.slice(start,i+1)}}return null}
 function parseJson(value,fallback=[]){if(value===undefined||value===null||value==='')return fallback;if(typeof value!=='string')return value;const text=value.trim();if(!text)return fallback;try{const parsed=JSON.parse(text);if(typeof parsed==='string'){const nested=parsed.trim();if((nested.startsWith('[')&&nested.endsWith(']'))||(nested.startsWith('{')&&nested.endsWith('}')))return JSON.parse(nested)}return parsed}catch(firstError){const candidate=extractFirstJson(text);if(candidate){try{return JSON.parse(candidate)}catch(_){}}throw firstError}}
 function normalizePackageNames(value){const raw=parseJson(value,[]);return Array.isArray(raw)?[...new Set(raw.map(item=>typeof item==='string'?item:(item?.packageName||item?.pkg||'')).filter(Boolean))]:[]}
-function parsePackageListText(value){return new Set(String(value??'').split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&!line.startsWith('#')&&/^[A-Za-z0-9_.]+$/.test(line)))}
-async function packageInfo(names){if(typeof window.ksu?.getPackagesInfo!=='function')return [];let result=[];for(let index=0;index<names.length;index+=80){try{const chunk=parseJson(await bridgeCall('getPackagesInfo',JSON.stringify(names.slice(index,index+80))),[]);if(Array.isArray(chunk))result=result.concat(chunk)}catch(error){console.warn('getPackagesInfo failed',error);break}}return result}
+// ---------------------------------------------------------------------------
+// Списки доменов и подсетей.
+// Отбор по приложениям убран: каталог пакетов отставал от реальности, а домен
+// заблокирован одинаково для любого клиента, который к нему ходит.
+// ---------------------------------------------------------------------------
+const LIST_META={
+  'domains':        {title:'Домены под обходом',    hint:'Одна запись на строку. Поддомены подхватываются сами: строка «youtube.com» покрывает и «www.youtube.com».'},
+  'exclude-domains':{title:'Домены-исключения',     hint:'Эти домены модуль не трогает никогда, в любом режиме. Сюда — банки, госуслуги, платёжные шлюзы.'},
+  'ipset':          {title:'Подсети под обходом',   hint:'IP или CIDR, по одному на строку. Нужно там, где сервис ходит по адресу и имя хоста неизвестно.'},
+  'ipset-exclude':  {title:'Подсети-исключения',    hint:'IP или CIDR, которые не трогать никогда. Приоритет выше всех остальных списков.'},
+  'warp-domains':   {title:'Домены в туннель',      hint:'Домены, которые уводятся в туннель WARP целиком. Нужны, когда обход DPI сайт не поднимает.'},
+  'warp-nets':      {title:'Подсети в туннель',     hint:'IP или CIDR, уводимые в туннель. Работает только при включённом туннеле.'}
+};
+let currentList='domains';
 
-async function appListState(){
-  let backendError=null;
+function selectList(name){
+  if(!LIST_META[name])return;
+  currentList=name;
+  document.querySelectorAll('.filter-chip').forEach(el=>el.classList.toggle('active',el.dataset.list===name));
+  byId('listHint').textContent=LIST_META[name].hint;
+  loadCurrentList();
+}
+
+async function loadCurrentList(){
+  const box=byId('listEditor');
+  box.value='';box.placeholder='Загрузка…';
   try{
-    const state=parseJson(await control('json-app-lists'),{});
-    if(state&&typeof state==='object'&&Array.isArray(state.manual)&&Array.isArray(state.auto)&&Array.isArray(state.exclude)){
-      return{
-        manual:new Set(state.manual),
-        auto:new Set(state.auto),
-        exclude:new Set(state.exclude),
-        warp:new Set(state.warp||[]),
-        autoEnabled:String(state.auto_enabled??'1')==='1'
-      };
-    }
+    const text=await readListFile(currentList);
+    box.value=text;
+    box.placeholder='Список пуст. Добавьте записи по одной на строку.';
   }catch(error){
-    backendError=error;
-    console.warn('backend app list state failed',error);
+    box.placeholder='Не удалось прочитать список: '+error.message;
   }
+}
+
+const LIST_FILES={
+  'domains':'lists/user.list','exclude-domains':'lists/exclude_domains.list',
+  'ipset':'lists/ipset.list','ipset-exclude':'lists/ipset_exclude.list',
+  'warp-domains':'lists/warp_domains.list','warp-nets':'lists/warp_bypass_nets.list'
+};
+
+async function readListFile(name){
+  const rel=LIST_FILES[name];
+  if(typeof window.ksu?.readFile==='function'){
+    try{return String(await bridgeCall('readFile',modDir+'/'+rel)??'');}catch(_){}
+  }
+  return '';
+}
+
+async function saveCurrentList(){
+  const button=byId('saveList');
+  button.disabled=true;
   try{
-    if(typeof window.ksu?.readFile==='function'){
-      const[manualRaw,autoRaw,excludeRaw,warpRaw]=await Promise.all([
-        bridgeCall('readFile',modDir+'/lists/apps.list').catch(()=>bridgeCall('readFile',modDir+'/apps.list')),
-        bridgeCall('readFile',modDir+'/lists/auto_apps.list').catch(()=>bridgeCall('readFile',modDir+'/auto_apps.list')),
-        bridgeCall('readFile',modDir+'/lists/exclude.list').catch(()=>bridgeCall('readFile',modDir+'/exclude.list')),
-        bridgeCall('readFile',modDir+'/lists/warp_apps.list').catch(()=>bridgeCall('readFile',modDir+'/warp_apps.list'))
-      ]);
-      return{
-        manual:parsePackageListText(manualRaw),
-        auto:parsePackageListText(autoRaw),
-        exclude:parsePackageListText(excludeRaw),
-        warp:parsePackageListText(warpRaw),
-        autoEnabled:true
-      };
-    }
+    await control('replace-list',currentList,byId('listEditor').value);
+    toast(LIST_META[currentList].title+': сохранено');
+    await refreshStatus();
   }catch(error){
-    console.warn('direct readFile app list state failed',error);
-  }
-  if(backendError)console.warn('app list state unavailable',backendError);
-  return{manual:new Set(),auto:new Set(),exclude:new Set(),warp:new Set(),autoEnabled:true};
-}
-
-function applyAppListState(selected){
-  appLists=selected;
-  for(const app of apps){
-    const excluded=selected.exclude?.has(app.pkg),
-          warp=selected.warp?.has(app.pkg),
-          manual=selected.manual?.has(app.pkg),
-          autoCandidate=selected.auto?.has(app.pkg);
-    app.manual=manual;
-    app.warp=warp;
-    app.autoCandidate=autoCandidate;
-    app.auto=selected.autoEnabled&&autoCandidate;
-    app.include=!excluded&&!warp&&(manual||app.auto);
-    app.exclude=excluded;
-  }
-}
-
-async function syncAppListState({rerender=true}={}){
-  const selected=await appListState();
-  applyAppListState(selected);
-  if(rerender){
-    updateAppSummary(byId('appSource').textContent.replace(/^Источник:\s*/,''),apps.length);
-    renderApps();
-  }
-  return selected;
-}
-
-async function directPackageCatalog(showSystem){
-  const k=window.ksu||{};
-  if(typeof k.listPackages==='function'){
-    const type=showSystem?'all':'user';
-    const names=normalizePackageNames(await bridgeCall('listPackages',type));
-    let system=new Set();
-    if(showSystem)system=new Set(normalizePackageNames(await bridgeCall('listPackages','system')));
-    return{names,system,source:'KernelSU Next API · listPackages'};
-  }
-  if(showSystem&&typeof k.listAllPackages==='function'){
-    const names=normalizePackageNames(await bridgeCall('listAllPackages'));
-    let system=new Set();
-    if(typeof k.listSystemPackages==='function')system=new Set(normalizePackageNames(await bridgeCall('listSystemPackages')));
-    return{names,system,source:'KernelSU API · legacy'};
-  }
-  if(!showSystem&&typeof k.listUserPackages==='function')return{names:normalizePackageNames(await bridgeCall('listUserPackages')),system:new Set(),source:'KernelSU API · legacy'};
-  return null;
-}
-
-function updateAppSummary(source,total){
-  const installedAuto=apps.filter(app=>app.autoCandidate).length,installedManual=apps.filter(app=>app.manual).length,installedWarp=apps.filter(app=>app.warp).length,installedExcluded=apps.filter(app=>app.exclude).length;
-  byId('appSource').textContent='Источник: '+(source||'—');
-  byId('appSelected').textContent='AUTO '+(appLists.autoEnabled?installedAuto:'OFF')+' · ручных '+installedManual+' · туннель '+installedWarp+' · исключено '+installedExcluded;
-  byId('appInfo').textContent='Установленных приложений: '+total+' · SMART применяет только реально установленные AUTO/ручные пакеты';
-}
-
-async function hydrateAppIcons(packages,generation){
-  const k=window.ksu||{};
-  if(typeof k.getPackagesIcons!=='function'||generation!==iconLoadGeneration)return;
-  const pending=[...new Set(packages)].filter(pkg=>!appIcons.has(pkg));
-  for(let index=0;index<pending.length&&generation===iconLoadGeneration;index+=32){
-    const names=pending.slice(index,index+32);
-    try{
-      const rows=parseJson(await bridgeCall('getPackagesIcons',JSON.stringify(names),48),[]);
-      if(Array.isArray(rows))for(const row of rows){if(row?.packageName)appIcons.set(row.packageName,row.icon||'')}
-    }catch(error){
-      console.warn('getPackagesIcons failed',error);
-      break;
-    }
-    for(const img of document.querySelectorAll('img[data-icon-pkg]')){
-      const icon=appIcons.get(img.dataset.iconPkg);
-      if(icon){img.src=icon;img.hidden=false}
-    }
-    await new Promise(resolve=>setTimeout(resolve,0));
-  }
-}
-
-function annotateSharedUids(){
-  const byUid=new Map();
-  for(const app of apps){
-    const uid=Number(app.uid);
-    if(!Number.isFinite(uid)||uid<=0)continue;
-    if(!byUid.has(uid))byUid.set(uid,[]);
-    byUid.get(uid).push(app);
-  }
-  for(const group of byUid.values())if(group.length>1){
-    const names=group.map(x=>x.appLabel||x.pkg);
-    for(const app of group)app.sharedUid='Общий UID: '+names.filter(n=>n!==(app.appLabel||app.pkg)).join(', ');
-  }
-}
-
-async function loadApps(){
-  const holder=byId('apps'),showSystem=byId('showSystem').checked;
-  byId('appInfo').textContent='Загрузка приложений…';
-  byId('appSource').textContent='Источник: проверка…';
-  holder.innerHTML='<div class="app-empty">Получаю список установленных приложений…</div>';
-  try{
-    const selected=await appListState();
-    appLists=selected;
-    let catalog=null;
-    try{catalog=await directPackageCatalog(showSystem)}catch(error){console.warn('direct package API failed',error)}
-    if(catalog&&catalog.names.length){
-      const info=await packageInfo(catalog.names),infoByPkg=new Map(info.filter(item=>item&&item.packageName&&!item.error).map(item=>[item.packageName,item]));
-      apps=catalog.names.map(pkg=>{
-        const meta=infoByPkg.get(pkg)||{},excluded=selected.exclude.has(pkg),warp=selected.warp?.has(pkg)||false,manual=selected.manual.has(pkg),autoCandidate=selected.auto.has(pkg),auto=selected.autoEnabled&&autoCandidate;
-        return{...meta,pkg,packageName:pkg,appLabel:meta.appLabel||pkg,isSystem:catalog.system.has(pkg)||!!meta.isSystem,manual,warp,autoCandidate,auto,include:!excluded&&!warp&&(manual||auto),exclude:excluded};
-      });
-      annotateSharedUids();
-      updateAppSummary(catalog.source,apps.length);
-      renderApps();
-      return;
-    }
-    const states=parseJson(await control('json-apps'),[]);
-    if(!Array.isArray(states))throw new Error('Некорректный ответ списка пакетов');
-    const visible=states.filter(item=>showSystem||!item.isSystem),names=visible.map(item=>item.pkg),info=await packageInfo(names),infoByPkg=new Map(info.filter(item=>item&&item.packageName&&!item.error).map(item=>[item.packageName,item]));
-    apps=visible.map(state=>{
-      const excluded=selected.exclude.has(state.pkg)||!!state.exclude,warp=selected.warp?.has(state.pkg)||!!state.warp,manual=selected.manual.has(state.pkg)||!!state.manual,autoCandidate=selected.auto.has(state.pkg)||!!state.auto,auto=selected.autoEnabled&&autoCandidate;
-      return{...state,...(infoByPkg.get(state.pkg)||{}),pkg:state.pkg,packageName:state.pkg,appLabel:infoByPkg.get(state.pkg)?.appLabel||state.pkg,isSystem:!!state.isSystem,manual,warp,autoCandidate,auto,include:!excluded&&!warp&&(manual||auto),exclude:excluded};
-    });
-    annotateSharedUids();
-    updateAppSummary('Android PackageManager fallback',apps.length);
-    renderApps();
-  }catch(error){
-    apps=[];
-    byId('appInfo').textContent='Не удалось получить приложения';
-    byId('appSource').textContent='Источник: ошибка';
-    holder.innerHTML='<div class="app-empty"><b>Список приложений недоступен.</b><br>'+escapeHtml(error.message)+'<br><small>Нажмите «Обновить». Если ошибка останется — соберите диагностику.</small></div>';
-  }
-}
-
-async function refreshApps(){
-  await busy('refreshApps','Обновление списка приложений…');
-  try{
-    await loadApps();
-    done('refreshApps','Список приложений обновлён');
-  }catch(error){
-    done('refreshApps','Ошибка: '+error.message);
-  }
-}
-
-const POPULAR_PACKAGES=new Set([
-  'com.google.android.youtube','com.google.android.youtube.tv','app.revanced.android.youtube','com.vanced.android.youtube',
-  'org.telegram.messenger','com.telegram.messenger','org.telegram.messenger.web','org.telegram.messenger.beta',
-  'com.exteragram.messenger','com.ayugram.messenger','com.ayugram.messenger.beta','com.radolyn.ayugram','nekox.messenger','org.thunderdog.challegram',
-  'com.discord','com.discord.canary',
-  'com.instagram.android','com.instagram.lite','com.instagram.barcelona',
-  'com.twitter.android','com.twitter.android.lite',
-  'com.android.chrome','org.mozilla.firefox','org.mozilla.fenix','com.opera.browser','com.brave.browser','com.yandex.browser',
-  'com.spotify.music','tv.twitch.android.app','com.reddit.frontpage',
-  'com.openai.chatgpt','com.anthropic.claude','ai.x.grok'
-]);
-
-let currentAppFilter='all';
-
-function setAppFilter(filterType){
-  currentAppFilter=filterType;
-  document.querySelectorAll('.filter-chip').forEach(el=>{
-    el.classList.toggle('active',el.dataset.filter===filterType);
-  });
-  renderApps();
-}
-
-function renderApps(){
-  const query=byId('search').value.toLowerCase().trim(),selectedOnly=byId('showSelected')?.checked;
-  const filtered=apps.filter(app=>{
-    if(query&&!(app.pkg+' '+(app.appLabel||'')).toLowerCase().includes(query))return false;
-    if(selectedOnly&&!app.include&&!app.exclude&&!app.warp)return false;
-    if(currentAppFilter==='tunnel')return app.warp;
-    if(currentAppFilter==='include')return app.manual||(app.auto&&appLists.autoEnabled);
-    if(currentAppFilter==='exclude')return app.exclude;
-    if(currentAppFilter==='popular')return POPULAR_PACKAGES.has(app.pkg)||app.autoCandidate;
-    return true;
-  }).sort((a,b)=>(a.appLabel||a.pkg).localeCompare(b.appLabel||b.pkg,'ru'));
-  const shown=filtered.slice(0,600);
-  const generation=++iconLoadGeneration;
-  byId('apps').innerHTML=shown.map(app=>{
-    const label=app.appLabel||app.pkg,initial=escapeHtml((label.trim()[0]||'?').toUpperCase()),pkgAttr=escapeHtml(app.pkg),knownIcon=appIcons.get(app.pkg)||'',autoBadge=app.autoCandidate?'<span class="auto-badge '+(appLists.autoEnabled?'':'off')+'">AUTO'+(appLists.autoEnabled?'':' OFF')+'</span>':'';
-    return '<div class="app-row '+((app.include||app.exclude||app.warp)?'selected':'')+'" data-app-row="'+pkgAttr+'"><span class="app-icon" aria-hidden="true"><span>'+initial+'</span><img data-icon-pkg="'+pkgAttr+'" '+(knownIcon?'src="'+escapeHtml(knownIcon)+'"':'hidden')+' onerror="this.hidden=true"></span><span class="app-name"><b>'+escapeHtml(label)+'</b><small>'+pkgAttr+(app.isSystem?' · системное':'')+(app.sharedUid?' · ⚠ '+escapeHtml(app.sharedUid):'')+'</small>'+autoBadge+'<span class="app-apply">Применяю правила…</span></span><label class="app-chip include"><input type="checkbox" '+(app.manual?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'manual\',this)"> ВРУЧНУЮ</label><label class="app-chip warp"><input type="checkbox" '+(app.warp?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'warp\',this)"> ТУННЕЛЬ</label><label class="app-chip exclude"><input type="checkbox" '+(app.exclude?'checked ':'')+'onchange="toggleApp('+JSON.stringify(app.pkg)+',\'exclude\',this)"> ИСКЛЮЧИТЬ</label></div>';
-  }).join('')||(apps.length?'<div class="app-empty">По этому фильтру ничего не найдено.</div>':'<div class="app-empty">Установленные приложения не получены.</div>');
-  if(filtered.length>shown.length)byId('apps').insertAdjacentHTML('beforeend','<div class="app-empty">Показаны первые '+shown.length+' из '+filtered.length+'. Уточните поиск.</div>');
-  void hydrateAppIcons(shown.map(app=>app.pkg),generation);
-}
-
-function markQueuedApp(pkg,desired){
-  const app=apps.find(item=>item.pkg===pkg);
-  if(!app)return;
-  app.manual=desired==='include';
-  app.exclude=desired==='exclude';
-  app.warp=desired==='warp';
-  app.auto=appLists.autoEnabled&&app.autoCandidate;
-  app.include=!app.exclude&&!app.warp&&(app.manual||app.auto);
-  const row=document.querySelector('[data-app-row="'+CSS.escape(pkg)+'"]');
-  row?.classList.add('pending');
-  row?.querySelectorAll('input').forEach(el=>el.disabled=true);
-}
-
-function scheduleAppFlush(){
-  clearTimeout(appApplyTimer);
-  appApplyTimer=setTimeout(()=>void flushAppQueue(),650);
-}
-
-async function flushAppQueue(){
-  if(appApplyInFlight||!appApplyQueue.size)return;
-  appApplyInFlight=true;
-  const batch=[...appApplyQueue.entries()];
-  appApplyQueue.clear();
-  try{
-    for(const [pkg,state] of batch)await control('app-state-set',pkg,state);
-    await control('sync-apps');
-    const selected=await syncAppListState({rerender:false});
-    applyAppListState(selected);
-    updateAppSummary(byId('appSource').textContent.replace(/^Источник:\s*/,''),apps.length);
-    renderApps();
-    toast(batch.length===1?'Правила приложения применены':'Применено приложений: '+batch.length);
-  }catch(error){
-    try{await control('sync-apps')}catch(_){}
-    try{await syncAppListState()}catch(_){}
-    renderApps();
-    toast('Ошибка применения: '+error.message);
+    toast('Не удалось сохранить: '+error.message);
   }finally{
-    appApplyInFlight=false;
-    if(appApplyQueue.size)scheduleAppFlush();
+    button.disabled=false;
   }
 }
 
-function toggleApp(pkg,list,input){
-  const app=apps.find(item=>item.pkg===pkg);
-  if(!app)return;
-  const checked=input.checked;
-  const desired=list==='manual'?(checked?'include':'none'):list==='warp'?(checked?'warp':'none'):(checked?'exclude':'none');
-  appApplyQueue.set(pkg,desired);
-  markQueuedApp(pkg,desired);
-  const autoRestores=desired==='none'&&app.autoCandidate&&appLists.autoEnabled;
-  toast((app.appLabel||pkg)+': '+(desired==='exclude'?'исключаю':desired==='include'?'добавляю вручную':desired==='warp'?'направляю в туннель':autoRestores?'возвращаю AUTO':'снимаю ручной выбор')+'…');
-  scheduleAppFlush();
+async function applyHostlistMode(){
+  const mode=byId('hostlistMode').value;
+  try{
+    await control('hostlist-mode',mode);
+    toast('Режим доменов: '+mode);
+    await refreshStatus();
+  }catch(error){
+    toast('Не удалось сменить режим: '+error.message);
+  }
+}
+
+async function showLearned(){
+  const box=byId('learnedBox');
+  box.value='Загрузка…';
+  try{
+    const list=parseJson(await control('json-learned'),[]);
+    box.value=Array.isArray(list)&&list.length?list.join('\n'):'Пока ничего не выучено.';
+  }catch(error){
+    box.value='Не удалось получить список: '+error.message;
+  }
+}
+
+async function clearLearned(){
+  try{
+    await control('hostlist-clear');
+    byId('learnedBox').value='';
+    toast('Обучение сброшено');
+    await refreshStatus();
+  }catch(error){
+    toast('Не удалось очистить: '+error.message);
+  }
 }
 
 function syncWarpControls(){
@@ -1191,6 +1032,17 @@ async function saveWarp(){
   }catch(error){
     warpSaveInFlight=false;
     done('saveWarpBtn','Ошибка: '+error.message);
+  }
+}
+
+async function restartWarp(){
+  await busy('restartWarpBtn','Перезапуск туннеля…');
+  try{
+    await control('warp-restart');
+    await loadWarp();
+    done('restartWarpBtn','Туннель перезапускается, подбор профиля начат заново');
+  }catch(error){
+    done('restartWarpBtn','Ошибка: '+error.message);
   }
 }
 
@@ -1292,7 +1144,7 @@ function installMotion(){
       if(!visible)return;
       nav.forEach(btn=>btn.classList.toggle('active',btn.dataset.target===visible.target.id));
     },{rootMargin:'-16% 0px -68% 0px',threshold:[0,.15,.35,.6]});
-    ['scopeSection','warpSection','hotspotSection','strategySection','diagSection','appsSection'].forEach(id=>{
+    ['scopeSection','warpSection','hotspotSection','strategySection','diagSection','listsSection'].forEach(id=>{
       const el=byId(id);
       if(el)navObserver.observe(el);
     });
@@ -1347,6 +1199,6 @@ syncSmartControls();
 syncWarpControls();
 void loadModuleIdentity();
 startLiveUpdates();
-Promise.all([loadStatus(),loadWarp(),loadHotspot(),loadStrategies(),loadDiagnostics(),loadApps()]);
+Promise.all([loadStatus(),loadWarp(),loadHotspot(),loadStrategies(),loadDiagnostics(),loadCurrentList()]);
 </script>
 </body></html>

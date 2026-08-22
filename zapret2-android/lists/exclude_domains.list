@@ -1,17 +1,250 @@
 # Список доменов, ИСКЛЮЧАЕМЫХ из DPI-десинка Zapret2 eCubz (--hostlist-exclude)
 # Автор: eCubz (https://t.me/eCubz) | Telegram: https://t.me/module_ecubz
-# Трафик к этим доменам проходит напрямую без модификации пакетов.
+#
+# Трафик к этим доменам проходит напрямую, без модификации пакетов.
+# Здесь собраны российские сервисы: банки, госуслуги, платёжные шлюзы,
+# операторы связи, медицина, транспорт, торговля, СМИ. Обход им не нужен,
+# а вмешательство в TCP части из них (особенно банковским приложениям
+# с проверкой целостности соединения) только мешает.
+#
+# ФОРМАТ: одно имя на строку. nfqws2 сам применяет запись ко ВСЕМ поддоменам,
+# поэтому достаточно домена второго уровня: gov.ru закрывает и nalog.gov.ru,
+# и zakupki.gov.ru. Писать поддомены отдельными строками не нужно.
+#
+# Этот список имеет приоритет над user.list и над авто-обучением: если домен
+# здесь, он не попадёт в обход, даже если nfqws2 сочтёт его заблокированным.
 
-# --- Государственные сервисы ---
+
+# --- Государственные порталы и органы власти ---
 gosuslugi.ru
 gov.ru
+government.ru
+kremlin.ru
+pravo.gov.ru
 nalog.ru
+mvd.ru
+gibdd.ru
+fssprus.ru
+rosreestr.ru
+pfrf.ru
+fss.ru
+rospotrebnadzor.ru
+fedresurs.ru
+vsrf.ru
+sudrf.ru
+arbitr.ru
+mos-gorsud.ru
+notariat.ru
+reestr-zalogov.ru
 mos.ru
+mosreg.ru
 spb.ru
-pfr.gov.ru
-cbr.ru
+tatarstan.ru
+edu.ru
+rustest.ru
 
-# --- Яндекс и Алиса ---
+# --- Центробанк, НСПК, платёжная система МИР ---
+cbr.ru
+nspk.ru
+mirpay.ru
+mironline.ru
+privetmir.ru
+
+# --- Банки ---
+sberbank.ru
+sber.ru
+sberbank.com
+sbrf.ru
+tbank.ru
+tinkoff.ru
+tcsbank.ru
+alfabank.ru
+alfabank.com
+vtb.ru
+vtb24.ru
+vtb.com
+gazprombank.ru
+gpb.ru
+sovcombank.ru
+halvacard.ru
+raiffeisen.ru
+open.ru
+psbank.ru
+postbank.ru
+rshb.ru
+mkb.ru
+uralsib.ru
+rosbank.ru
+akbars.ru
+ubrr.ru
+bspb.ru
+zenit.ru
+avangard.ru
+centrinvest.ru
+rnkb.ru
+vbrr.ru
+novikom.ru
+domrf.ru
+domrfbank.ru
+mtsbank.ru
+ozonbank.ru
+otpbank.ru
+homecredit.ru
+rencredit.ru
+forabank.ru
+lockobank.ru
+tkbbank.ru
+modulbank.ru
+tochka.com
+unicreditbank.ru
+banki.ru
+sravni.ru
+
+# --- Платёжные сервисы и эквайринг ---
+yoomoney.ru
+yookassa.ru
+qiwi.com
+qiwi.ru
+webmoney.ru
+robokassa.ru
+cloudpayments.ru
+paykeeper.ru
+best2pay.net
+payanyway.ru
+unitpay.ru
+paymaster.ru
+
+# --- Биржи, брокеры, страхование ---
+moex.com
+moex.ru
+nsd.ru
+finam.ru
+bcs.ru
+open-broker.ru
+alor.ru
+sogaz.ru
+ingos.ru
+reso.ru
+alfastrah.ru
+rgs.ru
+vsk.ru
+renins.ru
+autoins.ru
+nsis.ru
+
+# --- ЭДО, ЭЦП, бухгалтерия, госзакупки ---
+kontur.ru
+skbkontur.ru
+diadoc.ru
+taxcom.ru
+tensor.ru
+sbis.ru
+1c.ru
+1cfresh.com
+cryptopro.ru
+rutoken.ru
+roseltorg.ru
+sberbank-ast.ru
+b2b-center.ru
+rts-tender.ru
+tektorg.ru
+
+# --- Операторы связи и интернет-провайдеры ---
+mts.ru
+megafon.ru
+beeline.ru
+tele2.ru
+t2.ru
+rostelecom.ru
+yota.ru
+wink.ru
+onlime.ru
+dom.ru
+ttk.ru
+mgts.ru
+
+# --- Медицина и аптеки ---
+emias.info
+mosgorzdrav.ru
+invitro.ru
+gemotest.ru
+helix.ru
+cmd-online.ru
+kdl.ru
+medsi.ru
+sberhealth.ru
+prodoctorov.ru
+apteka.ru
+eapteka.ru
+zdravcity.ru
+rigla.ru
+asna.ru
+gorzdrav.org
+
+# --- Транспорт и путешествия ---
+rzd.ru
+tutu.ru
+aviasales.ru
+pobeda.aero
+aeroflot.ru
+s7.ru
+utair.ru
+rossiya-airlines.com
+nordwindairlines.ru
+uralairlines.ru
+smartavia.com
+platon.ru
+avtodor-tr.ru
+mosmetro.ru
+
+# --- Маркетплейсы и розница ---
+ozon.ru
+ozone.ru
+wildberries.ru
+wb.ru
+avito.ru
+youla.ru
+megamarket.ru
+aliexpress.ru
+dns-shop.ru
+mvideo.ru
+eldorado.ru
+citilink.ru
+technopark.ru
+holodilnik.ru
+onlinetrade.ru
+vseinstrumenti.ru
+petrovich.ru
+lemanapro.ru
+obi.ru
+lamoda.ru
+sportmaster.ru
+detmir.ru
+letu.ru
+goldapple.ru
+rive-gauche.ru
+
+# --- Продукты и доставка ---
+magnit.ru
+pyaterochka.ru
+perekrestok.ru
+lenta.com
+okeydostavka.ru
+auchan.ru
+metro-cc.ru
+vkusvill.ru
+samokat.ru
+kuper.ru
+dixy.ru
+globus.ru
+azbukavkusa.ru
+chizhik.club
+delivery-club.ru
+dodopizza.ru
+vkusnoitochka.ru
+sushiwok.ru
+
+# --- Яндекс ---
 ya.ru
 yandex.ru
 yandex.net
@@ -19,42 +252,123 @@ yandex.org
 yandex.by
 yandex.kz
 yastatic.net
+yandexcloud.net
+dzen.ru
+kinopoisk.ru
+auto.ru
 
-# --- Банки и финансовые сервисы ---
-sberbank.ru
-sber.ru
-tbank.ru
-tinkoff.ru
-alfabank.ru
-vtb.ru
-gpb.ru
-gazprombank.ru
-sovcombank.ru
-raiffeisen.ru
-open.ru
-psbank.ru
-postbank.ru
-nspk.ru
-mirpay.ru
-paycon.ru
-
-# --- Маркетплейсы и российские сервисы ---
-ozon.ru
-ozone.ru
-wildberries.ru
-wb.ru
+# --- VK, Mail.ru и российские соцсети ---
 vk.com
 vk.ru
 vkvideo.ru
+vkuser.net
+userapi.com
 ok.ru
 mycdn.me
 okcdn.ru
 mail.ru
 cloud.mail.ru
+imgsmail.ru
+sferum.ru
+
+# --- Видео, музыка, онлайн-кинотеатры ---
 rutube.ru
+ivi.ru
+okko.tv
+premier.one
+more.tv
+start.ru
+kion.ru
+smotrim.ru
+1tv.ru
+ntv.ru
+ren.tv
+tvzvezda.ru
+zvuk.com
+
+# --- Классифайды, работа, карты, погода ---
+hh.ru
+superjob.ru
+rabota.ru
+zarplata.ru
+2gis.ru
+2gis.com
+cian.ru
+domclick.ru
+irr.ru
+farpost.ru
+drom.ru
+gismeteo.ru
+meteoinfo.ru
+
+# --- СМИ и порталы ---
+rambler.ru
+lenta.ru
+rbc.ru
+ria.ru
+tass.ru
+kommersant.ru
+vedomosti.ru
+iz.ru
+gazeta.ru
+kp.ru
+aif.ru
+interfax.ru
+mk.ru
+fontanka.ru
+e1.ru
+74.ru
+ngs.ru
+sport-express.ru
+championat.com
+sports.ru
+habr.com
+pikabu.ru
 4pda.to
 4pda.ru
 4pda.client
-chizhik.club
+liveinternet.ru
+ucoz.ru
+
+# --- Образование ---
+uchi.ru
+yaklass.ru
+skyeng.ru
+netology.ru
+skillbox.ru
+geekbrains.ru
+
+# --- Российский софт, хостинг, облака ---
+kaspersky.ru
+kaspersky.com
+drweb.ru
+drweb.com
+reg.ru
+timeweb.ru
+timeweb.com
+beget.com
+nic.ru
+ru-center.ru
+selectel.ru
+sbercloud.ru
+firstvds.ru
+
+# --- Прочее ---
 starline.ru
 starline-online.ru
+
+# --- Зона .рф (в SNI передаётся punycode) ---
+# госуслуги.рф
+xn--c1aapkosapc.xn--p1ai
+# дом.рф
+xn--d1aqf.xn--p1ai
+# налог.рф
+xn--80agxgh.xn--p1ai
+# мвд.рф
+xn--b1aew.xn--p1ai
+# гибдд.рф
+xn--90adear.xn--p1ai
+# почта.рф
+xn--80a1acny.xn--p1ai
+# мос.рф
+xn--l1aej.xn--p1ai

@@ -5,7 +5,17 @@ MODDIR=${0%/*}
 RUN_DIR="$MODDIR/run"
 [ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
 : "${AUTO_TEST_QNUM:=201}" "${AUTO_TEST_PORT_MIN:=39000}" "${AUTO_TEST_PORT_MAX:=39049}"
-pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+# Зомби и умирающие процессы не отдают cmdline: ядро держит блокировку памяти
+# задачи, и чтение виснет без таймаута. /proc/PID/stat читается без неё, поэтому
+# сначала спрашиваем состояние. Полный вариант с потолком по времени — в
+# service.sh; здесь достаточно отсечь мёртвые PID.
+pid_cmdline() {
+  local st
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
 pid_owned() {
   pid="$1" kind="$2"
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
@@ -33,7 +43,7 @@ for proc in /proc/[0-9]*; do
   if [ "$comm" = "nfqws2" ] && [ "$cwd" = "$MODDIR/bin" ]; then
     kill -TERM "${proc##*/}" 2>/dev/null
   fi
-  cmd=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null)
+  cmd=$(pid_cmdline "${proc##*/}")
   if printf '%s' "$cmd" | grep -Fq "$MODDIR/webroot" && printf '%s' "$cmd" | grep -Fq "httpd"; then
     kill -TERM "${proc##*/}" 2>/dev/null
   fi
@@ -44,82 +54,111 @@ sh "$MODDIR/vpn-routing.sh" cleanup 2>/dev/null
 IPT="iptables -w 5"
 IP6T="ip6tables -w 5"
 
-while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
-while $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN 2>/dev/null; do :; done
-while $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
-while $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
-while $IP6T -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass 2>/dev/null; do :; done
-while $IP6T -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN 2>/dev/null; do :; done
+# Раньше каждое снятие правила выглядело как `while $IPT -D ...; do :; done` —
+# цикл без предела. В service.sh для этого давно есть delete_jump_bounded с
+# потолком в восемь повторов; здесь тот же приём. Дублирующихся правил столько
+# не бывает, а зациклиться на удалении при удалении модуля — худший момент.
+del_bounded() {
+  local attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    "$@" >/dev/null 2>&1 || return 0
+    attempt=$((attempt + 1))
+  done
+  return 0
+}
 
-while $IPT -t mangle -D OUTPUT -j ZAPRET2_MANGLE 2>/dev/null; do :; done
+del_bounded $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+del_bounded $IPT -t mangle -D OUTPUT -p tcp --sport "$AUTO_TEST_PORT_MIN:$AUTO_TEST_PORT_MAX" --dport 443 -j RETURN
+del_bounded $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+del_bounded $IPT -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
+del_bounded $IP6T -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j NFQUEUE --queue-num "$AUTO_TEST_QNUM" --queue-bypass
+del_bounded $IP6T -t mangle -D OUTPUT -m owner --uid-owner 0 -p tcp --dport 443 -j RETURN
+
+# Переходные цепочки от прежних версий модуля, где правила строились по UID.
+# Если та пересборка была прервана, они остались подключёнными к OUTPUT.
+del_bounded $IPT -t mangle -D OUTPUT -j ZAPRET2_MANGLE_NEW
+$IPT -t mangle -F ZAPRET2_MANGLE_NEW 2>/dev/null
+$IPT -t mangle -X ZAPRET2_MANGLE_NEW 2>/dev/null
+del_bounded $IPT -t filter -D OUTPUT -j ZAPRET2_FILTER_NEW
+$IPT -t filter -F ZAPRET2_FILTER_NEW 2>/dev/null
+$IPT -t filter -X ZAPRET2_FILTER_NEW 2>/dev/null
+del_bounded $IP6T -t mangle -D OUTPUT -j ZAPRET2_MANGLE_NEW
+$IP6T -t mangle -F ZAPRET2_MANGLE_NEW 2>/dev/null
+$IP6T -t mangle -X ZAPRET2_MANGLE_NEW 2>/dev/null
+del_bounded $IP6T -t filter -D OUTPUT -j ZAPRET2_FILTER_NEW
+$IP6T -t filter -F ZAPRET2_FILTER_NEW 2>/dev/null
+$IP6T -t filter -X ZAPRET2_FILTER_NEW 2>/dev/null
+
+del_bounded $IPT -t mangle -D OUTPUT -j ZAPRET2_MANGLE
 $IPT -t mangle -F ZAPRET2_MANGLE_FORWARD 2>/dev/null
-while $IPT -t mangle -D FORWARD -j ZAPRET2_MANGLE_FORWARD 2>/dev/null; do :; done
+del_bounded $IPT -t mangle -D FORWARD -j ZAPRET2_MANGLE_FORWARD
 $IPT -t mangle -X ZAPRET2_MANGLE_FORWARD 2>/dev/null
 $IPT -t mangle -F ZAPRET2_MANGLE 2>/dev/null
 $IPT -t mangle -X ZAPRET2_MANGLE 2>/dev/null
 
-while $IPT -t mangle -D INPUT -j ZAPRET2_MANGLE_IN 2>/dev/null; do :; done
+del_bounded $IPT -t mangle -D INPUT -j ZAPRET2_MANGLE_IN
 $IPT -t mangle -F ZAPRET2_MANGLE_IN 2>/dev/null
 $IPT -t mangle -X ZAPRET2_MANGLE_IN 2>/dev/null
-while $IPT -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null; do :; done
+del_bounded $IPT -t mangle -D INPUT -j ZAPRET2_INPUT
 $IPT -t mangle -F ZAPRET2_INPUT 2>/dev/null
 $IPT -t mangle -X ZAPRET2_INPUT 2>/dev/null
 
-while $IPT -t filter -D OUTPUT -j ZAPRET2_FILTER 2>/dev/null; do :; done
+del_bounded $IPT -t filter -D OUTPUT -j ZAPRET2_FILTER
 $IPT -t filter -F ZAPRET2_FILTER 2>/dev/null
 $IPT -t filter -X ZAPRET2_FILTER 2>/dev/null
-while $IPT -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD 2>/dev/null; do :; done
+del_bounded $IPT -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD
 $IPT -t filter -F ZAPRET2_FILTER_FORWARD 2>/dev/null
 $IPT -t filter -X ZAPRET2_FILTER_FORWARD 2>/dev/null
 
-while $IPT -t nat -D PREROUTING -j ZAPRET2_NAT_PREROUTING 2>/dev/null; do :; done
+del_bounded $IPT -t nat -D PREROUTING -j ZAPRET2_NAT_PREROUTING
 $IPT -t nat -F ZAPRET2_NAT_PREROUTING 2>/dev/null
 $IPT -t nat -X ZAPRET2_NAT_PREROUTING 2>/dev/null
 
-while $IP6T -t mangle -D OUTPUT -j ZAPRET2_MANGLE 2>/dev/null; do :; done
+del_bounded $IP6T -t mangle -D OUTPUT -j ZAPRET2_MANGLE
 $IP6T -t mangle -F ZAPRET2_MANGLE_FORWARD 2>/dev/null
-while $IP6T -t mangle -D FORWARD -j ZAPRET2_MANGLE_FORWARD 2>/dev/null; do :; done
+del_bounded $IP6T -t mangle -D FORWARD -j ZAPRET2_MANGLE_FORWARD
 $IP6T -t mangle -X ZAPRET2_MANGLE_FORWARD 2>/dev/null
 $IP6T -t mangle -F ZAPRET2_MANGLE 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_MANGLE 2>/dev/null
 
-while $IP6T -t mangle -D INPUT -j ZAPRET2_MANGLE_IN 2>/dev/null; do :; done
+del_bounded $IP6T -t mangle -D INPUT -j ZAPRET2_MANGLE_IN
 $IP6T -t mangle -F ZAPRET2_MANGLE_IN 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_MANGLE_IN 2>/dev/null
-while $IP6T -t mangle -D INPUT -j ZAPRET2_INPUT 2>/dev/null; do :; done
+del_bounded $IP6T -t mangle -D INPUT -j ZAPRET2_INPUT
 $IP6T -t mangle -F ZAPRET2_INPUT 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_INPUT 2>/dev/null
 
-while $IP6T -t filter -D OUTPUT -j ZAPRET2_FILTER 2>/dev/null; do :; done
+del_bounded $IP6T -t filter -D OUTPUT -j ZAPRET2_FILTER
 $IP6T -t filter -F ZAPRET2_FILTER 2>/dev/null
 $IP6T -t filter -X ZAPRET2_FILTER 2>/dev/null
-while $IP6T -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD 2>/dev/null; do :; done
+del_bounded $IP6T -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD
 $IP6T -t filter -F ZAPRET2_FILTER_FORWARD 2>/dev/null
 $IP6T -t filter -X ZAPRET2_FILTER_FORWARD 2>/dev/null
 
 # Очистка цепочек WARP и устаревших правил AI Router
-while $IPT -t nat -D OUTPUT -j ZAPRET2_WARP_DNS 2>/dev/null; do :; done
+del_bounded $IPT -t nat -D OUTPUT -j ZAPRET2_WARP_DNS
 $IPT -t nat -F ZAPRET2_WARP_DNS 2>/dev/null
 $IPT -t nat -X ZAPRET2_WARP_DNS 2>/dev/null
 
-while $IPT -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
-while $IPT -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+del_bounded $IPT -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE
+del_bounded $IPT -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE
 $IPT -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null
 $IPT -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null
-while $IP6T -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
-while $IP6T -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE 2>/dev/null; do :; done
+del_bounded $IP6T -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE
+del_bounded $IP6T -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE
 $IP6T -t mangle -F ZAPRET2_WARP_MANGLE 2>/dev/null
 $IP6T -t mangle -X ZAPRET2_WARP_MANGLE 2>/dev/null
 
-while $IPT -t nat -D OUTPUT -j ZAPRET2_AI_NAT 2>/dev/null; do :; done
+del_bounded $IPT -t nat -D OUTPUT -j ZAPRET2_AI_NAT
 $IPT -t nat -F ZAPRET2_AI_NAT 2>/dev/null
 $IPT -t nat -X ZAPRET2_AI_NAT 2>/dev/null
-while $IPT -t filter -D OUTPUT -j ZAPRET2_AI_FLT 2>/dev/null; do :; done
+del_bounded $IPT -t filter -D OUTPUT -j ZAPRET2_AI_FLT
 $IPT -t filter -F ZAPRET2_AI_FLT 2>/dev/null
 $IPT -t filter -X ZAPRET2_AI_FLT 2>/dev/null
-while $IPT -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports 15359 2>/dev/null; do :; done
+del_bounded $IPT -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports 15359
 
 rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
 rm -f /tmp/zapret2_apps_new.json 2>/dev/null
 
-rm -rf "$RUN_DIR/app-sync.lock" "$RUN_DIR/service.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/auto-select.lock" "$RUN_DIR/warp.lock" 2>/dev/null
+rm -rf "$RUN_DIR/app-sync.lock" "$RUN_DIR/service.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/auto-select.lock" "$RUN_DIR/warp.lock" "$RUN_DIR/on_change.lock" 2>/dev/null
+rm -f "$RUN_DIR/webui.token" "$RUN_DIR/webui.port" "$RUN_DIR/config.sig" 2>/dev/null  # webui.token — от прежних версий

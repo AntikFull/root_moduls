@@ -8,12 +8,11 @@ MODDIR="${SELF_DIR%/bin}"
 CONF_FILE="$MODDIR/zapret2.conf"
 LISTS_DIR="$MODDIR/lists"
 [ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
-APPS_LIST="$LISTS_DIR/apps.list"
-AUTO_APPS_LIST="$LISTS_DIR/auto_apps.list"
-EXCLUDE_LIST="$LISTS_DIR/exclude.list"
-WARP_APPS_LIST="$LISTS_DIR/warp_apps.list"
-SMART_YOUTUBE_FILE="$LISTS_DIR/smart_youtube.list"
-AUTO_DOMAINS_FILE="$LISTS_DIR/auto_domains.list"
+USER_DOMAINS_FILE="$LISTS_DIR/user.list"
+IPSET_FILE="$LISTS_DIR/ipset.list"
+IPSET_EXCLUDE_FILE="$LISTS_DIR/ipset_exclude.list"
+WARP_DOMAINS_FILE="$LISTS_DIR/warp_domains.list"
+WARP_BYPASS_NETS_FILE="$LISTS_DIR/warp_bypass_nets.list"
 EXCLUDE_DOMAINS_FILE="$LISTS_DIR/exclude_domains.list"
 LOG_DIR="$MODDIR/logs"
 LOG_FILE="$LOG_DIR/zapret2_debug.log"
@@ -33,12 +32,43 @@ mkdir -p "$RUN_DIR" "$LOG_DIR" 2>/dev/null
 chmod 0700 "$RUN_DIR" "$LOG_DIR" 2>/dev/null || true
 
 load_conf() { [ -f "$CONF_FILE" ] && . "$CONF_FILE"; }
-reload_service() { sh "$MODDIR/service.sh" reload; }
-sync_apps() {
-  sh "$MODDIR/app-sync.sh" apply || { reload_service; return $?; }
-  if [ -x "$MODDIR/warp-tunnel.sh" ]; then
-    sh "$MODDIR/warp-tunnel.sh" sync || return 1
+
+# ------------------------------------------------------------------------------
+# Перезапуск службы.
+#
+# Из CGI (WebUI) reload обязан быть асинхронным: полный цикл — это probe_firewall,
+# пересборка UID и рестарт nfqws2, то есть десятки секунд, в течение которых
+# HTTP-запрос висел бы и отваливался по таймауту. Прогресс WebUI читает из
+# run/startup.env (STATE/PHASE/PROGRESS), который service.sh обновляет по ходу.
+#
+# Из CLI reload остаётся синхронным, чтобы `zapret2-control restart` возвращал
+# осмысленный код завершения.
+# ------------------------------------------------------------------------------
+spawn_detached() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" </dev/null >/dev/null 2>&1 &
+  elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
+    busybox setsid "$@" </dev/null >/dev/null 2>&1 &
+  else
+    nohup "$@" </dev/null >/dev/null 2>&1 &
   fi
+}
+reload_service() {
+  if [ "${Z2_ASYNC:-0}" = "1" ]; then
+    # Помечаем состояние сразу, чтобы WebUI показал «Перезапуск» ещё до того,
+    # как service.sh успеет перехватить блокировку и записать свой прогресс.
+    mkdir -p "$RUN_DIR" 2>/dev/null
+    {
+      printf 'STATE=STARTING\n'
+      printf 'PHASE=%s\n' "Применение настроек"
+      printf 'PROGRESS=5\n'
+      printf 'UPDATED=%s\n' "$(date +%s 2>/dev/null)"
+    } > "$START_STATE_FILE.tmp.$$" 2>/dev/null && mv -f "$START_STATE_FILE.tmp.$$" "$START_STATE_FILE" 2>/dev/null
+    chmod 0600 "$START_STATE_FILE" 2>/dev/null || true
+    spawn_detached sh "$MODDIR/service.sh" reload
+    return 0
+  fi
+  sh "$MODDIR/service.sh" reload
 }
 
 validate_pkg() { case "$1" in *[!A-Za-z0-9_.]*|'') return 1 ;; *) return 0 ;; esac; }
@@ -64,7 +94,17 @@ validate_strategy_args() {
   [ -n "$1" ] && [ "${#1}" -le 4096 ] || return 1
   printf '%s' "$1" | LC_ALL=C grep -Eq '^[-A-Za-z0-9_.,:=/@+% /]+$'
 }
-pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+# Зомби и умирающие процессы не отдают cmdline: ядро держит блокировку памяти
+# задачи, и чтение виснет без таймаута. /proc/PID/stat читается без неё, поэтому
+# сначала спрашиваем состояние. Полный вариант с потолком по времени — в
+# service.sh; здесь достаточно отсечь мёртвые PID.
+pid_cmdline() {
+  local st
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
 pid_is_nfqws() {
   local pid="$1" cwd comm
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
@@ -130,12 +170,16 @@ set_conf() {
   chmod 0600 "$CONF_FILE" 2>/dev/null || true
 }
 
+# Списки, которые можно заменить целиком через WebUI. Только домены и подсети:
+# отбор по приложениям из модуля убран.
 list_file() {
   case "$1" in
-    apps) echo "$APPS_LIST" ;;
-    exclude) echo "$EXCLUDE_LIST" ;;
-    auto-domains) echo "$AUTO_DOMAINS_FILE" ;;
+    domains) echo "$USER_DOMAINS_FILE" ;;
     exclude-domains) echo "$EXCLUDE_DOMAINS_FILE" ;;
+    ipset) echo "$IPSET_FILE" ;;
+    ipset-exclude) echo "$IPSET_EXCLUDE_FILE" ;;
+    warp-domains) echo "$WARP_DOMAINS_FILE" ;;
+    warp-nets) echo "$WARP_BYPASS_NETS_FILE" ;;
     *) return 1 ;;
   esac
 }
@@ -145,7 +189,7 @@ startup_value() { sed -n "s/^$1=//p" "$START_STATE_FILE" 2>/dev/null | head -n1;
 
 cmd_status() {
   load_conf
-  local pid=0 state="остановлен" health source warnings effective
+  local pid=0 state="остановлен" health warnings effective
   [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
   if [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid"; then
     state="работает"
@@ -155,66 +199,74 @@ cmd_status() {
   else
     pid=0
   fi
-  health=$(health_value HEALTH); source=$(health_value PACKAGE_SOURCE); warnings=$(health_value WARNINGS); effective=$(health_value STRATEGY_EFFECTIVE)
+  health=$(health_value HEALTH); warnings=$(health_value WARNINGS); effective=$(health_value STRATEGY_EFFECTIVE)
   echo "Zapret2: $state (PID: ${pid:-0}) health=${health:-UNKNOWN}"
-  echo "MODE=${MODE:-INCLUDE}, STRATEGY=${STRATEGY_MODE:-SMART}->${effective:-${STRATEGY_MODE:-SMART}}, FORCE_TCP=${FORCE_TCP:-1}, QUIC_MODE=${QUIC_MODE:-SELECTED}, package_source=${source:-unknown}"
+  echo "Домены=${HOSTLIST_MODE:-AUTO}, STRATEGY=${STRATEGY_MODE:-SMART}->${effective:-${STRATEGY_MODE:-SMART}}, FORCE_TCP=${FORCE_TCP:-1}, QUIC=${QUIC_MODE:-ON}"
   [ -n "$warnings" ] && echo "WARNINGS: $warnings"
 }
 
 cmd_json_status() {
   load_conf
-  local pid=0 running=false direct=false manual_apps=0 auto_apps=0 excluded=0 scope health warnings source compat compat_notes effective acct connbytes4 connmark4 nfq4 owner4 startup_state startup_phase startup_progress startup_updated now age late_start_pid late_start_waiting=false downstream vpn_iface vpn_meta vpn_mode vpn_watcher_pid health_watcher_pid vpn_watcher_alive=false health_watcher_alive=false youtube_count auto_profile auto_status auto_network_iface auto_network_key auto_updated
+  local pid=0 running=false direct=false health warnings effective compat compat_notes         user_domains=0 learned=0 ipset_nets=0 ipset_excl=0 excl_domains=0         startup_state startup_phase startup_progress startup_updated now age         late_start_pid late_start_waiting=false downstream vpn_iface vpn_meta vpn_mode         vpn_watcher_pid health_watcher_pid vpn_watcher_alive=false health_watcher_alive=false         auto_profile auto_status auto_network_iface auto_network_key auto_updated         acct connbytes4 connmark4 nfq4 mod_ver
   [ -f "$RUN_DIR/nfqws2.pid" ] && pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
   [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && pid_is_nfqws "$pid" && running=true || pid=0
-  direct=false
   if [ -f "$RUN_DIR/direct.flag" ]; then direct=true; running=true; pid=0; fi
-  [ -f "$APPS_LIST" ] && manual_apps=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$APPS_LIST" 2>/dev/null || echo 0)
-  [ -f "$AUTO_APPS_LIST" ] && auto_apps=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$AUTO_APPS_LIST" 2>/dev/null || echo 0)
-  [ -f "$EXCLUDE_LIST" ] && excluded=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$EXCLUDE_LIST" 2>/dev/null || echo 0)
-  youtube_count=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)
-  scope=${SCOPE_PRESET:-}
-  case "$scope" in SAFE|SELECTED|ALL|CUSTOM) ;; *) case "${MODE:-INCLUDE}:${QUIC_MODE:-SELECTED}" in EXCLUDE:SELECTED) scope=SAFE ;; INCLUDE:SELECTED) scope=SELECTED ;; GLOBAL:GLOBAL) scope=ALL ;; *) scope=CUSTOM ;; esac ;; esac
+
+  # grep -c печатает 0 сам, но при отсутствующем файле не печатает ничего,
+  # а пустое значение сломало бы числовое поле JSON.
+  count_lines() {
+    local n
+    n=$(grep -cvE '^[[:space:]]*(#|$)' "$1" 2>/dev/null)
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    printf '%s' "$n"
+  }
+  user_domains=$(count_lines "$USER_DOMAINS_FILE")
+  learned=$(count_lines "$MODDIR/state/auto.list")
+  ipset_nets=$(count_lines "$IPSET_FILE")
+  ipset_excl=$(count_lines "$IPSET_EXCLUDE_FILE")
+  excl_domains=$(count_lines "$EXCLUDE_DOMAINS_FILE")
+
   health=$(health_value HEALTH); [ -n "$health" ] || health=UNKNOWN
-  warnings=$(health_value WARNINGS); source=$(health_value PACKAGE_SOURCE); effective=$(health_value STRATEGY_EFFECTIVE)
+  warnings=$(health_value WARNINGS); effective=$(health_value STRATEGY_EFFECTIVE)
   compat=$(health_value COMPAT_STATUS); compat_notes=$(health_value COMPAT_NOTES)
-  auto_profile=$(health_value AUTO_PROFILE); auto_status=$(health_value AUTO_STATUS); auto_network_key=$(health_value AUTO_NETWORK_KEY); auto_network_iface=$(health_value AUTO_NETWORK_IFACE); auto_updated=$(health_value AUTO_UPDATED)
-  acct=$(health_value CONNTRACK_ACCT); connbytes4=$(health_value CONNBYTES4); connmark4=$(health_value CONNMARK4); nfq4=$(health_value NFQUEUE4); owner4=$(health_value OWNER4)
+  auto_profile=$(health_value AUTO_PROFILE); auto_status=$(health_value AUTO_STATUS)
+  auto_network_key=$(health_value AUTO_NETWORK_KEY); auto_network_iface=$(health_value AUTO_NETWORK_IFACE)
+  auto_updated=$(health_value AUTO_UPDATED)
+  acct=$(health_value CONNTRACK_ACCT); connbytes4=$(health_value CONNBYTES4)
+  connmark4=$(health_value CONNMARK4); nfq4=$(health_value NFQUEUE4)
   [ -n "$effective" ] || effective=${STRATEGY_MODE:-SMART}
   [ -n "$compat" ] || compat=NATIVE
-  startup_state=$(startup_value STATE); startup_phase=$(startup_value PHASE); startup_progress=$(startup_value PROGRESS); startup_updated=$(startup_value UPDATED)
+
+  startup_state=$(startup_value STATE); startup_phase=$(startup_value PHASE)
+  startup_progress=$(startup_value PROGRESS); startup_updated=$(startup_value UPDATED)
   [ -n "$startup_state" ] || startup_state=IDLE
   [ -n "$startup_progress" ] || startup_progress=0
-  [ -n "$startup_updated" ] || startup_updated=0
-  now=$(date +%s 2>/dev/null); case "$now" in ''|*[!0-9]*) now=0 ;; esac
   case "$startup_updated" in ''|*[!0-9]*) startup_updated=0 ;; esac
+  now=$(date +%s 2>/dev/null); case "$now" in ''|*[!0-9]*) now=0 ;; esac
   age=$((now-startup_updated))
   late_start_pid=$(cat "$LATE_START_PID_FILE" 2>/dev/null)
   case "$late_start_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$late_start_pid" service.sh && late_start_waiting=true ;; esac
+
+  # Именно "cat file 2>/dev/null | tr", а не "tr < file": об ошибке открытия при
+  # перенаправлении сообщает сам shell, и 2>/dev/null её не перехватывает.
+  # api.sh забирает stderr в тело ответа, поэтому такая строка ломала бы JSON
+  # каждый раз, когда раздачей ни разу не пользовались и файла состояния нет.
   downstream=$(cat "$RUN_DIR/tether-downstreams.state" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
   vpn_meta=$(cat "$RUN_DIR/vpn-routing.meta" 2>/dev/null)
-  vpn_iface=$(printf '%s' "$vpn_meta" | sed -n 's/^.*|vpn=\([^|]*\).*/\1/p')
+  vpn_iface=$(printf '%s' "$vpn_meta" | sed -n 's/^.*|vpn=\([^|]*\).*$/\1/p')
   if [ -z "$downstream" ]; then vpn_mode=IDLE; else case "$vpn_meta" in disabled) vpn_mode=OFF ;; *'|vpn=|'*) [ "${VPN_FALLBACK_MODE:-ANTIDPI}" = BLOCK ] && vpn_mode=BLOCK || vpn_mode=ANTIDPI ;; *'|vpn='*) vpn_mode=VPN ;; *) vpn_mode=IDLE ;; esac; fi
   vpn_watcher_pid=$(cat "$RUN_DIR/vpn-watcher.pid" 2>/dev/null); case "$vpn_watcher_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$vpn_watcher_pid" vpn-watch.sh && vpn_watcher_alive=true ;; esac
   health_watcher_pid=$(cat "$RUN_DIR/health-watcher.pid" 2>/dev/null); case "$health_watcher_pid" in ''|0|*[!0-9]*) ;; *) pid_is_script "$health_watcher_pid" service-watch.sh && health_watcher_alive=true ;; esac
-  if [ "$running" = true ]; then startup_state=READY; startup_phase="Служба запущена"; startup_progress=100
+
+  if [ "$running" = true ]; then startup_state=READY; startup_phase="Служба работает"; startup_progress=100
   elif [ "$startup_state" = WAITING ] && [ "$late_start_waiting" = true ]; then startup_phase="Ожидание завершения загрузки Android"
   elif { [ "$startup_state" = STARTING ] || [ "$startup_state" = WAITING ]; } && [ "$age" -gt 120 ] 2>/dev/null; then startup_state=STALE; startup_phase="Перезапуск не завершён за 2 минуты"; fi
-  local mod_ver
+
   mod_ver=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null | head -n1)
-  [ -n "$mod_ver" ] || mod_ver="v3.2.23"
-  printf '{"version":"%s","running":%s,"direct":%s,"pid":%s,"mode":"%s","force_tcp":"%s","quic_mode":"%s","scope":"%s","apps_count":%s,"manual_apps_count":%s,"auto_apps_count":%s,"auto_apps_enabled":"%s","exclude_count":%s,"health":"%s","warnings":"%s","package_source":"%s","strategy":"%s","strategy_effective":"%s","smart_youtube_count":%s,"compat_status":"%s","compat_notes":"%s","auto_profile":"%s","auto_status":"%s","auto_network_key":"%s","auto_network_iface":"%s","auto_updated":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","cap_owner":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s,"tether_downstream":"%s","vpn_iface":"%s","vpn_mode":"%s","vpn_watcher_alive":%s,"health_watcher_alive":%s}\n' \
-    "$(json_escape "$mod_ver")" "$running" "$direct" "$pid" "${MODE:-INCLUDE}" "${FORCE_TCP:-1}" "${QUIC_MODE:-SELECTED}" "$scope" "$((manual_apps+auto_apps))" "$manual_apps" "$auto_apps" "${AUTO_APPS_ENABLED:-1}" "$excluded" "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "$source")" "$(json_escape "${STRATEGY_MODE:-SMART}")" "$(json_escape "$effective")" "$youtube_count" "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_network_key:-none}")" "$(json_escape "${auto_network_iface:-none}")" "${auto_updated:-0}" "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}" "${owner4:-0}" "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated" "$(json_escape "$downstream")" "$(json_escape "$vpn_iface")" "$(json_escape "$vpn_mode")" "$vpn_watcher_alive" "$health_watcher_alive"
+  [ -n "$mod_ver" ] || mod_ver="unknown"
+  printf '{"version":"%s","running":%s,"direct":%s,"pid":%s,"force_tcp":"%s","quic_mode":"%s","hostlist_mode":"%s","user_domains":%s,"learned_domains":%s,"exclude_domains":%s,"ipset_nets":%s,"ipset_exclude_nets":%s,"health":"%s","warnings":"%s","strategy":"%s","strategy_effective":"%s","compat_status":"%s","compat_notes":"%s","auto_profile":"%s","auto_status":"%s","auto_network_key":"%s","auto_network_iface":"%s","auto_updated":"%s","cap_acct":"%s","cap_connbytes":"%s","cap_connmark":"%s","cap_nfqueue":"%s","startup_state":"%s","startup_phase":"%s","startup_progress":%s,"startup_updated":%s,"tether_downstream":"%s","vpn_iface":"%s","vpn_mode":"%s","vpn_watcher_alive":%s,"health_watcher_alive":%s}\n'     "$(json_escape "$mod_ver")" "$running" "$direct" "$pid" "${FORCE_TCP:-1}" "${QUIC_MODE:-ON}"     "$(json_escape "${HOSTLIST_MODE:-AUTO}")" "$user_domains" "$learned" "$excl_domains" "$ipset_nets" "$ipset_excl"     "$(json_escape "$health")" "$(json_escape "$warnings")" "$(json_escape "${STRATEGY_MODE:-SMART}")" "$(json_escape "$effective")"     "$(json_escape "$compat")" "$(json_escape "$compat_notes")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")"     "$(json_escape "${auto_network_key:-none}")" "$(json_escape "${auto_network_iface:-none}")" "${auto_updated:-0}"     "${acct:-0}" "${connbytes4:-0}" "${connmark4:-0}" "${nfq4:-0}"     "$(json_escape "$startup_state")" "$(json_escape "$startup_phase")" "$startup_progress" "$startup_updated"     "$(json_escape "$downstream")" "$(json_escape "$vpn_iface")" "$(json_escape "$vpn_mode")" "$vpn_watcher_alive" "$health_watcher_alive"
 }
 
-cmd_scope_preset() {
-  case "$2" in
-    safe) set_conf MODE EXCLUDE; set_conf QUIC_MODE SELECTED; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE SMART; set_conf SCOPE_PRESET SAFE ;;
-    selected) set_conf MODE INCLUDE; set_conf QUIC_MODE SELECTED; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE SMART; set_conf AUTO_APPS_ENABLED 1; set_conf SCOPE_PRESET SELECTED ;;
-    all) set_conf MODE GLOBAL; set_conf QUIC_MODE GLOBAL; set_conf FORCE_TCP 1; set_conf STRATEGY_MODE SMART; set_conf SCOPE_PRESET ALL ;;
-    *) return 1 ;;
-  esac
-  reload_service
-}
 
 cmd_json_hotspot_settings() {
   load_conf
@@ -224,10 +276,9 @@ cmd_json_hotspot_settings() {
 
 cmd_json_strategies() {
   load_conf
-  local effective compat youtube_count auto_profile auto_profile_name auto_status auto_iface auto_updated strategy_count strategy_order number id path
+  local effective compat auto_profile auto_profile_name auto_status auto_iface auto_updated strategy_count strategy_order number id path
   effective=$(health_value STRATEGY_EFFECTIVE); [ -n "$effective" ] || effective=${STRATEGY_MODE:-SMART}
   compat=$(health_value COMPAT_STATUS); [ -n "$compat" ] || compat=NATIVE
-  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$SMART_YOUTUBE_FILE" 2>/dev/null || echo 0)
   auto_profile=$(health_value AUTO_PROFILE); auto_profile_name=$(health_value AUTO_PROFILE_NAME); auto_status=$(health_value AUTO_STATUS); auto_iface=$(health_value AUTO_NETWORK_IFACE); auto_updated=$(health_value AUTO_UPDATED)
   strategy_list | while IFS='|' read -r number id path; do
     strategy_read "$id" || continue
@@ -236,18 +287,16 @@ cmd_json_strategies() {
   strategy_count=$(wc -l < "$RUN_DIR/strategy-order.$$" 2>/dev/null); strategy_count=${strategy_count:-0}
   strategy_order=$(awk -F'|' 'BEGIN{s=""} {s=s (s?" > ":"") $1 "/" $2} END{print s}' "$RUN_DIR/strategy-order.$$" 2>/dev/null)
   rm -f "$RUN_DIR/strategy-order.$$" 2>/dev/null
-  printf '{"active":"%s","engine":"%s","auto_apps_enabled":"%s","compat_status":"%s","youtube_domains":%s,"auto_profile":"%s","auto_profile_name":"%s","auto_status":"%s","auto_iface":"%s","auto_updated":"%s","strategy_count":%s,"strategy_order":"%s","compat_general":"%s","compat_youtube":"%s","native_general":"%s","native_youtube":"%s","custom":"%s"}\n' \
-    "${STRATEGY_MODE:-SMART}" "$(json_escape "$effective")" "${AUTO_APPS_ENABLED:-1}" "$(json_escape "$compat")" "$youtube_count" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_profile_name:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_iface:-none}")" "${auto_updated:-0}" "$strategy_count" "$(json_escape "$strategy_order")" \
-    "$(json_escape "${DESYNC_ARGS_SMART_COMPAT_GENERAL:-}")" "$(json_escape "${DESYNC_ARGS_SMART_COMPAT_YOUTUBE:-}")" \
-    "$(json_escape "${DESYNC_ARGS_SMART_NATIVE_GENERAL:-}")" "$(json_escape "${DESYNC_ARGS_SMART_NATIVE_YOUTUBE:-}")" "$(json_escape "${DESYNC_ARGS_CUSTOM:-}")"
+  printf '{"active":"%s","engine":"%s","compat_status":"%s","auto_profile":"%s","auto_profile_name":"%s","auto_status":"%s","auto_iface":"%s","auto_updated":"%s","strategy_count":%s,"strategy_order":"%s","compat_general":"%s","native_general":"%s","custom":"%s"}\n' \
+    "${STRATEGY_MODE:-SMART}" "$(json_escape "$effective")" "$(json_escape "$compat")" "$(json_escape "${auto_profile:-UNKNOWN}")" "$(json_escape "${auto_profile_name:-UNKNOWN}")" "$(json_escape "${auto_status:-UNKNOWN}")" "$(json_escape "${auto_iface:-none}")" "${auto_updated:-0}" "$strategy_count" "$(json_escape "$strategy_order")" \
+    "$(json_escape "${DESYNC_ARGS_SMART_COMPAT_GENERAL:-}")" \
+    "$(json_escape "${DESYNC_ARGS_SMART_NATIVE_GENERAL:-}")" "$(json_escape "${DESYNC_ARGS_CUSTOM:-}")"
 }
 
 cmd_save_smart() {
-  local auto_apps="$2" mode="$3" custom="$4"
-  validate_switch "$auto_apps" || return 1
+  local mode="$2" custom="$3"
   case "$mode" in SMART|CUSTOM) ;; *) return 1 ;; esac
   [ "$mode" != CUSTOM ] || validate_strategy_args "$custom" || return 1
-  set_conf AUTO_APPS_ENABLED "$auto_apps"
   set_conf STRATEGY_MODE "$mode"
   [ "$mode" != CUSTOM ] || set_conf DESYNC_ARGS_CUSTOM "$custom"
   reload_service
@@ -277,185 +326,48 @@ cmd_hotspot_settings() {
   reload_service
 }
 
-package_list_raw() {
-  local out="$1" tmp="$RUN_DIR/.pkg-src.$$" got=0
-  : > "$out"
-  for mode in pm_uid cmd_uid pm_plain cmd_plain; do
-    : > "$tmp"
-    case "$mode" in
-      pm_uid) pm list packages -U --user 0 > "$tmp" 2>/dev/null ;;
-      cmd_uid) cmd package list packages -U --user 0 > "$tmp" 2>/dev/null ;;
-      pm_plain) pm list packages --user 0 > "$tmp" 2>/dev/null ;;
-      cmd_plain) cmd package list packages --user 0 > "$tmp" 2>/dev/null ;;
-    esac
-    if grep -q '^package:' "$tmp" 2>/dev/null; then cat "$tmp" >> "$out"; got=1; fi
-  done
-  rm -f "$tmp"
-  if [ -r /data/system/packages.list ]; then
-    awk 'NF>=1 {print "package:"$1}' /data/system/packages.list >> "$out" 2>/dev/null
-    got=1
-  fi
-  if [ -r "$PACKAGE_UID_CACHE" ]; then
-    awk 'NF>=1 {print "package:"$1}' "$PACKAGE_UID_CACHE" >> "$out" 2>/dev/null
-    got=1
-  fi
-  [ "$got" = 1 ] || return 1
-  awk '/^package:/ {line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
-  mv -f "$out.norm" "$out"
-  [ -s "$out" ]
-}
 
-system_package_list_raw() {
-  local out="$1" tmp="$RUN_DIR/.sys-pkg.$$" got=0
-  : > "$out"
-  : > "$tmp"; pm list packages -s --user 0 > "$tmp" 2>/dev/null; grep -q '^package:' "$tmp" && { cat "$tmp" >> "$out"; got=1; }
-  : > "$tmp"; cmd package list packages -s --user 0 > "$tmp" 2>/dev/null; grep -q '^package:' "$tmp" && { cat "$tmp" >> "$out"; got=1; }
-  rm -f "$tmp"
-  if [ "$got" = 1 ]; then
-    awk '/^package:/ {line=$0; sub(/^package:/,"",line); n=split(line,a,"="); pkg=a[n]; sub(/[[:space:]].*/,"",pkg); if(pkg!="") print "package:"pkg}' "$out" | sort -u > "$out.norm"
-    mv -f "$out.norm" "$out"
-  fi
-  return 0
-}
 
-json_pkg_array_from_file() {
-  local file="$1" first=1 line
-  printf '['
-  [ -f "$file" ] && while IFS= read -r line || [ -n "$line" ]; do
-    line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    case "$line" in \#*|'') continue ;; esac
-    validate_pkg "$line" || continue
-    [ "$first" = 1 ] || printf ','
-    first=0
-    printf '"%s"' "$line"
-  done < "$file"
-  printf ']'
-}
 
-cmd_json_app_lists() {
-  load_conf
-  printf '{"include":'
-  json_pkg_array_from_file "$APPS_LIST"
-  printf ',"manual":'
-  json_pkg_array_from_file "$APPS_LIST"
-  printf ',"auto":'
-  json_pkg_array_from_file "$AUTO_APPS_LIST"
-  printf ',"exclude":'
-  json_pkg_array_from_file "$EXCLUDE_LIST"
-  printf ',"warp":'
-  json_pkg_array_from_file "$WARP_APPS_LIST"
-  printf ',"auto_enabled":"%s"}\n' "${AUTO_APPS_ENABLED:-1}"
-}
-cmd_json_apps() {
-  mkdir -p "$RUN_DIR" 2>/dev/null
-  local raw="$RUN_DIR/.packages.$$" sys_tmp="$RUN_DIR/.system-packages.$$" rc=0
-  package_list_raw "$raw" || rc=1
-  system_package_list_raw "$sys_tmp"
-  if [ "$rc" -ne 0 ]; then rm -f "$raw" "$sys_tmp"; echo '[]'; return 1; fi
-  load_conf
-  awk -v inc="$APPS_LIST" -v aut="$AUTO_APPS_LIST" -v autoen="${AUTO_APPS_ENABLED:-1}" -v exc="$EXCLUDE_LIST" -v wrp="$WARP_APPS_LIST" -v sys="$sys_tmp" '
-    BEGIN {
-      while ((getline l < inc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") a[l]=1} close(inc)
-      while ((getline l < aut)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") u[l]=1} close(aut)
-      while ((getline l < exc)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") e[l]=1} close(exc)
-      while ((getline l < wrp)>0) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); if (l !~ /^#/ && l!="") w[l]=1} close(wrp)
-      while ((getline l < sys)>0) {sub(/^package:/,"",l); sub(/[[:space:]].*/,"",l); if(l!="") s[l]=1} close(sys)
-      print "["; first=1
-    }
-    /^package:/ {
-      line=$0; sub(/^package:/,"",line); sub(/[[:space:]]+uid:.*/,"",line); n=split(line,parts,"="); pkg=parts[n]; sub(/[[:space:]].*/,"",pkg)
-      if(pkg!="") {
-        if(!first) printf ","; first=0
-        printf "{\"pkg\":\"%s\",\"manual\":%s,\"auto\":%s,\"include\":%s,\"exclude\":%s,\"warp\":%s,\"isSystem\":%s}", pkg, (pkg in a)?"true":"false", (pkg in u)?"true":"false", (((pkg in a)||(autoen=="1" && (pkg in u))) && !(pkg in e))?"true":"false", (pkg in e)?"true":"false", (pkg in w)?"true":"false", (pkg in s)?"true":"false"
-      }
-    }
-    END { print "]" }' "$raw"
-  rc=$?
-  rm -f "$raw" "$sys_tmp"
-  return "$rc"
-}
 
-cmd_add_del() {
-  local list="$1" op="$2" pkg="$3" file other tmp
-  validate_pkg "$pkg" || { echo "Некорректный ID пакета"; return 1; }
-  file=$(list_file "$list") || return 1
-  mark_control_write
-  if [ "$op" = add ]; then
-    [ "$list" = apps ] && other="$EXCLUDE_LIST" || other="$APPS_LIST"
-    remove_pkg_exact "$other" "$pkg" || return 1
-    grep -qxF "$pkg" "$file" 2>/dev/null || echo "$pkg" >> "$file"
-  else
-    tmp="$RUN_DIR/list_del.$$.tmp"
-    awk -v p="$pkg" '$0 != p { print }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
-  fi
-  chmod 0644 "$APPS_LIST" "$EXCLUDE_LIST" "$file" 2>/dev/null || true
-  sync_apps
-}
 
-remove_pkg_exact() {
-  local file="$1" pkg="$2" tmp="$RUN_DIR/list_update.$$.tmp"
-  [ -f "$file" ] || : > "$file"
-  awk -v p="$pkg" '{ raw=$0; t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if (t != p) print raw }' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
-  chmod 0644 "$file" 2>/dev/null || true
-}
 
-set_app_state_only() {
-  local pkg="$1" state="$2"
-  validate_pkg "$pkg" || { echo "Некорректный ID пакета"; return 1; }
-  case "$state" in include|exclude|warp|none) ;; *) echo "Некорректное состояние приложения"; return 1 ;; esac
-  mark_control_write
-  remove_pkg_exact "$APPS_LIST" "$pkg" || return 1
-  remove_pkg_exact "$EXCLUDE_LIST" "$pkg" || return 1
-  remove_pkg_exact "$WARP_APPS_LIST" "$pkg" 2>/dev/null || true
-  case "$state" in
-    include) echo "$pkg" >> "$APPS_LIST" || return 1 ;;
-    exclude) echo "$pkg" >> "$EXCLUDE_LIST" || return 1 ;;
-    warp)
-      mkdir -p "$LISTS_DIR" 2>/dev/null
-      echo "$pkg" >> "$WARP_APPS_LIST" || return 1
-      sh "$MODDIR/warp-tunnel.sh" sync 2>/dev/null || true
-      ;;
-  esac
-  chmod 0644 "$APPS_LIST" "$EXCLUDE_LIST" "$WARP_APPS_LIST" 2>/dev/null || true
-}
-cmd_app_state() {
-  local pkg="$2" state="$3"
-  set_app_state_only "$pkg" "$state" || return 1
-  sync_apps || return 1
-  echo "OK $pkg $state"
-}
-cmd_app_state_set() {
-  local pkg="$2" state="$3"
-  set_app_state_only "$pkg" "$state" || return 1
-  echo "OK $pkg $state pending"
-}
-cmd_sync_apps() { sync_apps; }
 
+# Полная замена одного из списков. Все списки теперь текстовые: домены или
+# подсети, по одной записи на строку. Разрешены только символы, встречающиеся в
+# именах доменов и в записи CIDR, плюс комментарии — так значение не может стать
+# ни shell-конструкцией, ни аргументом nfqws2.
 cmd_replace_list() {
-  local list="$1" input="$2" file tmp line
-  file=$(list_file "$list") || return 1
+  local list="$1" input="$2" file tmp line kind
+  file=$(list_file "$list") || { echo "Неизвестный список: $list" >&2; return 1; }
+  case "$list" in
+    ipset|ipset-exclude|warp-nets) kind=net ;;
+    *) kind=domain ;;
+  esac
   tmp="$RUN_DIR/list_replace.$$.tmp"; : > "$tmp" || return 1
   printf '%s\n' "$input" | while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in *[!A-Za-z0-9._#\ -]* ) exit 1 ;; esac
+    case "$line" in
+      '' | '#'*) echo "$line"; continue ;;
+    esac
+    if [ "$kind" = net ]; then
+      case "$line" in *[!0-9A-Fa-f.:/\ \#-]*) exit 1 ;; esac
+    else
+      case "$line" in *[!A-Za-z0-9._*\ \#-]*) exit 1 ;; esac
+    fi
     echo "$line"
-  done > "$tmp" || { rm -f "$tmp"; echo "Некорректная строка в списке"; return 1; }
+  done > "$tmp" || { rm -f "$tmp"; echo "Недопустимая строка в списке" >&2; return 1; }
   mark_control_write
-  mv -f "$tmp" "$file"
+  mkdir -p "$LISTS_DIR" 2>/dev/null
+  mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
   chmod 0644 "$file" 2>/dev/null || true
   case "$list" in
-    apps)
-      if [ -f "$EXCLUDE_LIST" ]; then
-        awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) x[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in x)) print $0}' "$EXCLUDE_LIST" "$APPS_LIST" > "$APPS_LIST.norm.$$" && mv -f "$APPS_LIST.norm.$$" "$APPS_LIST"
-      fi
-      sync_apps ;;
-    exclude)
-      if [ -f "$APPS_LIST" ]; then
-        awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) x[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in x)) print $0}' "$EXCLUDE_LIST" "$APPS_LIST" > "$APPS_LIST.norm.$$" && mv -f "$APPS_LIST.norm.$$" "$APPS_LIST"
-      fi
-      sync_apps ;;
-    auto-domains)
-      echo "SAVED legacy auto-domains (SMART ignores this list)" ;;
-    *) reload_service ;;
+    warp-domains|warp-nets)
+      # Маршрутизация туннеля перестраивается без перезапуска nfqws2.
+      sh "$MODDIR/warp-tunnel.sh" sync >/dev/null 2>&1 || true
+      echo '{"ok":true,"applied":"warp"}' ;;
+    *)
+      reload_service
+      echo '{"ok":true,"applied":"service"}' ;;
   esac
 }
 
@@ -481,16 +393,83 @@ cmd_auto_run() { sh "$MODDIR/auto-select.sh" force; }
 cmd_auto_clear() { sh "$MODDIR/auto-select.sh" clear; sh "$MODDIR/service.sh" reload; }
 cmd_webui() { echo "WebUI открывается менеджером root из webroot/index.html"; }
 
+# ------------------------------------------------------------------------------
+# Доменные списки (терминология nfqws2-keenetic)
+# ------------------------------------------------------------------------------
+USER_DOMAINS_FILE="$LISTS_DIR/user.list"
+LEARNED_DOMAINS_FILE="$MODDIR/state/auto.list"
+
+cmd_json_hostlist() {
+  load_conf
+  local mode user_count learned_count
+  mode=$(health_value HOSTLIST_MODE); [ -n "$mode" ] || mode="${HOSTLIST_MODE:-AUTO}"
+  user_count=$(grep -cvE '^[[:space:]]*(#|$)' "$USER_DOMAINS_FILE" 2>/dev/null)
+  learned_count=$(grep -cvE '^[[:space:]]*(#|$)' "$LEARNED_DOMAINS_FILE" 2>/dev/null)
+  printf '{"mode":"%s","user_domains":%s,"learned_domains":%s,"fail_threshold":"%s","fail_time":"%s"}\n' \
+    "$(json_escape "$mode")" "${user_count:-0}" "${learned_count:-0}" \
+    "${HOSTLIST_AUTO_FAIL_THRESHOLD:-3}" "${HOSTLIST_AUTO_FAIL_TIME:-60}"
+}
+
+# Список выученных доменов для показа в WebUI. Файл пишет сам nfqws2.
+cmd_json_learned() {
+  local line first=1 n=0 limit="${2:-500}"
+  case "$limit" in ''|*[!0-9]*) limit=500 ;; esac
+  printf '['
+  if [ -f "$LEARNED_DOMAINS_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=$(printf '%s' "$line" | tr -d '[:space:]')
+      case "$line" in ''|\#*) continue ;; esac
+      case "$line" in *[!A-Za-z0-9.*_-]*) continue ;; esac
+      [ "$n" -lt "$limit" ] || break
+      [ "$first" = 1 ] || printf ','
+      first=0; n=$((n + 1))
+      printf '"%s"' "$line"
+    done < "$LEARNED_DOMAINS_FILE"
+  fi
+  printf ']\n'
+}
+
+cmd_hostlist_mode() {
+  case "$2" in
+    LIST|AUTO|ALL) ;;
+    list|auto|all) set -- "$1" "$(echo "$2" | tr '[:lower:]' '[:upper:]')" ;;
+    *) echo "Режим должен быть LIST, AUTO или ALL" >&2; return 1 ;;
+  esac
+  set_conf HOSTLIST_MODE "$2" || return 1
+  reload_service
+}
+
+# Сброс обучения: домены накапливаются годами и могут устареть после того,
+# как провайдер снял блокировку.
+cmd_hostlist_clear() {
+  mkdir -p "${LEARNED_DOMAINS_FILE%/*}" 2>/dev/null
+  : > "$LEARNED_DOMAINS_FILE" 2>/dev/null || { echo "Не удалось очистить список выученных доменов" >&2; return 1; }
+  chmod 0600 "$LEARNED_DOMAINS_FILE" 2>/dev/null || true
+  reload_service
+  echo '{"ok":true,"learned_domains":0}'
+}
+
+# Число строк приходит из HTTP-параметра, поэтому подставлять его в tail без
+# проверки нельзя: значение вроде "-f" превратило бы чтение лога в бесконечный
+# поток и подвесило бы CGI-процесс.
+cmd_tail_log() {
+  local file="$1" lines="$2"
+  case "$lines" in ''|*[!0-9]*) lines=150 ;; esac
+  [ "$lines" -ge 1 ] 2>/dev/null || lines=150
+  [ "$lines" -le 5000 ] 2>/dev/null || lines=5000
+  tail -n "$lines" "$file" 2>/dev/null
+}
+
 cmd_json_warp_status() {
   load_conf
   local dev="${WARP_DEV:-awg99}" table="${WARP_ROUTE_TABLE:-11888}" enabled="${ENABLE_WARP:-0}"
-  local running=false interface_up=false routing_ok=false rules_ok=true endpoint="" rx_bytes=0 tx_bytes=0 last_handshake=0 apps_count=0 active_dns=""
-  local warp_apps_file="$LISTS_DIR/warp_apps.list" state_file="$RUN_DIR/warp-rules.state"
+  local running=false interface_up=false routing_ok=false rules_ok=true endpoint="" rx_bytes=0 tx_bytes=0 last_handshake=0 warp_domains_count=0 active_dns=""
+  local warp_domains_file="$LISTS_DIR/warp_domains.list" state_file="$MODDIR/state/warp-domain-ips.state"
   local warp_conf="$MODDIR/state/warp.conf" adapt_file="$MODDIR/state/warp-adapt.state"
   local active_jc="${WARP_JC:-5}" active_jmin="${WARP_JMIN:-40}" active_jmax="${WARP_JMAX:-70}" adapt_step=0 adapt_mode=basic
   local adapt_result=pending adapt_updated=0 adapt_total=40 handshake_age=-1 now
-  [ -f "$warp_apps_file" ] || warp_apps_file="$MODDIR/warp_apps.list"
-  if [ -f "$warp_apps_file" ]; then apps_count=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$warp_apps_file" 2>/dev/null || echo 0); fi
+  warp_domains_count=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$warp_domains_file" 2>/dev/null || echo 0)
+  warp_domains_count=$((warp_domains_count + $(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$MODDIR/state/warp_auto_domains.list" 2>/dev/null || echo 0)))
 
   local dns_file="$LISTS_DIR/dns.list"
   [ -f "$dns_file" ] || dns_file="$MODDIR/dns.list"
@@ -500,14 +479,29 @@ cmd_json_warp_status() {
   if ip link show dev "$dev" >/dev/null 2>&1; then
     interface_up=true
     ip -4 route show table "$table" default 2>/dev/null | grep -q "default.*dev $dev" && routing_ok=true
-    if [ -f "$state_file" ]; then
-      while IFS='|' read -r fam pref uid rt; do
-        case "$fam" in
-          4) ip -4 rule show 2>/dev/null | grep -E "^[0-9]+:.*uidrange ${uid}-${uid}.*lookup ${rt}([[:space:]]|$)" >/dev/null || rules_ok=false ;;
-          6) ip -6 rule show 2>/dev/null | grep -E "^[0-9]+:.*uidrange ${uid}-${uid}.*lookup ${rt}([[:space:]]|$)" >/dev/null || rules_ok=false ;;
-        esac
+    # Маршруты туннеля теперь адресные, а не по UID. Состояние хранит строки вида
+    # "версия|домен|адрес"; проверяем, что для каждого адреса есть правило.
+    # Раньше здесь искался uidrange, поэтому rules_ok был false всегда, хотя
+    # маршрутизация работала.
+    if [ -f "$state_file" ] && [ -s "$state_file" ]; then
+      # Снимок правил делаем один раз: адресов может быть много, а форк
+      # `ip rule show` на каждый из них заметно тормозит опрос статуса.
+      local rules4 rules6
+      rules4=$(ip -4 rule show 2>/dev/null)
+      rules6=$(ip -6 rule show 2>/dev/null)
+      while IFS='|' read -r fam _dom addr; do
+        [ -n "$addr" ] || continue
+        case "$addr" in *[!0-9A-Fa-f.:]*) continue ;; esac
+        if [ "$fam" = 6 ]; then
+          printf '%s
+' "$rules6" | grep -Fq "to $addr" || rules_ok=false
+        else
+          printf '%s
+' "$rules4" | grep -Fq "to $addr" || rules_ok=false
+        fi
       done < "$state_file"
-    elif [ "$apps_count" -gt 0 ] 2>/dev/null; then
+    elif [ "${warp_domains_count:-0}" -gt 0 ] 2>/dev/null; then
+      # Домены заданы, но ни один адрес ещё не разрешён — маршрутов для них нет.
       rules_ok=false
     fi
 
@@ -541,19 +535,23 @@ cmd_json_warp_status() {
   now=$(date +%s 2>/dev/null || echo 0); case "$now" in ''|*[!0-9]*) now=0 ;; esac
   if [ "$last_handshake" -gt 0 ] 2>/dev/null && [ "$now" -ge "$last_handshake" ] 2>/dev/null; then handshake_age=$((now-last_handshake)); fi
   if [ "$running" = true ] && { [ "$handshake_age" -lt 0 ] 2>/dev/null || [ "$handshake_age" -ge 180 ] 2>/dev/null; }; then running=false; fi
-  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"interface_up":%s,"routing_ok":%s,"rules_ok":%s,"endpoint":"%s","configured_endpoint":"%s","configured_port":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"handshake_age":%s,"jc":"%s","jmin":"%s","jmax":"%s","active_jc":"%s","active_jmin":"%s","active_jmax":"%s","adaptive":"%s","sip_force":"%s","adaptive_step":%s,"adaptive_total":%s,"adaptive_result":"%s","adaptive_updated":%s,"adaptive_retry_sec":%s,"adaptive_mode":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"apps_count":%s,"dns":"%s","dns_force":"%s"}\n' \
-    "$enabled" "$dev" "$running" "$interface_up" "$routing_ok" "$rules_ok" "$(json_escape "$endpoint")" "$(json_escape "${WARP_ENDPOINT:-162.159.192.1}")" "${WARP_PORT:-500}" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "$handshake_age" "${WARP_JC:-5}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "$active_jc" "$active_jmin" "$active_jmax" "${WARP_ADAPTIVE:-1}" "${WARP_SIP_FORCE:-0}" "$adapt_step" "$adapt_total" "$adapt_result" "$adapt_updated" "${WARP_ADAPT_RETRY_SEC:-300}" "$adapt_mode" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$apps_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
+  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"interface_up":%s,"routing_ok":%s,"rules_ok":%s,"endpoint":"%s","configured_endpoint":"%s","configured_port":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"handshake_age":%s,"jc":"%s","jmin":"%s","jmax":"%s","active_jc":"%s","active_jmin":"%s","active_jmax":"%s","adaptive":"%s","sip_force":"%s","adaptive_step":%s,"adaptive_total":%s,"adaptive_result":"%s","adaptive_updated":%s,"adaptive_retry_sec":%s,"adaptive_mode":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"warp_domains":%s,"dns":"%s","dns_force":"%s"}\n' \
+    "$enabled" "$dev" "$running" "$interface_up" "$routing_ok" "$rules_ok" "$(json_escape "$endpoint")" "$(json_escape "${WARP_ENDPOINT:-162.159.192.1}")" "${WARP_PORT:-500}" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "$handshake_age" "${WARP_JC:-5}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "$active_jc" "$active_jmin" "$active_jmax" "${WARP_ADAPTIVE:-1}" "${WARP_SIP_FORCE:-0}" "$adapt_step" "$adapt_total" "$adapt_result" "$adapt_updated" "${WARP_ADAPT_RETRY_SEC:-300}" "$adapt_mode" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$warp_domains_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
 }
 
 cmd_warp_toggle() {
   validate_switch "$2" || return 1
   set_conf ENABLE_WARP "$2" || return 1
   if [ "$2" = "1" ]; then
-    sh "$MODDIR/warp-tunnel.sh" start </dev/null >>"$LOG_FILE" 2>&1 &
-    echo '{"ok":true,"state":"starting"}'
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" start
   else
     sh "$MODDIR/warp-tunnel.sh" stop
   fi
+  # Состав netfilter-правил зависит от ENABLE_WARP: от него зависят и подсети из
+  # warp_bypass_nets.list, и RETURN для UID туннельных приложений. Без пересборки
+  # цепочек переключатель менял только конфиг, но не поведение обхода.
+  reload_service
+  echo "{\"ok\":true,\"state\":\"$([ "$2" = 1 ] && echo starting || echo stopped)\"}"
 }
 
 cmd_warp_sip() {
@@ -569,6 +567,18 @@ cmd_warp_sip() {
       ;;
     *) return 1 ;;
   esac
+}
+
+# Полный перезапуск туннеля. Отличается от rekey тем, что не трогает ключи и
+# профиль: сбрасывается только состояние перебора. Нужен, когда туннель завис на
+# одном шаге подбора и сам не выбирается.
+cmd_warp_restart() {
+  if [ "${Z2_ASYNC:-0}" = "1" ]; then
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" force-restart
+    echo '{"ok":true,"state":"restarting"}'
+    return 0
+  fi
+  sh "$MODDIR/warp-tunnel.sh" force-restart
 }
 
 cmd_warp_rekey() {
@@ -607,7 +617,7 @@ cmd_warp_save() {
   fi
   rm -f "$MODDIR/state/warp-adapt.state" 2>/dev/null
   if [ "$enabled" = "1" ]; then
-    sh "$MODDIR/warp-tunnel.sh" restart </dev/null >>"$LOG_FILE" 2>&1 &
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" restart
     echo '{"ok":true,"state":"starting"}'
   else
     sh "$MODDIR/warp-tunnel.sh" stop
@@ -620,29 +630,22 @@ case "$1" in
   json-status) cmd_json_status ;;
   json-hotspot-settings) cmd_json_hotspot_settings ;;
   json-strategies) cmd_json_strategies ;;
-  json-apps) cmd_json_apps ;;
-  json-app-lists) cmd_json_app_lists ;;
   json-diagnostics) cmd_json_diagnostics ;;
+  json-hostlist) cmd_json_hostlist ;;
+  json-learned) cmd_json_learned "$@" ;;
+  hostlist-mode) cmd_hostlist_mode "$@" ;;
+  hostlist-clear) cmd_hostlist_clear ;;
   json-warp-status) cmd_json_warp_status ;;
   warp-toggle) cmd_warp_toggle "$@" ;;
   warp-sip) cmd_warp_sip "$@" ;;
   warp-rekey) cmd_warp_rekey ;;
+  warp-restart) cmd_warp_restart ;;
   warp-save) cmd_warp_save "$@" ;;
-  mode) case "$2" in include|exclude|global) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
-  forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; set_conf SCOPE_PRESET CUSTOM; reload_service ;;
-  quicmode) case "$2" in off|selected|global) set_conf QUIC_MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
-  settings) case "$2:$3:$4" in include:off:0|include:off:1|include:selected:0|include:selected:1|include:global:0|include:global:1|exclude:off:0|exclude:off:1|exclude:selected:0|exclude:selected:1|exclude:global:0|exclude:global:1|global:off:0|global:off:1|global:selected:0|global:selected:1|global:global:0|global:global:1) set_conf MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; set_conf QUIC_MODE "$(echo "$3" | tr '[:lower:]' '[:upper:]')"; set_conf FORCE_TCP "$4"; set_conf SCOPE_PRESET CUSTOM; reload_service ;; *) exit 1 ;; esac ;;
-  scope) cmd_scope_preset "$@" ;;
+  forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; reload_service ;;
+  quicmode) case "$2" in off|on) set_conf QUIC_MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; reload_service ;; *) exit 1 ;; esac ;;
   hotspot-settings) cmd_hotspot_settings "$@" ;;
   save-smart) cmd_save_smart "$@" ;;
   save-strategies) cmd_save_strategies "$@" ;;
-  app-state) cmd_app_state "$@" ;;
-  app-state-set) cmd_app_state_set "$@" ;;
-  sync-apps) cmd_sync_apps ;;
-  add) cmd_add_del apps add "$2" ;;
-  del) cmd_add_del apps del "$2" ;;
-  add-exclude) cmd_add_del exclude add "$2" ;;
-  del-exclude) cmd_add_del exclude del "$2" ;;
   replace-list) cmd_replace_list "$2" "$3" ;;
   nfqws-debug) cmd_nfqws_debug "$@" ;;
   diag) cmd_diag ;;
@@ -653,7 +656,7 @@ case "$1" in
   auto-clear) cmd_auto_clear ;;
   restart) reload_service ;;
   webui) cmd_webui ;;
-  log) tail -n "${2:-150}" "$LOG_FILE" 2>/dev/null ;;
-  nfqws-log) tail -n "${2:-150}" "$NFQWS_LOG" 2>/dev/null ;;
+  log) cmd_tail_log "$LOG_FILE" "$2" ;;
+  nfqws-log) cmd_tail_log "$NFQWS_LOG" "$2" ;;
   *) echo "Команды: status, json-status, json-apps, json-app-lists, json-warp-status, warp-toggle 0|1, warp-rekey, warp-save, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
 esac

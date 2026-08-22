@@ -282,12 +282,20 @@ verify_current_rules() {
   return 0
 }
 
+# Пустой pid не означает брошенную блокировку: владелец мог сделать mkdir и
+# ещё не записать себя. Сносим только если пусто две итерации подряд.
 acquire_lock() {
   mkdir -p "$RUN_DIR" || return 1; chmod 0700 "$RUN_DIR" 2>/dev/null || true
-  local n=0 lock_pid
+  local n=0 lock_pid empty_seen=0
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
-    if ! valid_number "$lock_pid" || ! kill -0 "$lock_pid" 2>/dev/null; then rm -rf "$LOCK_DIR" 2>/dev/null; fi
+    if ! valid_number "$lock_pid"; then
+      empty_seen=$((empty_seen + 1))
+      [ "$empty_seen" -ge 2 ] && { rm -rf "$LOCK_DIR" 2>/dev/null; empty_seen=0; }
+    else
+      empty_seen=0
+      kill -0 "$lock_pid" 2>/dev/null || rm -rf "$LOCK_DIR" 2>/dev/null
+    fi
     n=$((n + 1)); [ "$n" -lt 6 ] || return 1; sleep 1
   done
   echo $$ > "$LOCK_DIR/pid"

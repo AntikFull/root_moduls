@@ -1,0 +1,81 @@
+# ==============================================================================
+# user.list — домены, к которым применяется обход DPI
+# ==============================================================================
+# КАК ЭТО РАБОТАЕТ (режим HOSTLIST_MODE в zapret2.conf):
+#
+#   AUTO  (по умолчанию) — обрабатываются домены из ЭТОГО файла плюс те, что
+#         модуль выучил сам и записал в state/auto.list. Домен попадает в
+#         auto.list, если nfqws2 трижды за 60 секунд увидел, что он недоступен.
+#         Ничего вписывать вручную не обязательно — список пополнится сам.
+#
+#   LIST  — обрабатываются ТОЛЬКО домены из этого файла. Обучение выключено.
+#
+#   ALL   — обрабатываются все домены, кроме exclude_domains.list.
+#           Этот файл не используется.
+#
+# ФОРМАТ: одно имя домена на строку. Поддомены подхватываются автоматически:
+#         строка "youtube.com" покрывает и "www.youtube.com", и "m.youtube.com".
+#
+# Домены из exclude_domains.list имеют приоритет и не обрабатываются никогда,
+# в каком бы режиме модуль ни работал.
+# ==============================================================================
+
+youtube.com
+youtu.be
+googlevideo.com
+ggpht.com
+ggpht.cn
+gvt1.com
+gvt2.com
+gvt3.com
+gstatic.com
+youtube-nocookie.com
+withyoutube.com
+youtubekids.com
+returnyoutubedislikeapi.com
+googleapis.com
+googleusercontent.com
+discord.com
+discord.gg
+discordapp.com
+discord.media
+discordapp.net
+instagram.com
+cdninstagram.com
+facebook.com
+fbcdn.net
+facebook.net
+fb.com
+fbsbx.com
+threads.net
+twitter.com
+x.com
+twimg.com
+t.co
+twitpic.com
+github.com
+githubusercontent.com
+github.io
+medium.com
+reddit.com
+redd.it
+redditstatic.com
+redditmedia.com
+spotify.com
+scdn.co
+soundcloud.com
+twitch.tv
+ttvnw.net
+jtvnw.net
+viber.com
+signal.org
+akamaized.net
+cloudflare.com
+cloudflare-dns.com
+fastly.net
+ytimg.com
+youtubei.googleapis.com
+youtubeembeddedplayer.googleapis.com
+ytimg.l.google.com
+yt3.ggpht.com
+yt4.ggpht.com

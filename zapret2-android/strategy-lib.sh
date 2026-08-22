@@ -2,6 +2,51 @@
 
 STRATEGY_DIR="${STRATEGY_DIR:-$MODDIR/strategies}"
 
+# ------------------------------------------------------------------------------
+# Подпись применённой конфигурации.
+#
+# Живёт здесь, а не в service.sh, потому что её обязаны считать одинаково три
+# места: service.sh (записывает после старта), service-watch.sh (сверяет раз в
+# минуту) и on_change.sh (обновляет после лёгкой реконсиляции). Пока формула
+# была скопирована в два файла, любое расхождение в списке файлов или их порядке
+# превращалось в бесконечный цикл перезагрузок.
+#
+# Пути берутся от MODDIR, а не от переменных вызывающего: так результат не
+# зависит от того, какие имена заведены в конкретном скрипте.
+# ------------------------------------------------------------------------------
+config_signature() {
+  local base="${MODDIR:?}" lists f
+  lists="$base/lists"
+  [ -d "$lists" ] || lists="$base"
+  {
+    printf 'CONF\n'; cat "$base/zapret2.conf" 2>/dev/null
+    # Набор ОБЯЗАН совпадать с ветками on_change.sh, иначе правка одного и
+    # того же файла обрабатывается двумя механизмами по-разному. Списки
+    # приложений (apps*.list, exclude.list, auto_apps.list, warp_apps*.list,
+    # smart_youtube.list) удалены в v4.0.0 и в подписи больше не нужны;
+    # ipset.list и ipset_exclude.list, наоборот, отсутствовали в ней.
+    for f in user.list exclude_domains.list ipset.list ipset_exclude.list \
+             warp_bypass_nets.list warp_domains.list \
+             dns.list dns.user.list probe_hosts.list wifi_direct_ssids.list; do
+      printf 'F=%s\n' "$f"; cat "$lists/$f" 2>/dev/null
+    done
+    printf 'STRATEGIES=%s\n' "$(strategy_catalog_signature 2>/dev/null)"
+  } | cksum 2>/dev/null | awk '{print $1 "-" $2; exit}'
+}
+
+# Файлы, которые пишет сам модуль (state/auto.list с выученными доменами,
+# state/warp_auto_domains.list), в подпись НЕ входят: иначе каждая запись
+# выученного домена выглядела бы как правка конфигурации и вызывала перезапуск.
+write_config_signature() {
+  local sig tmp file="${RUN_DIR:-$MODDIR/run}/config.sig"
+  sig=$(config_signature)
+  [ -n "$sig" ] || return 0
+  mkdir -p "${file%/*}" 2>/dev/null
+  tmp="$file.tmp.$$"
+  printf '%s\n' "$sig" > "$tmp" 2>/dev/null && mv -f "$tmp" "$file" 2>/dev/null
+  chmod 0600 "$file" 2>/dev/null || true
+}
+
 strategy_args_valid() {
   [ -n "$1" ] && [ "${#1}" -le 8192 ] || return 1
   printf '%s' "$1" | LC_ALL=C grep -Eq '^[-A-Za-z0-9_.,:=/@+% /]+$' || return 1

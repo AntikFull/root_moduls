@@ -2,12 +2,23 @@
 
 umask 077
 MODDIR=${0%/*}
+case "$MODDIR" in /*) ;; *) MODDIR="$(cd "$MODDIR" 2>/dev/null && pwd)" ;; esac
 RUN_DIR="$MODDIR/run"
+LOG_DIR="$MODDIR/logs"
+LOG_FILE="$LOG_DIR/zapret2_debug.log"
+mkdir -p "$LOG_DIR" 2>/dev/null; chmod 0700 "$LOG_DIR" 2>/dev/null || true
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$1] net-watch: $2" >> "$LOG_FILE"; }
 TRIGGER_FILE="$RUN_DIR/network-event.flag"
 NETLINK_FIFO="$RUN_DIR/netlink-events.fifo"
 [ -f "$MODDIR/zapret2.conf" ] && . "$MODDIR/zapret2.conf"
 : "${VPN_WATCH_INTERVAL:=20}" "${VPN_RETRY_INTERVAL:=2}" "${VPN_ROLE_RECHECK:=120}" "${VPN_VERIFY_INTERVAL:=300}" "${VPN_EVENT_DEBOUNCE:=3}" "${VPN_NETLINK_MONITOR:=1}"
 : "${AUTO_SELECT_ENABLED:=1}" "${AUTO_PERIODIC_RECHECK:=1800}"
+# Потолок задержки между повторами. Постоянная ошибка применения (нет цепочек
+# после неудачного reload, VPN в переходном состоянии) раньше крутила два
+# dumpsys каждые VPN_RETRY_INTERVAL секунд бесконечно.
+: "${VPN_RETRY_MAX:=300}"
+case "$VPN_RETRY_MAX" in ''|*[!0-9]*) VPN_RETRY_MAX=300 ;; esac
+[ "$VPN_RETRY_MAX" -ge 5 ] 2>/dev/null || VPN_RETRY_MAX=300
 case "$VPN_WATCH_INTERVAL" in ''|*[!0-9]*) VPN_WATCH_INTERVAL=20 ;; esac
 case "$VPN_RETRY_INTERVAL" in ''|*[!0-9]*) VPN_RETRY_INTERVAL=2 ;; esac
 case "$VPN_ROLE_RECHECK" in ''|*[!0-9]*) VPN_ROLE_RECHECK=120 ;; esac
@@ -138,6 +149,7 @@ last_role_check=$now
 last_verify=$now
 last_auto_check=$now
 retrying=0
+retry_delay="$VPN_RETRY_INTERVAL"
 event_pending=0
 event_since=0
 
@@ -165,7 +177,13 @@ while :; do
   fi
 
   if [ "$retrying" = 1 ]; then
-    role_check_due=1
+    # Повтор после неудачи. Роли заново НЕ вычитываем: role_snapshot — это два
+    # dumpsys, а причина повтора в том, что применение не удалось, а не в том,
+    # что роли изменились. Дорогую проверку поднимаем, только если изменилась
+    # дешёвая подпись интерфейсов.
+    need_apply=1
+    cheap=$(cheap_snapshot)
+    if [ "$cheap" != "$last_cheap" ]; then last_cheap=$cheap; role_check_due=1; fi
   elif [ "$event_pending" = 1 ] && [ $((now - event_since)) -ge "$VPN_EVENT_DEBOUNCE" ] 2>/dev/null; then
     role_check_due=1
   elif [ $((now - last_role_check)) -ge "$VPN_ROLE_RECHECK" ] 2>/dev/null; then
@@ -199,9 +217,10 @@ while :; do
     [ "$retrying" = 1 ] && need_apply=1
   fi
 
-  if [ "${ENABLE_WARP:-0}" = "1" ] && [ -x "$MODDIR/warp-tunnel.sh" ]; then
-    sh "$MODDIR/warp-tunnel.sh" watchdog >/dev/null 2>&1 || true
-  fi
+  # Периодический watchdog туннеля живёт в service-watch.sh. Здесь он вызывался
+  # на КАЖДОЙ итерации (то есть на каждое сетевое событие) — дублирование работы.
+  # Синхронизация WARP при реальной смене сетевой роли делается выше, в блоке
+  # role_check_due, где она и нужна.
 
   if [ "$need_apply" = 0 ] && [ $((now - last_verify)) -ge "$VPN_VERIFY_INTERVAL" ] 2>/dev/null; then
     tether_ok=0; vpn_ok=0
@@ -231,11 +250,22 @@ while :; do
       now=$(now_epoch)
       last_role_check=$now
       last_verify=$now
+      if [ "$retrying" = 1 ]; then log INFO "правила применены, повторы прекращены"; fi
       retrying=0
+      retry_delay="$VPN_RETRY_INTERVAL"
       wait_for_event "$VPN_WATCH_INTERVAL"
     else
+      if [ "$retrying" = 0 ]; then
+        log WARN "применение не удалось (tether=$tether_rc vpn=$vpn_rc); повтор через ${retry_delay}с"
+      fi
       retrying=1
-      wait_for_event "$VPN_RETRY_INTERVAL"
+      wait_for_event "$retry_delay"
+      # Удвоение до потолка: постоянная ошибка не должна означать вечный опрос.
+      if [ "$retry_delay" -lt "$VPN_RETRY_MAX" ] 2>/dev/null; then
+        retry_delay=$((retry_delay * 2))
+        [ "$retry_delay" -le "$VPN_RETRY_MAX" ] 2>/dev/null || retry_delay="$VPN_RETRY_MAX"
+        log WARN "повтор не помог (tether=$tether_rc vpn=$vpn_rc); следующая попытка через ${retry_delay}с"
+      fi
     fi
   else
     wait_for_event "$VPN_WATCH_INTERVAL"

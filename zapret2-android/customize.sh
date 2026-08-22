@@ -9,6 +9,18 @@ TMP_INSTALL_LOG=/data/local/tmp/zapret2_install.log
 mkdir -p /data/local/tmp 2>/dev/null
 : > "$TMP_INSTALL_LOG" 2>/dev/null
 
+# Зомби и умирающие процессы не отдают cmdline: ядро держит блокировку памяти
+# задачи, и чтение виснет без таймаута — однажды это подвесило перезапуск целиком.
+# /proc/PID/stat читается без этой блокировки, поэтому сначала спрашиваем
+# состояние. Полный вариант с потолком по времени — в service.sh.
+pid_cmdline() {
+  local st
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
+
 ilog() {
   line="[$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)] $*"
   echo "$line" >> "$TMP_INSTALL_LOG" 2>/dev/null
@@ -34,39 +46,9 @@ set_exec() {
   chmod 0755 "$1" 2>/dev/null || chmod 755 "$1" 2>/dev/null || true
 }
 
-set_permissions() {
-  for f in \
-    "$MODPATH/bin/nfqws2" \
-    "$MODPATH/bin/ip2net" \
-    "$MODPATH/bin/mdig" \
-    "$MODPATH/bin/awg" \
-    "$MODPATH/bin/amneziawg-go" \
-    "$MODPATH/bin/zapret2-control" \
-    "$MODPATH/warp-tunnel.sh" \
-    "$MODPATH/service.sh" \
-    "$MODPATH/boot-completed.sh" \
-    "$MODPATH/action.sh" \
-    "$MODPATH/uninstall.sh" \
-    "$MODPATH/on_change.sh" \
-    "$MODPATH/vpn-routing.sh" \
-    "$MODPATH/vpn-watch.sh" \
-    "$MODPATH/net-role.sh" \
-    "$MODPATH/tether-sync.sh" \
-    "$MODPATH/app-sync.sh" \
-    "$MODPATH/auto-select.sh" \
-    "$MODPATH/strategy-lib.sh" \
-    "$MODPATH/service-watch.sh" \
-    "$MODPATH/network-event.sh" \
-    "$MODPATH/log-export.sh" \
-    "$MODPATH/diagnostics.sh"
-  do
-    if type set_perm >/dev/null 2>&1; then
-      [ -f "$f" ] && set_perm "$f" 0 0 0755
-    else
-      set_exec "$f"
-    fi
-  done
-}
+# Права на исполняемые файлы выставляются единым списком ниже, уже после выбора
+# ABI и проверки manifest. Объявленная здесь функция set_permissions() ни разу не
+# вызывалась и дублировала тот список — удалена.
 
 manager_name() {
   if [ -n "$KSU" ] || [ -n "$KSU_VER" ] || [ -d /data/adb/ksu ]; then
@@ -95,22 +77,31 @@ UPGRADE_FROM=""
 if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
   mkdir -p "$UPGRADE_BACKUP/lists" 2>/dev/null || fail_install "Не удалось создать временный архив резервных копий"
   [ -f "$ACTIVE_MODDIR/zapret2.conf" ] && cp -f "$ACTIVE_MODDIR/zapret2.conf" "$UPGRADE_BACKUP/zapret2.conf" 2>/dev/null
-  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
+  for keep in user.list exclude_domains.list ipset.list ipset_exclude.list warp_domains.list warp_bypass_nets.list dns.list dns.user.list probe_hosts.list wifi_direct_ssids.list; do
     if [ -f "$ACTIVE_MODDIR/lists/$keep" ]; then
       cp -f "$ACTIVE_MODDIR/lists/$keep" "$UPGRADE_BACKUP/lists/$keep" 2>/dev/null
     elif [ -f "$ACTIVE_MODDIR/$keep" ]; then
       cp -f "$ACTIVE_MODDIR/$keep" "$UPGRADE_BACKUP/lists/$keep" 2>/dev/null
     fi
   done
+  # Пользовательские стратегии — это strategy_100 и выше (см. lists/README в
+  # strategies/). Диапазон 1..99 занят встроенными и обновляется вместе с модулем.
   if [ -d "$ACTIVE_MODDIR/strategies" ]; then
     mkdir -p "$UPGRADE_BACKUP/strategies" 2>/dev/null
     for strategy in "$ACTIVE_MODDIR"/strategies/strategy_*; do
-      [ -f "$strategy" ] && [ ! -L "$strategy" ] && cp -f "$strategy" "$UPGRADE_BACKUP/strategies/" 2>/dev/null
+      [ -f "$strategy" ] && [ ! -L "$strategy" ] || continue
+      snum=$(basename "$strategy" | cut -d_ -f2-)
+      case "$snum" in ''|*[!0-9]*) continue ;; esac
+      [ "$snum" -ge 100 ] 2>/dev/null || continue
+      cp -f "$strategy" "$UPGRADE_BACKUP/strategies/" 2>/dev/null
     done
   fi
   if [ -d "$ACTIVE_MODDIR/state" ]; then
     mkdir -p "$UPGRADE_BACKUP/state" 2>/dev/null
     [ -f "$ACTIVE_MODDIR/state/warp.conf" ] && cp -f "$ACTIVE_MODDIR/state/warp.conf" "$UPGRADE_BACKUP/state/warp.conf" 2>/dev/null
+    # Выученные домены — результат работы модуля на реальной сети, терять его нельзя.
+    [ -f "$ACTIVE_MODDIR/state/auto.list" ] && cp -f "$ACTIVE_MODDIR/state/auto.list" "$UPGRADE_BACKUP/state/auto.list" 2>/dev/null
+    [ -f "$ACTIVE_MODDIR/state/warp_auto_domains.list" ] && cp -f "$ACTIVE_MODDIR/state/warp_auto_domains.list" "$UPGRADE_BACKUP/state/warp_auto_domains.list" 2>/dev/null
     for cache in "$ACTIVE_MODDIR"/state/auto-*.env; do
       [ -f "$cache" ] && cp -f "$cache" "$UPGRADE_BACKUP/state/" 2>/dev/null
     done
@@ -119,21 +110,50 @@ if [ -d "$ACTIVE_MODDIR" ] && [ -f "$ACTIVE_MODDIR/module.prop" ]; then
   ilog "upgrade_backup=$UPGRADE_BACKUP source=$ACTIVE_MODDIR"
 fi
 
+# ------------------------------------------------------------------------------
+# Ключи, значение которых принадлежит пользователю и переносится при обновлении.
+#
+# ВСЁ ОСТАЛЬНОЕ берётся из нового zapret2.conf. Это принципиально: раньше
+# переносились ВСЕ строки вида KEY="...", включая DESYNC_ARGS_SMART_*, поэтому
+# при обновлении встроенные профили обхода всегда перетирались старыми, и
+# пользователь никогда не получал улучшенные стратегии.
+# ------------------------------------------------------------------------------
+USER_CONFIG_KEYS="
+QUIC_MODE FORCE_TCP PORTS_TCP QNUM
+HOSTLIST_MODE HOSTLIST_AUTO_FAIL_THRESHOLD HOSTLIST_AUTO_FAIL_TIME
+STRATEGY_MODE DESYNC_ARGS_CUSTOM
+AUTO_SELECT_ENABLED AUTO_ALLOW_DIRECT AUTO_PROFILE_DEFAULT
+AUTO_CACHE_TTL AUTO_WIFI_CACHE_TTL AUTO_CELL_CACHE_TTL AUTO_PERIODIC_RECHECK
+AUTO_PROBE_HOSTS_GENERAL AUTO_PROBE_HOSTS_GOOGLE AUTO_PROBE_MAX_CANDIDATES AUTO_MIN_PROBE_INTERVAL
+AUTO_REPLY_PACKETS
+ENABLE_HOTSPOT ENABLE_VPN_HOTSPOT VPN_TUN_NAME VPN_FALLBACK_MODE
+VPN_HOTSPOT_KILLSWITCH VPN_HOTSPOT_MASQUERADE FORCE_TCP_HOTSPOT TETHER_IFACES
+VPN_RETRY_MAX
+DNS_FORWARD_HOTSPOT DNS_FORWARD_SERVERS DNS_FORWARD_SERVER
+ENABLE_WARP WARP_DEV WARP_ENDPOINT WARP_PORT WARP_JC WARP_JMIN WARP_JMAX
+WARP_S1 WARP_S2 WARP_DNS WARP_DNS_FORCE WARP_ADAPTIVE WARP_SIP_FORCE WARP_DOMAIN_ROUTING WARP_DOMAIN_FALLBACK
+WARP_HEALTH_MAX_AGE WARP_HEALTH_PROBE_IP WARP_HEALTH_PROBE_TIMEOUT WARP_HEALTH_PROBE_TRIES WARP_STALL_RESTART_SEC
+ENABLE_HTTP_API LOG_EXPORT_ON_BOOT LOG_VERBOSE NFQWS_DEBUG
+HEALTH_WATCH_INTERVAL HEALTH_ERROR_BACKOFF CONFIG_DRIFT_CHECK
+"
+
 merge_previous_config() {
   old="$1" new="$2" tmp="$2.merge.$$"
   [ -f "$old" ] && [ -f "$new" ] || return 0
-  awk '
+  awk -v allow="$USER_CONFIG_KEYS" '
+    BEGIN { n=split(allow, a, /[ \t\n]+/); for (i=1; i<=n; i++) if (a[i] != "") ok[a[i]]=1 }
     NR==FNR {
-      # Upgrade migration accepts only the same simple quoted assignment format
-      # emitted by zapret2-control. This prevents a poisoned legacy config from
-      # becoming executable shell when the new module sources zapret2.conf.
+      # Принимаем только тот же простой формат присваивания, который пишет
+      # zapret2-control. Это не даёт отравленному старому конфигу превратиться
+      # в исполняемый shell, когда новый модуль сделает . zapret2.conf
       if ($0 ~ /^[A-Z][A-Z0-9_]*="[^"]*"$/ && index($0,"`")==0 && index($0,"$")==0 && index($0,"\\")==0 && index($0,"\r")==0) {
-        key=$0; sub(/=.*/, "", key); old[key]=$0
+        key=$0; sub(/=.*/, "", key)
+        if (key in ok) prev[key]=$0
       }
       next
     }
     {
-      if ($0 ~ /^[A-Z][A-Z0-9_]*=/) { key=$0; sub(/=.*/, "", key); if (key in old) { print old[key]; next } }
+      if ($0 ~ /^[A-Z][A-Z0-9_]*=/) { key=$0; sub(/=.*/, "", key); if (key in prev) { print prev[key]; next } }
       print
     }
   ' "$old" "$new" > "$tmp" && mv -f "$tmp" "$new"
@@ -147,29 +167,38 @@ restore_upgrade_data() {
 
   # 1. Восстанавливаем все списки, которые пользователь может менять через WebUI/CLI.
   # Bundled defaults остаются обновляемыми только для файлов, которых пользователь не меняет.
-  for keep in apps.list apps.user.list exclude.list warp_apps.list warp_apps.user.list dns.list dns.user.list auto_domains.list exclude_domains.list probe_hosts.list wifi_direct_ssids.list smart_youtube.list; do
+  for keep in user.list exclude_domains.list ipset.list ipset_exclude.list warp_domains.list warp_bypass_nets.list dns.list dns.user.list probe_hosts.list wifi_direct_ssids.list; do
     if [ -f "$UPGRADE_BACKUP/lists/$keep" ]; then
       cp -f "$UPGRADE_BACKUP/lists/$keep" "$MODPATH/lists/$keep" 2>/dev/null
     fi
   done
 
-  # 2. Пользовательские кастомные стратегии
+  # 2. Пользовательские стратегии (strategy_100 и выше).
+  # Раньше бэкап делался по маске strategy_*, а восстановление — по
+  # strategy_custom_*, причём такие имена не проходят strategy_id_valid()
+  # (загрузчик требует strategy_<число>). То есть пользовательские стратегии
+  # либо терялись, либо восстанавливались в формате, который никто не читает.
+  restored_strategies=0
   if [ -d "$UPGRADE_BACKUP/strategies" ]; then
     mkdir -p "$MODPATH/strategies" 2>/dev/null
-    for strategy in "$UPGRADE_BACKUP"/strategies/strategy_custom_*; do
-      [ -f "$strategy" ] && [ ! -L "$strategy" ] && cp -f "$strategy" "$MODPATH/strategies/" 2>/dev/null
+    for strategy in "$UPGRADE_BACKUP"/strategies/strategy_*; do
+      [ -f "$strategy" ] && [ ! -L "$strategy" ] || continue
+      cp -f "$strategy" "$MODPATH/strategies/" 2>/dev/null && restored_strategies=$((restored_strategies + 1))
     done
   fi
 
   # 3. Сохранённое состояние WARP и кэши автоподбора
+  restored_caches=0
   if [ -d "$UPGRADE_BACKUP/state" ]; then
     mkdir -p "$MODPATH/state" 2>/dev/null
     [ -f "$UPGRADE_BACKUP/state/warp.conf" ] && cp -f "$UPGRADE_BACKUP/state/warp.conf" "$MODPATH/state/warp.conf" 2>/dev/null
+    [ -f "$UPGRADE_BACKUP/state/auto.list" ] && cp -f "$UPGRADE_BACKUP/state/auto.list" "$MODPATH/state/auto.list" 2>/dev/null
+    [ -f "$UPGRADE_BACKUP/state/warp_auto_domains.list" ] && cp -f "$UPGRADE_BACKUP/state/warp_auto_domains.list" "$MODPATH/state/warp_auto_domains.list" 2>/dev/null
     for cache in "$UPGRADE_BACKUP"/state/auto-*.env; do
-      [ -f "$cache" ] && cp -f "$cache" "$MODPATH/state/" 2>/dev/null
+      [ -f "$cache" ] && cp -f "$cache" "$MODPATH/state/" 2>/dev/null && restored_caches=$((restored_caches + 1))
     done
   fi
-  ilog "upgrade_preserved=config,apps,exclude,warp_apps,warp_conf,auto_domains,exclude_domains,probe_hosts,wifi_direct_ssids,strategies,auto_cache"
+  ilog "upgrade_preserved=config,lists,warp_conf user_strategies=$restored_strategies auto_caches=$restored_caches"
 }
 
 [ -n "$MODPATH" ] || fail_install "MODPATH не задан окружением"
@@ -198,38 +227,48 @@ restore_upgrade_data
 if [ -n "$UPGRADE_FROM" ] && [ -f "$MODPATH/zapret2.conf" ]; then
   old_strategy=$(sed -n 's/^STRATEGY_MODE=//p' "$MODPATH/zapret2.conf" | head -n1 | tr -d '"')
   case "$old_strategy" in SIMPLE|AUTO|'') sed -i 's/^STRATEGY_MODE=.*/STRATEGY_MODE="SMART"/' "$MODPATH/zapret2.conf" ;; esac
-  grep -q '^AUTO_APPS_ENABLED=' "$MODPATH/zapret2.conf" 2>/dev/null || sed -i '/^STRATEGY_MODE=/a AUTO_APPS_ENABLED="1"' "$MODPATH/zapret2.conf"
-  if [ -d "$MODPATH/strategies" ] && ! grep -lq '^# MODE=DIRECT' "$MODPATH"/strategies/strategy_* 2>/dev/null; then
-    migrate_tmp="$MODPATH/strategies/.migrate.$$"
-    mkdir -p "$migrate_tmp" 2>/dev/null
-    for strategy in "$MODPATH"/strategies/strategy_*; do
-      [ -f "$strategy" ] || continue
-      number=$(basename "$strategy" | cut -d_ -f2-)
-      case "$number" in ''|*[!0-9]*) continue ;; esac
-      cp -f "$strategy" "$migrate_tmp/strategy_$((number + 1))" 2>/dev/null
-    done
-    rm -f "$MODPATH"/strategies/strategy_* 2>/dev/null
-    mv -f "$migrate_tmp"/strategy_* "$MODPATH/strategies/" 2>/dev/null
-    rm -rf "$migrate_tmp" 2>/dev/null
-    printf '# NAME=DIRECT\n# MODE=DIRECT\n' > "$MODPATH/strategies/strategy_1"
-    ilog "upgrade_migration=strategies_shifted direct_candidate=strategy_1"
-  fi
+
+  # AUTO_PROFILE_DEFAULT принудительно ставится на первую НЕ-DIRECT стратегию:
+  # до первого удачного probe модуль обязан защищать, а не пропускать трафик.
   sed -i 's/^AUTO_PROFILE_DEFAULT=.*/AUTO_PROFILE_DEFAULT="strategy_2"/' "$MODPATH/zapret2.conf"
-  for newkey in 'AUTO_ALLOW_DIRECT="1"' \
-    'AUTO_PROBE_HOSTS_GENERAL="discord.com=200// www.instagram.com=200// x.com=200//"' \
-    'AUTO_PROBE_HOSTS_GOOGLE="www.youtube.com=204//generate_204 youtubei.googleapis.com=204//generate_204 i.ytimg.com=204//generate_204 redirector.googlevideo.com=200//report_mapping"'; do
-    key=${newkey%%=*}
-    grep -q "^$key=" "$MODPATH/zapret2.conf" 2>/dev/null || printf '%s\n' "$newkey" >> "$MODPATH/zapret2.conf"
+
+  # Кэш автоподбора НЕ стирается: он привязан к ключу сети, в который уже входит
+  # подпись каталога стратегий, поэтому после обновления стратегий устаревшие
+  # записи не подхватятся сами по себе. Раньше здесь стоял безусловный
+  # rm -f state/auto-*.env — он сносил кэш, только что восстановленный из
+  # бэкапа, и при этом в лог писалось, что кэш сохранён.
+
+  # QUIC_MODE: SELECTED/GLOBAL остались от отбора по приложениям.
+  sed -i -e 's/^QUIC_MODE="SELECTED"/QUIC_MODE="ON"/' \
+         -e 's/^QUIC_MODE="GLOBAL"/QUIC_MODE="ON"/' "$MODPATH/zapret2.conf"
+
+  # --- Переход на отбор по доменам и подсетям ---
+  # Прежние версии отбирали трафик по приложениям. Домены оттуда не вывести:
+  # соответствия «пакет -> хост» нет. Поэтому старые списки приложений просто
+  # удаляются, а пользователю сообщается, что проверить.
+  for legacy in apps.list apps.user.list auto_apps.list exclude.list                 warp_apps.list warp_apps.user.list auto_domains.list smart_youtube.list; do
+    [ -f "$MODPATH/lists/$legacy" ] && rm -f "$MODPATH/lists/$legacy" 2>/dev/null
   done
+  # Читаем из ЕЩЁ живого каталога модуля: в бэкап списки приложений больше не
+  # попадают, поэтому в $UPGRADE_BACKUP их нет.
+  legacy_excl=$(grep -cvE '^[[:space:]]*(#|$)' "$ACTIVE_MODDIR/lists/exclude.list" 2>/dev/null)
+  case "$legacy_excl" in ''|*[!0-9]*) legacy_excl=0 ;; esac
+  if [ "$legacy_excl" -gt 0 ] 2>/dev/null; then
+    ilog "upgrade_migration=apps_dropped excluded_apps=$legacy_excl"
+    ui_print " "
+    ui_print "- ВНИМАНИЕ: отбор по приложениям убран."
+    ui_print "  Обход теперь применяется по доменам и подсетям, как на роутере."
+    ui_print "  У вас было исключено приложений: $legacy_excl (банки, госуслуги)."
+    ui_print "  Их домены нужно внести в lists/exclude_domains.list,"
+    ui_print "  а адреса — в lists/ipset_exclude.list, иначе обход затронет и их."
+  fi
+
+  # Тайминги watcher-ов нормализуются: старые значения (2 сек) были рассчитаны на
+  # опрос, а текущий watcher блокируется на netlink-событии.
   sed -i -e 's/^VPN_WATCH_INTERVAL="[0-9]*"/VPN_WATCH_INTERVAL="20"/' \
          -e 's/^VPN_RETRY_INTERVAL="[0-9]*"/VPN_RETRY_INTERVAL="2"/' \
          -e 's/^VPN_ROLE_RECHECK="[0-9]*"/VPN_ROLE_RECHECK="120"/' \
-         -e 's/^VPN_VERIFY_INTERVAL="[0-9]*"/VPN_VERIFY_INTERVAL="300"/' \
-         -e 's/^HEALTH_WATCH_INTERVAL="[0-9]*"/HEALTH_WATCH_INTERVAL="60"/' "$MODPATH/zapret2.conf"
-  rm -f "$MODPATH"/state/auto-*.env 2>/dev/null
-  if [ -f "$MODPATH/lists/apps.list" ] && [ -f "$MODPATH/lists/auto_apps.list" ]; then
-    awk 'NR==FNR {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(t!="" && t !~ /^#/) auto[t]=1; next} {t=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if(!(t in auto)) print $0}' "$MODPATH/lists/auto_apps.list" "$MODPATH/lists/apps.list" > "$MODPATH/lists/apps.list.smart.$$" && mv -f "$MODPATH/lists/apps.list.smart.$$" "$MODPATH/lists/apps.list"
-  fi
+         -e 's/^VPN_VERIFY_INTERVAL="[0-9]*"/VPN_VERIFY_INTERVAL="300"/' "$MODPATH/zapret2.conf"
   ilog "upgrade_migration=smart old_strategy=${old_strategy:-unset} auto_apps=enabled manual_catalog_duplicates=removed"
 fi
 mkdir -p "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "Не удалось создать рабочие каталоги logs/run/state"
@@ -295,7 +334,7 @@ for f in \
   "$MODPATH/bin/amneziawg-go" "$MODPATH/bin/awg" "$MODPATH/warp-tunnel.sh" \
   "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" "$MODPATH/action.sh" "$MODPATH/uninstall.sh" "$MODPATH/on_change.sh" \
   "$MODPATH/vpn-routing.sh" "$MODPATH/vpn-watch.sh" "$MODPATH/net-role.sh" "$MODPATH/tether-sync.sh" \
-  "$MODPATH/app-sync.sh" "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh" \
+  "$MODPATH/auto-select.sh" "$MODPATH/strategy-lib.sh" "$MODPATH/service-watch.sh" "$MODPATH/network-event.sh" "$MODPATH/log-export.sh" "$MODPATH/diagnostics.sh" \
   "$MODPATH/webroot/api.sh"
 do
   [ -f "$f" ] && { set_exec "$f" || fail_install "Не удалось установить права +x: $f"; }
@@ -308,7 +347,7 @@ case "$legacy_ai_pid" in
   ''|0|*[!0-9]*) ;;
   *)
     if kill -0 "$legacy_ai_pid" 2>/dev/null; then
-      legacy_cmd=$(tr '\000' ' ' < "/proc/$legacy_ai_pid/cmdline" 2>/dev/null)
+      legacy_cmd=$(pid_cmdline "$legacy_ai_pid")
       legacy_exe=$(readlink "/proc/$legacy_ai_pid/exe" 2>/dev/null)
       if printf '%s' "$legacy_cmd $legacy_exe" | grep -Fq "$ACTIVE_MODDIR/bin/ai-router"; then
         kill -TERM "$legacy_ai_pid" 2>/dev/null || true
@@ -362,6 +401,11 @@ ask_yes_no() {
   volume_select "$default_answer"
 }
 
+# Установка через WebUI менеджера root не даёт нажимать кнопки громкости: там
+# getevent молчит, и каждый вопрос просто выжидает свои 12 секунд. Четыре вопроса
+# превращались в 48 секунд «зависшей» установки без обратной связи. Спрашиваем
+# только про раздачу — остальное настраивается в WebUI за пару секунд.
+
 CONF_TARGET="$MODPATH/zapret2.conf"
 [ -f "$CONF_TARGET" ] || fail_install "zapret2.conf не найден"
 
@@ -373,13 +417,14 @@ if [ -n "$UPGRADE_FROM" ]; then
   ilog "upgrade_questions=skipped preserved_user_choices=1"
   ui_print "- Обновление: настройки Hotspot/VPN/QUIC/DNS сохранены"
 else
-  if ask_yes_no "Включить раздачу Wi-Fi Hotspot и USB-модем?" yes; then
-    ENABLE_HOTSPOT_VAL=1
-    if ask_yes_no "Включать защиту трафика при работе VPN соединения?" no; then ENABLE_VPN_HOTSPOT_VAL=1; else ENABLE_VPN_HOTSPOT_VAL=0; fi
-    if ask_yes_no "Запретить QUIC (UDP/443) при раздаче интернета?" yes; then FORCE_TCP_HOTSPOT_VAL=1; else FORCE_TCP_HOTSPOT_VAL=0; fi
-    if ask_yes_no "Принудительно перехватывать DNS при раздаче?" no; then DNS_FORWARD_HOTSPOT_VAL=1; else DNS_FORWARD_HOTSPOT_VAL=0; fi
+  if ask_yes_no "Включить обход DPI и для раздачи (Wi-Fi Hotspot / USB-модем)?" yes; then
+    # Разумные значения по умолчанию; всё меняется в WebUI -> «Раздача интернета».
+    ENABLE_HOTSPOT_VAL=1; ENABLE_VPN_HOTSPOT_VAL=0; FORCE_TCP_HOTSPOT_VAL=1; DNS_FORWARD_HOTSPOT_VAL=0
+    ui_print "- Раздача: включена (QUIC блокируется, перехват DNS выключен)"
+    ui_print "  Тонкая настройка — в WebUI, раздел «Раздача интернета»"
   else
     ENABLE_HOTSPOT_VAL=0; ENABLE_VPN_HOTSPOT_VAL=0; FORCE_TCP_HOTSPOT_VAL=0; DNS_FORWARD_HOTSPOT_VAL=0
+    ui_print "- Раздача: выключена"
   fi
   sed -i "s|^ENABLE_HOTSPOT=.*|ENABLE_HOTSPOT=\"$ENABLE_HOTSPOT_VAL\"|" "$CONF_TARGET"
   sed -i "s|^ENABLE_VPN_HOTSPOT=.*|ENABLE_VPN_HOTSPOT=\"$ENABLE_VPN_HOTSPOT_VAL\"|" "$CONF_TARGET"
@@ -388,7 +433,7 @@ else
   sed -i "s|^FORCE_TCP_HOTSPOT=.*|FORCE_TCP_HOTSPOT=\"$FORCE_TCP_HOTSPOT_VAL\"|" "$CONF_TARGET"
   sed -i "s|^DNS_FORWARD_HOTSPOT=.*|DNS_FORWARD_HOTSPOT=\"$DNS_FORWARD_HOTSPOT_VAL\"|" "$CONF_TARGET"
 fi
-chmod 0644 "$CONF_TARGET" "$MODPATH/lists"/* "$MODPATH"/strategies/strategy_* 2>/dev/null || true
+chmod 0644 "$CONF_TARGET" "$MODPATH/lists"/* "$MODPATH"/strategies/* 2>/dev/null || true
 chmod 0755 "$MODPATH/lists" "$MODPATH/strategies" 2>/dev/null || true
 
 VPN_FALLBACK_LOG=$(sed -n 's/^VPN_FALLBACK_MODE=//p' "$CONF_TARGET" | head -n1 | tr -d '"')

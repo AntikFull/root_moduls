@@ -19,7 +19,17 @@ IP=$(command -v ip 2>/dev/null); [ -n "$IP" ] || IP=/system/bin/ip
 
 section() { printf '\n===== %s =====\n' "$1"; }
 run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
-pid_cmdline() { tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+# Зомби и умирающие процессы не отдают cmdline: ядро держит блокировку памяти
+# задачи, и чтение виснет без таймаута. /proc/PID/stat читается без неё, поэтому
+# сначала спрашиваем состояние. Полный вариант с потолком по времени — в
+# service.sh; здесь достаточно отсечь мёртвые PID.
+pid_cmdline() {
+  local st
+  case "$1" in ''|0|*[!0-9]*) return 1 ;; esac
+  st=$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+  case "$st" in ''|Z|X|x) return 1 ;; esac
+  tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
 pid_owned() {
   local pid="$1" kind="$2" cmd comm cwd
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
@@ -88,15 +98,8 @@ pid_owned() {
   if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; fi
   lists_dir="$MODDIR/lists"
   [ -d "$lists_dir" ] || lists_dir="$MODDIR"
-  youtube_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/smart_youtube.list" 2>/dev/null || echo 0)
-  auto_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/auto_apps.list" 2>/dev/null || echo 0)
-  manual_count=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/apps.list" 2>/dev/null || echo 0)
   echo "STRATEGY_MODE=${STRATEGY_MODE:-SMART}"
   echo "STRATEGY_EFFECTIVE=${STRATEGY_EFFECTIVE:-SMART_COMPAT}"
-  echo "AUTO_APPS_ENABLED=${AUTO_APPS_ENABLED:-1}"
-  echo "AUTO_APPS_CATALOG_COUNT=$auto_count"
-  echo "MANUAL_APPS_COUNT=$manual_count"
-  echo "SMART_YOUTUBE_DOMAINS=$youtube_count"
   case "${STRATEGY_EFFECTIVE:-SMART_COMPAT}" in
     SMART_NATIVE) echo "SMART_ENGINE_EFFECT=adaptive circular service profiles with bounded incoming reply-feed" ;;
     SMART_COMPAT) echo "SMART_ENGINE_EFFECT=automatic service profiles without incoming bulk/reply-feed" ;;
@@ -159,45 +162,21 @@ pid_owned() {
   echo "-- vpn verify --"
   [ -x "$MODDIR/vpn-routing.sh" ] && "$MODDIR/vpn-routing.sh" verify >/dev/null 2>&1 && echo "vpn_rules=OK" || echo "vpn_rules=DRIFT/NOT_READY"
 
-  section "PACKAGE UID RESOLUTION"
-  echo "-- Android users --"
-  cmd user list 2>&1 || true
-  echo "-- cache entries by user --"
-  awk '{c[$3]++} END{for(u in c) print u,c[u]}' "$RUN_DIR/package_uids.cache" 2>/dev/null | sort -n | awk '{print "user"$1"="$2}'
-  echo "cache_lines=$(wc -l < "$RUN_DIR/package_uids.cache" 2>/dev/null | tr -d ' ')"
-  echo "-- AUTO catalog apps that are installed/resolved --"
-  auto_file="$lists_dir/auto_apps.list"
-  [ -f "$auto_file" ] || auto_file="$MODDIR/auto_apps.list"
-  if [ -f "$auto_file" ]; then
-    while IFS= read -r pkg || [ -n "$pkg" ]; do
-      case "$pkg" in ''|\#*) continue ;; esac
-      uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
-      [ -n "$uids" ] && echo "$pkg -> $uids"
-    done < "$auto_file"
-  fi
-  echo "-- manual apps.list additions --"
-  apps_file="$lists_dir/apps.list"
-  [ -f "$apps_file" ] || apps_file="$MODDIR/apps.list"
-  if [ -f "$apps_file" ]; then
-    while IFS= read -r pkg || [ -n "$pkg" ]; do
-      case "$pkg" in ''|\#*) continue ;; esac
-      printf '%s -> ' "$pkg"
-      awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null
-      echo
-    done < "$apps_file"
-  fi
-  echo "-- excludes that are installed/resolved (highest priority) --"
-  excl_file="$lists_dir/exclude.list"
-  [ -f "$excl_file" ] || excl_file="$MODDIR/exclude.list"
-  if [ -f "$excl_file" ]; then
-    while IFS= read -r pkg || [ -n "$pkg" ]; do
-      case "$pkg" in ''|\#*) continue ;; esac
-      uids=$(awk -v p="$pkg" '$1==p {printf "%s(user%s) ",$2,$3}' "$RUN_DIR/package_uids.cache" 2>/dev/null)
-      [ -n "$uids" ] && echo "$pkg -> $uids"
-    done < "$excl_file"
-  fi
-  run pm list packages -U --user 0
-  run cmd package list packages -U --user 0
+  section "СПИСКИ ДОМЕНОВ И ПОДСЕТЕЙ"
+  for f in user.list exclude_domains.list ipset.list ipset_exclude.list            warp_domains.list warp_bypass_nets.list probe_hosts.list wifi_direct_ssids.list; do
+    n=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/$f" 2>/dev/null)
+    printf '%-24s %s записей
+' "$f" "$n"
+  done
+  n=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/state/auto.list" 2>/dev/null)
+  printf '%-24s %s записей (выучено автоматически)
+' "state/auto.list" "$n"
+  n=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/state/warp_auto_domains.list" 2>/dev/null)
+  printf '%-24s %s записей (уведено в туннель автоматически)
+' "state/warp_auto_domains.list" "$n"
+  echo
+  echo "-- первые 20 выученных доменов --"
+  grep -vE '^[[:space:]]*(#|$)' "$MODDIR/state/auto.list" 2>/dev/null | head -20
 
   section "FIREWALL CAPABILITIES"
   echo "nf_conntrack_acct_sysctl=$(cat /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null || echo unavailable)"
@@ -245,7 +224,7 @@ pid_owned() {
   pid=$(cat "$RUN_DIR/nfqws2.pid" 2>/dev/null)
   echo "nfqws_pid=$pid"
   if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
-    printf 'cmdline='; tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null; echo
+    printf 'cmdline='; pid_cmdline "$pid"; echo
     printf 'status:\n'; grep -E '^(Name|State|Pid|PPid|Uid|Gid|VmRSS|Threads):' "/proc/$pid/status" 2>/dev/null
     printf 'session: '; awk '{printf "ppid=%s pgrp=%s sid=%s\n",$4,$5,$6}' "/proc/$pid/stat" 2>/dev/null
   fi
