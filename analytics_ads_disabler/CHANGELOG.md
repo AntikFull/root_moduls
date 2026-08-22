@@ -1,5 +1,29 @@
 # Analytics & Ads Disabler — история изменений
 
+## v7.0.2 (7002)
+
+Масштабное расширение базы сигнатур: поддержка актуальных российских и международных рекламных сетей, SDK и маркетинговых трекеров.
+
+### Яндекс.Реклама (Yandex Mobile Ads SDK 6.x / 7.x)
+- Яндекс вынес логику рекламных баннеров, нативной рекламы и сетевых соединений в новый корневой пакет `com.monetization.ads.`. Добавлен в `AD_PACKAGE_PREFIXES`.
+- Добавлены контейнеры `com.monetization.ads.banner.BannerAdView`, `NativeAdView`, `MediaView`, `NativeBannerView` в `AD_VIEW_CLASSES` для схлопывания View.
+- Добавлены Activity `com.monetization.ads.common.AdActivity` и `RewardedAdActivity` в `AD_ACTIVITY_CLASSES`.
+- Добавлены ключевые рекламные домены аукционов, прямого трафика и медиаций Яндекса в `AD_HOSTS`: `yabs.yandex.ru`, `mobile.yandex.net`, `ads.yandex.com`, `ads.yandex.ru`, `bs.yandex.ru`, `awaps.yandex.ru`, `ext.adfox.ru`.
+
+### RuStore Ads SDK, VK Ads, Сбер и операторы связи РФ
+- **RuStore Ads SDK:** добавлены префиксы `ru.rustore.sdk.banners.`, `ru.rustore.sdk.nativeads.`, `ru.rustore.sdk.interstitial.`, `ru.rustore.sdk.rewarded.`, `ru.rustore.sdk.appopenads.`, `ru.rustore.sdk.admediation.`, `ru.rustore.sdk.ads.`, `ru.vk.store.sdk.ads.`, а также классы View и Activity.
+- **VK Ads / VK Ad Network:** добавлены `com.vk.ads.`, `com.vk.ad.`, домены `ad.vk.com`, `vkad.me`.
+- **Сбер (SberAds / SaluteAds):** добавлены `ru.sber.ads.`, `ru.sberbank.sberads.`, `com.sber.ads.`, домены `ads.sber.ru`, `sberads.sberbank.ru`, `marketing.sber.ru`.
+- **МТС AdTech / Маркетолог:** добавлены `com.mts.adtech.`, `ru.mts.marketolog.`, домены `adtech.mts.ru`, `marketolog.mts.ru`, `dsp.mts.ru`.
+- **Т-Банк:** добавлены `ru.tinkoff.ads.`, `ru.tbank.ads.`, домены `ads.tinkoff.ru`, `ads.tbank.ru`.
+- **Российские биржи баннеров, DSP, SSP и CPA:** добавлены `buzzoola.com`, `soloway.ru`, `betweenx.com`, `hybrid.ai`, `astralab.ai`, `relap.io`, `adriver.ru`, `adhigh.net`, `segmento.ru`, `otm-r.com`, `adtarget.me`, `advideo.ru`, `moevideo.biz`, `videonow.ru`, `cityads.com`, `actionpay.net`, `admitad.com`, `perfluence.net`, `advcake.com`, `sape.ru`.
+
+### Российские маркетинговые трекеры и воронки
+- Добавлены платформы персонализации и ретаргетинга `Mindbox` (`cloud.mindbox.mobile_sdk.`, `ru.mindbox.`, `mindbox.ru`), `RetailRocket` (`ru.retailrocket.`, `retailrocket.net`), `Flocktory` (`com.flocktory.`, `flocktory.com`).
+- Добавлены счетчики `LiveInternet` (`counter.yadro.ru`), `Rambler Top100` (`counter.rambler.ru`, `top100.rambler.ru`).
+- Добавлены аналитические трекеры `DevToDev` (`com.devtodev.`), `Adapty` (`io.adapty.`), `Apphud` (`com.apphud.`), `UXCam` (`com.uxcam.`).
+- Добавлены международные сети `Verve / HyBid` (`com.verve.`, `hybid.com`), `LoopMe` (`com.loopme.`, `loopme.me`).
+
 ## v7.0.1 (7001)
 
 Исправления по итогам проверки на живых приложениях.
