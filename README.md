@@ -26,7 +26,7 @@
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
 | **[zapret2-android](./zapret2-android)** | `v4.0.5` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
-| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v7.0.0` | Блокировка рекламы и аналитики внутри процессов приложений через Zygisk: штатное выключение SDK, сетевой перехват по стеку вызовов, схлопывание баннеров, закрытие полноэкранной рекламы. Без списков доменов в основе и без сканирования APK. | **Zygisk обязателен**: Magisk с Zygisk / KernelSU + ZygiskNext или ReZygisk / APatch (Android 8–16) |
+| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v7.0.1` | Блокировка рекламы и аналитики внутри процессов приложений через Zygisk: штатное выключение SDK, сетевой перехват по стеку вызовов, схлопывание баннеров, закрытие полноэкранной рекламы. Без списков доменов в основе и без сканирования APK. | **Zygisk обязателен**: Magisk с Zygisk / KernelSU + ZygiskNext или ReZygisk / APatch (Android 8–16) |
 | **[AIUnblock](./AIUnblock)** | `v3.0.5` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch |
 | **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.1.5` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек и выделенной таблицей VPN-маршрутизации для обхода ограничений операторов на раздачу интернета. | Magisk / KernelSU / APatch |
 | **[alice-bt-launcher](./alice-bt-launcher)** | `v1.1.0` | Автоматический фоновый запуск и контроль процессов голосового ассистента Алиса AI при подключении Bluetooth-наушников или гарнитуры. | Magisk / KernelSU / APatch |
@@ -50,7 +50,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
    - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight tunnel for any selected applications.
    - Restores YouTube 4K playback, Discord voice/media, and blocked web resources directly in the kernel netfilter. Zero battery drain compared to classic VPNs. Full hotspot/tethering support.
 
-2. **[analytics_ads_disabler](./analytics_ads_disabler) (v7.0.0)**
+2. **[analytics_ads_disabler](./analytics_ads_disabler) (v7.0.1)**
    - In-process ad & analytics blocker built on Zygisk. Ad SDKs are identified by class-name signatures instead of domain blocklists, so the rule set stays stable for years.
    - Four layers: the SDK's own GDPR opt-out API, in-process network denial (endpoint list plus call-stack inference), ad container collapsing, and full-screen ad dismissal.
    - No APK scanning, no DEX parsing, no periodic polling. One background process that sleeps in the kernel; zero idle load.
@@ -69,7 +69,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 | Модуль / Module | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- |
 | **zapret2-android v4.0.5** | [zapret2-android_v4.0.5_4005.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v4.0.5_4005.zip) | ~11.8 MB |
-| **analytics_ads_disabler v7.0.0** | [analytics_ads_disabler_v7.0.0_7000.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v7.0.0_7000.zip) | ~425 KB |
+| **analytics_ads_disabler v7.0.1** | [analytics_ads_disabler_v7.0.1_7001.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v7.0.1_7001.zip) | ~425 KB |
 | **AIUnblock v3.0.5** | [AIUnblock_v3.0.5_305.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v3.0.5_305.zip) | ~9.6 MB |
 | **nfqttl_ecubz v15.1.5** | [nfqttl_ecubz_v15.1.5_1515.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/nfqttl_ecubz_v15.1.5_1515.zip) | ~80 KB |
 | **alice-bt-launcher v1.1.0** | [alice-bt-launcher_v1.1.0_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/alice-bt-launcher_v1.1.0_110.zip) | ~7.5 KB |

@@ -324,7 +324,8 @@ fi
 
 # Ключи, появившиеся в новых версиях, дописываются без затирания выбора пользователя.
 for kv in 'BLOCK_ADS=1' 'BLOCK_ANALYTICS=1' 'INCLUDE_SYSTEM_APPS=0' 'NET_GUARD=1' \
-          'COLLAPSE_VIEWS=1' 'CLOSE_AD_SCREENS=1' 'WEBVIEW_COSMETIC=1' 'VERBOSE_LOG=0'; do
+          'COLLAPSE_VIEWS=1' 'CLOSE_AD_SCREENS=1' 'WEBVIEW_COSMETIC=1' \
+          'AUDIT_LOG=0' 'VERBOSE_LOG=0'; do
   key=${kv%%=*}
   grep -q "^[[:space:]]*$key[[:space:]]*=" "$SETTINGS_FILE" 2>/dev/null || echo "$kv" >> "$SETTINGS_FILE"
 done

@@ -121,6 +121,7 @@ aad_build_flags() {
     _abf_webview=$(aad_read_bool WEBVIEW_COSMETIC 1)
     _abf_net=$(aad_read_bool NET_GUARD 1)
     _abf_optout=$(aad_read_bool SDK_OPT_OUT 1)
+    _abf_audit=$(aad_read_bool AUDIT_LOG 0)
     _abf_verbose=$(aad_read_bool VERBOSE_LOG 0)
 
     # engine=0 означает полный простой: движок не внедряется ни в одно
@@ -130,9 +131,9 @@ aad_build_flags() {
         _abf_engine=0
     fi
 
-    printf 'engine=%s;ads=%s;analytics=%s;collapse=%s;killfs=%s;webview=%s;net=%s;optout=%s;verbose=%s\n' \
+    printf 'engine=%s;ads=%s;analytics=%s;collapse=%s;killfs=%s;webview=%s;net=%s;optout=%s;audit=%s;verbose=%s\n' \
         "$_abf_engine" "$_abf_ads" "$_abf_analytics" "$_abf_collapse" \
-        "$_abf_killfs" "$_abf_webview" "$_abf_net" "$_abf_optout" "$_abf_verbose"
+        "$_abf_killfs" "$_abf_webview" "$_abf_net" "$_abf_optout" "$_abf_audit" "$_abf_verbose"
 }
 
 # Генерирует engine.policy.
