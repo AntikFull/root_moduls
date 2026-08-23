@@ -1,0 +1,7 @@
+id=tg-ws-proxy
+name=Telegram WS Proxy
+version=v1.2.0
+versionCode=1200
+author=eCubz (https://t.me/eCubz)
+description=Локальный MTProto WebSocket прокси для Telegram с прямым подключением и резервированием через Cloudflare. Работает без VPN. Канал: https://t.me/module_ecubz
+updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/tg-ws-proxy/update.json

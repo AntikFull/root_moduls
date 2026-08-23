@@ -1,0 +1,1376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Telegram WS Proxy | eCubz</title>
+<style>
+  :root {
+    /* Material 3 Expressive - Dark Tonal Palette */
+    --md-sys-color-primary: #a8c7fa;
+    --md-sys-color-on-primary: #043058;
+    --md-sys-color-primary-container: #1b4773;
+    --md-sys-color-on-primary-container: #d3e3fd;
+    --md-sys-color-secondary: #bcc7dc;
+    --md-sys-color-on-secondary: #273142;
+    --md-sys-color-secondary-container: #3d4758;
+    --md-sys-color-on-secondary-container: #d8e3f8;
+    --md-sys-color-tertiary: #70d2ff;
+    --md-sys-color-on-tertiary: #003549;
+    --md-sys-color-tertiary-container: #004d69;
+    --md-sys-color-on-tertiary-container: #c2e8ff;
+    --md-sys-color-error: #ffb4ab;
+    --md-sys-color-on-error: #690005;
+    --md-sys-color-error-container: #93000a;
+    --md-sys-color-on-error-container: #ffdad6;
+    --md-sys-color-background: #0f1318;
+    --md-sys-color-on-background: #e0e2ec;
+    --md-sys-color-surface: #0f1318;
+    --md-sys-color-on-surface: #e0e2ec;
+    --md-sys-color-surface-variant: #424750;
+    --md-sys-color-on-surface-variant: #c2c7d2;
+    --md-sys-color-outline: #8c919c;
+    --md-sys-color-outline-variant: #424750;
+    --md-sys-color-surface-container-lowest: #0a0e13;
+    --md-sys-color-surface-container-low: #171b21;
+    --md-sys-color-surface-container: #1b2026;
+    --md-sys-color-surface-container-high: #262a31;
+    --md-sys-color-surface-container-highest: #30353c;
+    --md-sys-color-success: #6dd58c;
+    --md-sys-color-on-success: #003915;
+    --md-sys-color-success-container: #005322;
+    --md-sys-color-on-success-container: #89f2a6;
+
+    /* M3 Expressive Shapes */
+    --md-sys-shape-xs: 4px;
+    --md-sys-shape-sm: 8px;
+    --md-sys-shape-md: 12px;
+    --md-sys-shape-lg: 16px;
+    --md-sys-shape-xl: 24px;
+    --md-sys-shape-2xl: 28px;
+    --md-sys-shape-full: 9999px;
+
+    /* Typography */
+    --md-ref-typeface-plain: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --md-ref-typeface-mono: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background: var(--md-sys-color-background);
+    color: var(--md-sys-color-on-surface);
+    font-family: var(--md-ref-typeface-plain);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding-bottom: 96px;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  /* Google Icons standard SVG styles */
+  .g-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  .g-icon-sm { width: 16px; height: 16px; }
+  .g-icon-lg { width: 26px; height: 26px; }
+
+  /* M3 Expressive Top App Bar */
+  header.m3-top-app-bar {
+    background: rgba(23, 27, 33, 0.88);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .m3-avatar {
+    width: 38px;
+    height: 38px;
+    background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+    color: var(--md-sys-color-on-primary);
+    border-radius: var(--md-sys-shape-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 16px;
+    box-shadow: 0 4px 16px rgba(168, 199, 250, 0.25);
+    flex-shrink: 0;
+  }
+
+  .m3-app-bar-title { flex: 1; }
+  .m3-app-bar-title h1 {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    color: var(--md-sys-color-on-surface);
+    line-height: 1.2;
+  }
+  .m3-app-bar-title p {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-top: 2px;
+  }
+
+  .m3-badge-pill {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    padding: 4px 10px;
+    border-radius: var(--md-sys-shape-full);
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--md-ref-typeface-mono);
+    letter-spacing: 0.02em;
+  }
+
+  /* Main Container */
+  main {
+    max-width: 580px;
+    margin: 0 auto;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* M3 Expressive Cards */
+  .m3-card {
+    background: var(--md-sys-color-surface-container);
+    border-radius: var(--md-sys-shape-2xl);
+    overflow: hidden;
+    position: relative;
+  }
+  .m3-card-low { background: var(--md-sys-color-surface-container-low); }
+  .m3-card-high { background: var(--md-sys-color-surface-container-high); }
+
+  .m3-card-header {
+    padding: 16px 18px 8px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .m3-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--md-sys-color-primary);
+  }
+  .m3-card-body {
+    padding: 16px 18px;
+  }
+  .m3-card-body.pt-0 { padding-top: 4px; }
+
+  /* Hero Status Indicator */
+  .m3-status-hero {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 4px 0 14px 0;
+  }
+  .m3-status-icon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--md-sys-shape-xl);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.3s;
+  }
+  .m3-status-icon-box.running {
+    background: var(--md-sys-color-success-container);
+    color: var(--md-sys-color-on-success-container);
+    box-shadow: 0 0 0 6px rgba(109, 213, 140, 0.15);
+  }
+  .m3-status-icon-box.stopped {
+    background: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+    box-shadow: 0 0 0 6px rgba(255, 180, 171, 0.1);
+  }
+  .m3-status-icon-box.loading {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    animation: m3-pulse 1.4s infinite;
+  }
+  @keyframes m3-pulse { 0%,100%{opacity:1; transform:scale(1)} 50%{opacity:0.5; transform:scale(0.96)} }
+
+  .m3-status-texts { flex: 1; min-width: 0; }
+  .m3-status-headline {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--md-sys-color-on-surface);
+    letter-spacing: -0.2px;
+  }
+  .m3-status-subhead {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: var(--md-ref-typeface-mono);
+    margin-top: 2px;
+  }
+
+  /* M3 Expressive Buttons */
+  .m3-btn-group {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .m3-btn {
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px 20px;
+    border-radius: var(--md-sys-shape-full);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    text-decoration: none;
+    user-select: none;
+  }
+  .m3-btn:active { transform: scale(0.96); }
+  .m3-btn:disabled { opacity: 0.38; cursor: not-allowed; transform: none; }
+
+  .m3-btn-filled {
+    background: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .m3-btn-filled:hover:not(:disabled) { opacity: 0.94; }
+
+  .m3-btn-tonal {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+  .m3-btn-tonal:hover:not(:disabled) { background: #4a5468; }
+
+  .m3-btn-danger {
+    background: var(--md-sys-color-error);
+    color: var(--md-sys-color-on-error);
+  }
+  .m3-btn-success {
+    background: var(--md-sys-color-success);
+    color: var(--md-sys-color-on-success);
+  }
+  .m3-btn-outlined {
+    background: transparent;
+    color: var(--md-sys-color-primary);
+    border: 1px solid var(--md-sys-color-outline-variant);
+  }
+  .m3-btn-outlined:hover:not(:disabled) {
+    background: rgba(168, 199, 250, 0.08);
+    border-color: var(--md-sys-color-primary);
+  }
+  .m3-btn-sm { padding: 8px 14px; font-size: 12px; }
+
+  /* M3 Expressive Filter / Assist Chips */
+  .m3-chips-row {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .m3-chips-row::-webkit-scrollbar { display: none; }
+  .m3-chip {
+    background: var(--md-sys-color-surface-container-high);
+    color: var(--md-sys-color-on-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-md);
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .m3-chip:hover {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    border-color: transparent;
+  }
+  .m3-chip:active { transform: scale(0.96); }
+
+  /* M3 Filled Text Fields */
+  .m3-text-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 14px;
+  }
+  .m3-text-field:last-child { margin-bottom: 0; }
+  .m3-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--md-sys-color-on-surface-variant);
+  }
+  .m3-input, .m3-select {
+    background: var(--md-sys-color-surface-container-high);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-md);
+    color: var(--md-sys-color-on-surface);
+    font-size: 14px;
+    font-family: var(--md-ref-typeface-mono);
+    padding: 12px 14px;
+    outline: none;
+    transition: all 0.2s;
+    width: 100%;
+  }
+  .m3-input:focus, .m3-select:focus {
+    border-color: var(--md-sys-color-primary);
+    box-shadow: 0 0 0 3px rgba(168, 199, 250, 0.2);
+    background: var(--md-sys-color-surface-container-highest);
+  }
+  .m3-helper {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-top: 2px;
+  }
+  .m3-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  /* Link Container */
+  .m3-link-box {
+    background: var(--md-sys-color-surface-container-lowest);
+    border: 1px dashed var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-lg);
+    padding: 12px 14px;
+    font-family: var(--md-ref-typeface-mono);
+    font-size: 12px;
+    color: var(--md-sys-color-primary);
+    word-break: break-all;
+    user-select: all;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .m3-link-placeholder {
+    color: var(--md-sys-color-on-surface-variant);
+    font-style: italic;
+    font-family: var(--md-ref-typeface-plain);
+  }
+
+  /* Channel Banner M3 */
+  .m3-banner {
+    background: linear-gradient(135deg, rgba(27, 71, 115, 0.6), rgba(0, 77, 105, 0.6));
+    border: 1px solid rgba(168, 199, 250, 0.2);
+    border-radius: var(--md-sys-shape-2xl);
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .m3-banner-title { font-size: 15px; font-weight: 700; color: var(--md-sys-color-on-surface); }
+  .m3-banner-sub { font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-top: 2px; }
+
+  /* Donation Items M3 */
+  .m3-donate-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .m3-donate-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--md-sys-color-surface-container-high);
+    border-radius: var(--md-sys-shape-lg);
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .m3-donate-card:hover {
+    background: var(--md-sys-color-surface-container-highest);
+    transform: translateY(-1px);
+  }
+  .m3-donate-card:active { transform: scale(0.98); }
+  .m3-donate-info { display: flex; flex-direction: column; min-width: 0; }
+  .m3-donate-name { font-size: 13px; font-weight: 700; color: var(--md-sys-color-on-surface); }
+  .m3-donate-val {
+    font-size: 11px;
+    color: var(--md-sys-color-primary);
+    font-family: var(--md-ref-typeface-mono);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m3-donate-hint { font-size: 10px; color: var(--md-sys-color-on-surface-variant); }
+
+  /* Latency Items M3 */
+  .m3-latency-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .m3-latency-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--md-sys-color-surface-container-high);
+    border-radius: var(--md-sys-shape-md);
+    padding: 11px 14px;
+  }
+  .m3-latency-domain {
+    font-family: var(--md-ref-typeface-mono);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .m3-latency-badge {
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--md-ref-typeface-mono);
+    padding: 4px 10px;
+    border-radius: var(--md-sys-shape-full);
+  }
+  .m3-latency-good { background: var(--md-sys-color-success-container); color: var(--md-sys-color-on-success-container); }
+  .m3-latency-medium { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
+  .m3-latency-bad { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+
+  /* Log Box M3 */
+  .m3-log-view {
+    background: var(--md-sys-color-surface-container-lowest);
+    border-radius: var(--md-sys-shape-lg);
+    padding: 12px 14px;
+    font-family: var(--md-ref-typeface-mono);
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    max-height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.6;
+  }
+
+  /* M3 Expressive Bottom Navigation Bar */
+  nav.m3-nav-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(23, 27, 33, 0.94);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    display: flex;
+    justify-content: space-around;
+    padding: 8px 12px 14px 12px;
+    z-index: 100;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .m3-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    max-width: 80px;
+    pointer-events: auto;
+  }
+  .m3-nav-item * { pointer-events: none; }
+  .m3-nav-indicator {
+    width: 48px;
+    height: 28px;
+    border-radius: var(--md-sys-shape-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .m3-nav-item.active {
+    color: var(--md-sys-color-on-surface);
+    font-weight: 700;
+  }
+  .m3-nav-item.active .m3-nav-indicator {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+
+  /* Tab Page Visibility */
+  .tab-page { display: none; flex-direction: column; gap: 14px; }
+  .tab-page.active { display: flex; }
+
+  /* M3 Snackbar Toast */
+  #m3-snackbar {
+    position: fixed;
+    bottom: 96px;
+    left: 50%;
+    transform: translateX(-50%) translateY(40px);
+    background: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-on-surface);
+    padding: 12px 20px;
+    border-radius: var(--md-sys-shape-full);
+    font-size: 13px;
+    font-weight: 600;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    z-index: 200;
+    white-space: nowrap;
+  }
+  #m3-snackbar.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+</style>
+</head>
+<body>
+
+<!-- M3 Expressive Top App Bar -->
+<header class="m3-top-app-bar">
+  <div class="m3-avatar">eC</div>
+  <div class="m3-app-bar-title">
+    <h1>Telegram WS Proxy</h1>
+    <p>eCubz Systemless Lab</p>
+  </div>
+  <span class="m3-badge-pill" id="app-ver">v1.2.0</span>
+</header>
+
+<main>
+  <!-- Вкладка 1: Главная -->
+  <div class="tab-page active" id="tab-main">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Состояние службы</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-status-hero">
+          <div class="m3-status-icon-box loading" id="status-box">
+            <span id="status-icon-holder"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg></span>
+          </div>
+          <div class="m3-status-texts">
+            <div class="m3-status-headline" id="status-title">Проверка службы…</div>
+            <div class="m3-status-subhead" id="status-details">—</div>
+          </div>
+        </div>
+        <div class="m3-btn-group">
+          <button class="m3-btn m3-btn-filled" id="btn-toggle-service" onclick="toggleService()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg> Запустить</button>
+          <button class="m3-btn m3-btn-tonal" id="btn-restart" onclick="execProxy('restart')" disabled><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Перезапуск</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Ссылка MTProto подключения</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-link-box" id="proxy-link-box">
+          <span class="m3-link-placeholder">Запустите прокси для получения ссылки</span>
+        </div>
+        <div class="m3-btn-group" style="margin-top: 12px;">
+          <button class="m3-btn m3-btn-filled" id="btn-open-tg" onclick="openTelegram()" disabled><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg> Открыть в Telegram</button>
+          <button class="m3-btn m3-btn-tonal" id="btn-copy-link" onclick="copyProxyLink()" disabled><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> Копировать ссылку</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="m3-banner">
+      <div>
+        <div class="m3-banner-title">Канал модулей eCubz</div>
+        <div class="m3-banner-sub">Свежие релизы, root-модули и обновления</div>
+      </div>
+      <button class="m3-btn m3-btn-filled m3-btn-sm" onclick="openChannel()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg> Открыть</button>
+    </div>
+
+    <!-- Донаты eCubz внизу главного экрана -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Поддержать автора eCubz</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Ваша поддержка мотивирует развивать модуль и выпускать регулярные обновления!
+        </p>
+        <div class="m3-donate-list">
+          <div class="m3-donate-card" onclick="copyText('410011494875904', 'Номер ЮMoney скопирован!')">
+            <div class="m3-donate-info">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="m3-donate-name">Ю.Money (Яндекс)</span>
+                <span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; background: rgba(255, 180, 0, 0.15); color: #ffb400; padding: 2px 6px; border-radius: 999px;">
+                  <svg class="g-icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                  Предпочтительно
+                </span>
+              </div>
+              <span class="m3-donate-val">4100 1149 4875 904</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://yoomoney.ru/to/410011494875904')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('+79236188993', 'Номер СБП скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">СБП (Россия) / Т-Банк</span>
+              <span class="m3-donate-val">+7 923 618-89-93</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="openUrl('http://t.me/send?start=IVjCT8LiszJ2')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">Crypto Bot (Telegram)</span>
+              <span class="m3-donate-val">USDT / TON / GRAM</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Открыть</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4', 'Адрес TON кошелька скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">TON Wallet</span>
+              <span class="m3-donate-val">UQCLyovMu5882XPekfUq...MqEC4</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg> Копировать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 2: Настройки -->
+  <div class="tab-page" id="tab-settings">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Конфигурация прокси</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-text-field">
+          <label class="m3-label">Быстрые профили eCubz</label>
+          <div class="m3-chips-row">
+            <button class="m3-chip" onclick="applyPreset('battery')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16 4h-1V2h-6v2H8c-.55 0-1 .45-1 1v16c0 .55.45 1 1 1h8c.55 0 1-.45 1-1V5c0-.55-.45-1-1-1zm-3 10h-2v-3H9l4-6v4h2l-4 5z"/></svg> Энергосбережение</button>
+            <button class="m3-chip" onclick="applyPreset('turbo')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg> Турбо-обход</button>
+            <button class="m3-chip" onclick="applyPreset('wifi')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4C7.31 4 3.07 5.9 0 8.98L12 21 24 8.98C20.93 5.9 16.69 4 12 4zm0 3.5c3.5 0 6.69 1.4 9.02 3.68L12 19.33 2.98 11.18C5.31 8.9 8.5 7.5 12 7.5z"/></svg> Раздача по Wi-Fi</button>
+          </div>
+        </div>
+
+        <div class="m3-form-grid">
+          <div class="m3-text-field">
+            <label class="m3-label">Порт</label>
+            <input type="number" class="m3-input" id="cfg-port" placeholder="1443" min="1024" max="65535">
+          </div>
+          <div class="m3-text-field">
+            <label class="m3-label">Хост</label>
+            <input type="text" class="m3-input" id="cfg-host" placeholder="127.0.0.1">
+          </div>
+        </div>
+
+        <div class="m3-text-field">
+          <label class="m3-label">Секрет MTProto (32 hex)</label>
+          <input type="text" class="m3-input" id="cfg-secret" placeholder="Пусто = автогенерация">
+          <span class="m3-helper">Оставьте пустым для ключа из /dev/urandom.</span>
+        </div>
+
+        <div class="m3-text-field">
+          <label class="m3-label">Cloudflare Worker домен</label>
+          <input type="text" class="m3-input" id="cfg-worker" placeholder="например: my-worker.example.workers.dev">
+        </div>
+
+        <div class="m3-form-grid">
+          <div class="m3-text-field">
+            <label class="m3-label">Приоритет Cloudflare</label>
+            <select class="m3-select" id="cfg-priority">
+              <option value="0">Прямой WS сначала (default)</option>
+              <option value="1">Cloudflare сначала</option>
+            </select>
+          </div>
+          <div class="m3-text-field">
+            <label class="m3-label">Пул сокетов (Батарея)</label>
+            <select class="m3-select" id="cfg-pool">
+              <option value="1">1 (Экономия батареи, 4 сокета)</option>
+              <option value="0">0 (Минимум сокетов)</option>
+              <option value="4">4 (Серверный режим, 16 сокетов)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="m3-btn-group" style="margin-top: 16px; justify-content: flex-end;">
+          <button class="m3-btn m3-btn-outlined" onclick="loadConfigFile()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Сбросить</button>
+          <button class="m3-btn m3-btn-filled" onclick="saveConfigFile()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg> Сохранить и применить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 3: Задержка -->
+  <div class="tab-page" id="tab-latency">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Проверка задержки доменов</span>
+        <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="runLatencyTest()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg> Запустить тест</button>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 10px;">
+          Тест выполняется по требованию в 1 пакет, не разряжая аккумулятор в фоне.
+        </p>
+        <div class="m3-latency-list" id="latency-container">
+          <div style="color: var(--md-sys-color-on-surface-variant); font-size: 12px; text-align: center; padding: 16px;">
+            Нажмите «Запустить тест» для замера пинга
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Донаты eCubz (дубликат на вкладке Задержка) -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Поддержать автора eCubz</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Ваша поддержка мотивирует развивать модуль и выпускать регулярные обновления!
+        </p>
+        <div class="m3-donate-list">
+          <div class="m3-donate-card" onclick="copyText('410011494875904', 'Номер ЮMoney скопирован!')">
+            <div class="m3-donate-info">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="m3-donate-name">Ю.Money (Яндекс)</span>
+                <span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; background: rgba(255, 180, 0, 0.15); color: #ffb400; padding: 2px 6px; border-radius: 999px;">
+                  <svg class="g-icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                  Предпочтительно
+                </span>
+              </div>
+              <span class="m3-donate-val">4100 1149 4875 904</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://yoomoney.ru/to/410011494875904')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('+79236188993', 'Номер СБП скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">СБП (Россия) / Т-Банк</span>
+              <span class="m3-donate-val">+7 923 618-89-93</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="openUrl('http://t.me/send?start=IVjCT8LiszJ2')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">Crypto Bot (Telegram)</span>
+              <span class="m3-donate-val">USDT / TON / GRAM</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Открыть</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4', 'Адрес TON кошелька скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">TON Wallet</span>
+              <span class="m3-donate-val">UQCLyovMu5882XPekfUq...MqEC4</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg> Копировать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 4: Лог -->
+  <div class="tab-page" id="tab-log">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Журнал работы</span>
+        <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="loadLogs()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Обновить</button>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-log-view" id="log-content">Загрузка логов…</div>
+      </div>
+    </div>
+
+    <!-- Донаты eCubz (дубликат на вкладке Лог) -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Поддержать автора eCubz</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Ваша поддержка мотивирует развивать модуль и выпускать регулярные обновления!
+        </p>
+        <div class="m3-donate-list">
+          <div class="m3-donate-card" onclick="copyText('410011494875904', 'Номер ЮMoney скопирован!')">
+            <div class="m3-donate-info">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="m3-donate-name">Ю.Money (Яндекс)</span>
+                <span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; background: rgba(255, 180, 0, 0.15); color: #ffb400; padding: 2px 6px; border-radius: 999px;">
+                  <svg class="g-icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                  Предпочтительно
+                </span>
+              </div>
+              <span class="m3-donate-val">4100 1149 4875 904</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://yoomoney.ru/to/410011494875904')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('+79236188993', 'Номер СБП скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">СБП (Россия) / Т-Банк</span>
+              <span class="m3-donate-val">+7 923 618-89-93</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="openUrl('http://t.me/send?start=IVjCT8LiszJ2')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">Crypto Bot (Telegram)</span>
+              <span class="m3-donate-val">USDT / TON / GRAM</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Открыть</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4', 'Адрес TON кошелька скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">TON Wallet</span>
+              <span class="m3-donate-val">UQCLyovMu5882XPekfUq...MqEC4</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg> Копировать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 5: О модуле -->
+  <div class="tab-page" id="tab-about">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">О проекте Telegram WS Proxy</span>
+      </div>
+      <div class="m3-card-body pt-0" style="font-size: 13px; line-height: 1.8;">
+        <p><b>Разработчик модуля:</b> eCubz</p>
+        <p><b>Канал обновлений:</b> <a href="javascript:void(0)" onclick="openChannel()" style="color: var(--md-sys-color-primary); text-decoration: none; font-weight: 600;">t.me/module_ecubz</a></p>
+        <p><b>Чат сообщества:</b> <a href="javascript:void(0)" onclick="openChat()" style="color: var(--md-sys-color-primary); text-decoration: none; font-weight: 600;">t.me/eCubz</a></p>
+        <p><b>Базовый движок:</b> spatiumstas (Go), концепция Flowseal.</p>
+        <p style="margin-top: 10px; font-size: 11px; color: var(--md-sys-color-on-surface-variant);">Лицензия MIT. Разработано с фокусом на безопасность и энергоэффективность Android.</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- M3 Expressive Bottom Navigation Bar -->
+<nav class="m3-nav-bar">
+  <button class="m3-nav-item active" id="nav-main" onclick="switchTabByName('main')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></div>
+    <span>Главная</span>
+  </button>
+  <button class="m3-nav-item" id="nav-settings" onclick="switchTabByName('settings')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></div>
+    <span>Настройки</span>
+  </button>
+  <button class="m3-nav-item" id="nav-latency" onclick="switchTabByName('latency')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg></div>
+    <span>Задержка</span>
+  </button>
+  <button class="m3-nav-item" id="nav-log" onclick="switchTabByName('log')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2zm-4 8H7v-2h6v2z"/></svg></div>
+    <span>Лог</span>
+  </button>
+  <button class="m3-nav-item" id="nav-about" onclick="switchTabByName('about')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></div>
+    <span>О модуле</span>
+  </button>
+</nav>
+
+<div id="m3-snackbar">Уведомление</div>
+
+<script>
+  const ICON_PLAY = `<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>`;
+  const ICON_STOP = `<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>`;
+  const ICON_CHECK = `<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
+  const ICON_CANCEL = `<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
+  const ICON_BOLT = `<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>`;
+
+  let asyncExecSeq = 0;
+  let MOD_PATH = '/data/adb/modules/tg-ws-proxy';
+  let STATE_PATH = '/data/adb/tg-ws-proxy';
+  let currentProxyLink = '';
+  let isServiceRunning = false;
+  let cachedConfig = {};
+
+  function getKsuBridge() {
+    return window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk || (typeof ksu !== 'undefined' ? ksu : null);
+  }
+
+  function resolveModDir() {
+    try {
+      const k = getKsuBridge();
+      if (k && typeof k.moduleInfo === 'function') {
+        const info = JSON.parse(k.moduleInfo() || '{}');
+        if (info.moduleDir) {
+          MOD_PATH = info.moduleDir;
+        }
+      }
+    } catch (_) {}
+  }
+
+  function showToast(msg) {
+    const s = document.getElementById('m3-snackbar');
+    s.textContent = msg;
+    s.classList.add('show');
+    setTimeout(() => s.classList.remove('show'), 2500);
+  }
+
+  function copyText(text, successMsg) {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    } catch(_) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch(_) {}
+    showToast(successMsg || 'Скопировано!');
+  }
+
+  function openUrl(url) {
+    sh('am start -a android.intent.action.VIEW -d "' + url + '"');
+  }
+
+  function openChannel() {
+    openUrl('https://t.me/module_ecubz');
+  }
+
+  function openChat() {
+    openUrl('https://t.me/eCubz');
+  }
+
+  let isExecutingAction = false;
+  let isUpdatingStatus = false;
+
+  function sh(cmd) {
+    const k = getKsuBridge();
+    if (!k || typeof k.exec !== 'function') {
+      console.warn('[No Root Manager Bridge]:', cmd);
+      return Promise.resolve({ code: 0, stdout: '', stderr: 'No root manager bridge' });
+    }
+
+    return new Promise((resolve) => {
+      const id = '__ksuCb_' + (++asyncExecSeq);
+      let done = false;
+
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        delete window[id];
+        delete window['window.' + id];
+        resolve({ code: -1, stdout: '', stderr: 'Exec timeout' });
+      }, 8000);
+
+      const callbackHandler = (code, stdout, stderr) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        delete window[id];
+        delete window['window.' + id];
+        resolve({
+          code: Number(code ?? 0),
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? '')
+        });
+      };
+
+      window[id] = callbackHandler;
+      window['window.' + id] = callbackHandler;
+
+      try {
+        // KernelSU / APatch Java signature: exec(command: String, callbackFunc: String)
+        const ret = k.exec(cmd, 'window.' + id);
+
+        // Promise-based bridges (MMRL or modern wrappers)
+        if (ret && typeof ret.then === 'function') {
+          ret.then(res => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            delete window[id];
+            delete window['window.' + id];
+            if (typeof res === 'string') {
+              try {
+                const p = JSON.parse(res);
+                resolve({ code: Number(p.errno ?? p.code ?? 0), stdout: String(p.stdout ?? res), stderr: String(p.stderr ?? '') });
+              } catch (_) {
+                resolve({ code: 0, stdout: res, stderr: '' });
+              }
+            } else if (res && typeof res === 'object') {
+              resolve({ code: Number(res.errno ?? res.code ?? 0), stdout: String(res.stdout ?? ''), stderr: String(res.stderr ?? '') });
+            } else {
+              resolve({ code: 0, stdout: String(res || ''), stderr: '' });
+            }
+          }).catch(err => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            delete window[id];
+            delete window['window.' + id];
+            resolve({ code: 1, stdout: '', stderr: String(err) });
+          });
+          return;
+        }
+
+        // Synchronous string return (JSON or raw stdout)
+        if (typeof ret === 'string' && ret.length > 0) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          delete window[id];
+          delete window['window.' + id];
+          try {
+            const p = JSON.parse(ret);
+            resolve({ code: Number(p.errno ?? p.code ?? 0), stdout: String(p.stdout ?? ret), stderr: String(p.stderr ?? '') });
+          } catch (_) {
+            resolve({ code: 0, stdout: ret, stderr: '' });
+          }
+          return;
+        }
+      } catch (error) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        delete window[id];
+        delete window['window.' + id];
+
+        // Fallback to synchronous exec(cmd)
+        try {
+          const syncOut = k.exec(cmd);
+          if (syncOut && typeof syncOut === 'object') {
+            resolve({
+              code: Number(syncOut.errno ?? syncOut.exitCode ?? 0),
+              stdout: String(syncOut.stdout ?? ''),
+              stderr: String(syncOut.stderr ?? '')
+            });
+          } else {
+            resolve({ code: 0, stdout: String(syncOut ?? ''), stderr: '' });
+          }
+        } catch (syncErr) {
+          resolve({ code: 1, stdout: '', stderr: String(syncErr) });
+        }
+      }
+    });
+  }
+
+  function switchTabByName(name) {
+    document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.m3-nav-item').forEach(b => b.classList.remove('active'));
+    const targetTab = document.getElementById('tab-' + name);
+    if (targetTab) targetTab.classList.add('active');
+    const targetNav = document.getElementById('nav-' + name);
+    if (targetNav) targetNav.classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (name === 'log') loadLogs();
+    if (name === 'settings') loadConfigFile();
+    if (name === 'main') updateStatus();
+  }
+
+  async function updateStatus() {
+    if (isUpdatingStatus) return;
+    isUpdatingStatus = true;
+    const box = document.getElementById('status-box');
+    const iconHolder = document.getElementById('status-icon-holder');
+    const title = document.getElementById('status-title');
+    const details = document.getElementById('status-details');
+    const linkBox = document.getElementById('proxy-link-box');
+    const btnOpen = document.getElementById('btn-open-tg');
+    const btnCopy = document.getElementById('btn-copy-link');
+    const btnToggle = document.getElementById('btn-toggle-service');
+    const btnRestart = document.getElementById('btn-restart');
+
+    try {
+      const res = await sh('sh ' + MOD_PATH + '/action.sh status_json 2>/dev/null');
+      let raw = (res.stdout || '').trim();
+      const match = raw.match(/\{[\s\S]*"listening"[\s\S]*\}/);
+      if (match) raw = match[0];
+      const data = JSON.parse(raw);
+
+      if (data.listening) {
+        isServiceRunning = true;
+        box.className = 'm3-status-icon-box running';
+        iconHolder.innerHTML = ICON_CHECK;
+        title.textContent = 'Служба активна';
+        details.textContent = 'Порт: ' + (data.port || '1443') + ' | PID: ' + (data.daemon_pid || '?');
+        btnToggle.className = 'm3-btn m3-btn-danger';
+        btnToggle.innerHTML = ICON_STOP + ' Остановить';
+        btnToggle.disabled = false;
+        btnRestart.disabled = false;
+
+        if (data.link) {
+          currentProxyLink = data.link;
+          linkBox.innerHTML = '<span style="user-select:all;">' + data.link + '</span>';
+          btnOpen.disabled = false;
+          btnCopy.disabled = false;
+        } else {
+          currentProxyLink = '';
+          linkBox.innerHTML = '<span class="m3-link-placeholder">Генерация ссылки…</span>';
+          btnOpen.disabled = true;
+          btnCopy.disabled = true;
+        }
+      } else {
+        isServiceRunning = false;
+        box.className = 'm3-status-icon-box stopped';
+        iconHolder.innerHTML = ICON_CANCEL;
+        title.textContent = 'Служба остановлена';
+        details.textContent = 'Порт 127.0.0.1:' + (data.port || '1443') + ' закрыт';
+        btnToggle.className = 'm3-btn m3-btn-filled';
+        btnToggle.innerHTML = ICON_PLAY + ' Запустить';
+        btnToggle.disabled = false;
+        btnRestart.disabled = true;
+
+        linkBox.innerHTML = '<span class="m3-link-placeholder">Запустите прокси для получения ссылки</span>';
+        btnOpen.disabled = true;
+        btnCopy.disabled = true;
+        currentProxyLink = '';
+      }
+    } catch(e) {
+      isServiceRunning = false;
+      box.className = 'm3-status-icon-box stopped';
+      iconHolder.innerHTML = ICON_CANCEL;
+      title.textContent = 'Служба остановлена';
+      details.textContent = '—';
+      btnToggle.className = 'm3-btn m3-btn-filled';
+      btnToggle.innerHTML = ICON_PLAY + ' Запустить';
+      btnToggle.disabled = false;
+      btnRestart.disabled = true;
+      currentProxyLink = '';
+      linkBox.innerHTML = '<span class="m3-link-placeholder">Запустите прокси для получения ссылки</span>';
+      btnOpen.disabled = true;
+      btnCopy.disabled = true;
+    } finally {
+      isUpdatingStatus = false;
+    }
+  }
+
+  async function toggleService() {
+    if (isExecutingAction) return;
+    isExecutingAction = true;
+    const btnToggle = document.getElementById('btn-toggle-service');
+    const btnRestart = document.getElementById('btn-restart');
+    btnToggle.disabled = true;
+    btnRestart.disabled = true;
+    btnToggle.innerHTML = 'Выполняется…';
+
+    try {
+      if (isServiceRunning) {
+        showToast('Остановка службы…');
+        await sh('sh ' + MOD_PATH + '/action.sh stop');
+      } else {
+        showToast('Запуск службы…');
+        await sh('sh ' + MOD_PATH + '/action.sh start');
+      }
+    } catch(e) {
+      showToast('Ошибка: ' + (e.message || e));
+    } finally {
+      isExecutingAction = false;
+      await updateStatus();
+    }
+  }
+
+  async function execProxy(action) {
+    if (isExecutingAction) return;
+    isExecutingAction = true;
+    const btnToggle = document.getElementById('btn-toggle-service');
+    const btnRestart = document.getElementById('btn-restart');
+    btnToggle.disabled = true;
+    btnRestart.disabled = true;
+    showToast('Выполняется: ' + action + '…');
+    try {
+      await sh('sh ' + MOD_PATH + '/action.sh ' + action);
+    } catch(e) {
+      showToast('Ошибка: ' + (e.message || e));
+    } finally {
+      isExecutingAction = false;
+      await updateStatus();
+    }
+  }
+
+  async function openTelegram() {
+    if (currentProxyLink) {
+      await sh('am start -a android.intent.action.VIEW -f 0x10000000 -d "' + currentProxyLink + '"');
+      showToast('Открыто в Telegram');
+    }
+  }
+
+  function copyProxyLink() {
+    if (!currentProxyLink) return;
+    copyText(currentProxyLink, 'Ссылка подключения скопирована!');
+  }
+
+  function applyPreset(preset) {
+    if (preset === 'battery') {
+      document.getElementById('cfg-pool').value = '1';
+      document.getElementById('cfg-priority').value = '0';
+      document.getElementById('cfg-host').value = '127.0.0.1';
+      showToast('Выбран профиль: Энергосбережение');
+    } else if (preset === 'turbo') {
+      document.getElementById('cfg-pool').value = '1';
+      document.getElementById('cfg-priority').value = '1';
+      showToast('Выбран профиль: Турбо-обход');
+    } else if (preset === 'wifi') {
+      document.getElementById('cfg-host').value = '0.0.0.0';
+      showToast('Выбран профиль: Раздача по Wi-Fi');
+    }
+  }
+
+  async function loadConfigFile() {
+    const res = await sh('cat ' + STATE_PATH + '/config.conf 2>/dev/null || cat ' + MOD_PATH + '/config/config.conf 2>/dev/null');
+    const raw = (res.stdout || '').replace(/\r/g, '');
+    const lines = raw.split('\n');
+    cachedConfig = {};
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const idx = trimmed.indexOf('=');
+      if (idx === -1) return;
+      const k = trimmed.substring(0, idx).trim();
+      const v = trimmed.substring(idx + 1).trim().replace(/^["']|["']$/g, '');
+      cachedConfig[k] = v;
+    });
+
+    if (cachedConfig.PORT !== undefined) document.getElementById('cfg-port').value = cachedConfig.PORT;
+    if (cachedConfig.HOST !== undefined) document.getElementById('cfg-host').value = cachedConfig.HOST;
+    if (cachedConfig.SECRET !== undefined) document.getElementById('cfg-secret').value = cachedConfig.SECRET;
+    if (cachedConfig.CFPROXY_WORKER_DOMAIN !== undefined) document.getElementById('cfg-worker').value = cachedConfig.CFPROXY_WORKER_DOMAIN;
+    if (cachedConfig.CFPROXY_PRIORITY !== undefined) document.getElementById('cfg-priority').value = cachedConfig.CFPROXY_PRIORITY;
+    if (cachedConfig.POOL_SIZE !== undefined) document.getElementById('cfg-pool').value = cachedConfig.POOL_SIZE;
+  }
+
+  async function saveConfigFile() {
+    const port = document.getElementById('cfg-port').value || '1443';
+    const host = document.getElementById('cfg-host').value || '127.0.0.1';
+    const sec = document.getElementById('cfg-secret').value.trim();
+    const worker = document.getElementById('cfg-worker').value.trim();
+    const priority = document.getElementById('cfg-priority').value || '0';
+    const pool = document.getElementById('cfg-pool').value || '1';
+
+    cachedConfig.PORT = port;
+    cachedConfig.HOST = host;
+    cachedConfig.SECRET = sec;
+    cachedConfig.CFPROXY_WORKER_DOMAIN = worker;
+    cachedConfig.CFPROXY_PRIORITY = priority;
+    cachedConfig.POOL_SIZE = pool;
+    if (!cachedConfig.BUF_KB) cachedConfig.BUF_KB = '64';
+    if (!cachedConfig.MAX_CONNS) cachedConfig.MAX_CONNS = '256';
+    if (!cachedConfig.LOG_MAX_MB) cachedConfig.LOG_MAX_MB = '2';
+    if (!cachedConfig.LOG_BACKUPS) cachedConfig.LOG_BACKUPS = '1';
+    if (!cachedConfig.VERBOSE) cachedConfig.VERBOSE = '0';
+    if (cachedConfig.CFPROXY_DOMAINS_URL === undefined) {
+      cachedConfig.CFPROXY_DOMAINS_URL = 'https://raw.githubusercontent.com/spatiumstas/tg-ws-proxy-go/main-go/.github/cfproxy-domains.txt';
+    }
+
+    const lines = [
+      '# Telegram WS Proxy Config',
+      'PORT="' + cachedConfig.PORT + '"',
+      'HOST="' + cachedConfig.HOST + '"',
+      'SECRET="' + cachedConfig.SECRET + '"',
+      'FAKE_TLS_DOMAIN="' + (cachedConfig.FAKE_TLS_DOMAIN || '') + '"',
+      'CFPROXY_DOMAINS="' + (cachedConfig.CFPROXY_DOMAINS || '') + '"',
+      'CFPROXY_DOMAINS_URL="' + cachedConfig.CFPROXY_DOMAINS_URL + '"',
+      'CFPROXY_WORKER_DOMAIN="' + cachedConfig.CFPROXY_WORKER_DOMAIN + '"',
+      'CFPROXY_PRIORITY="' + cachedConfig.CFPROXY_PRIORITY + '"',
+      'POOL_SIZE="' + cachedConfig.POOL_SIZE + '"',
+      'BUF_KB="' + cachedConfig.BUF_KB + '"',
+      'MAX_CONNS="' + cachedConfig.MAX_CONNS + '"',
+      'LOG_MAX_MB="' + cachedConfig.LOG_MAX_MB + '"',
+      'LOG_BACKUPS="' + cachedConfig.LOG_BACKUPS + '"',
+      'VERBOSE="' + cachedConfig.VERBOSE + '"',
+      'EXTRA_ARGS="' + (cachedConfig.EXTRA_ARGS || '') + '"',
+      'TG_PACKAGE="' + (cachedConfig.TG_PACKAGE || '') + '"'
+    ];
+
+    await sh('mkdir -p ' + STATE_PATH + ' 2>/dev/null');
+    const saveCmd = 'printf "%s\\n" ' + lines.map(l => "'" + l.replace(/'/g, "'\\''") + "'").join(' ') + ' > ' + STATE_PATH + '/config.conf';
+    await sh(saveCmd);
+    await sh('chmod 0600 ' + STATE_PATH + '/config.conf');
+    showToast('Настройки сохранены! Перезапуск…');
+    execProxy('restart');
+  }
+
+  async function runLatencyTest() {
+    const container = document.getElementById('latency-container');
+    container.innerHTML = '<div style="color:var(--md-sys-color-primary);font-size:12px;padding:16px;text-align:center;">Выполняется замер задержки…</div>';
+    const res = await sh('sh ' + MOD_PATH + '/action.sh ping 2>/dev/null');
+    const raw = (res.stdout || '').replace(/\r/g, '');
+    const lines = raw.split('\n');
+    let html = '';
+    lines.forEach(line => {
+      const clean = line.trim();
+      if (!clean || clean.startsWith('-')) return;
+      const parts = clean.split(/\s+/);
+      if (parts.length < 2) return;
+      const domain = parts[0];
+      const time = parts.slice(1).join(' ');
+      let badgeClass = 'm3-latency-good';
+      if (time.includes('timeout')) badgeClass = 'm3-latency-bad';
+      else if (parseInt(time) > 150) badgeClass = 'm3-latency-medium';
+
+      html += '<div class="m3-latency-item"><span class="m3-latency-domain">' + domain + '</span><span class="m3-latency-badge ' + badgeClass + '">' + time + '</span></div>';
+    });
+    container.innerHTML = html || '<div style="color:var(--md-sys-color-error);font-size:12px;padding:16px;text-align:center;">Узлы не ответили</div>';
+  }
+
+  async function loadLogs() {
+    const logBox = document.getElementById('log-content');
+    const res = await sh('tail -n 80 ' + STATE_PATH + '/logs/tg-ws-proxy.log 2>/dev/null || echo "Лог пуст"');
+    logBox.textContent = res.stdout.trim() || 'Лог пуст';
+  }
+
+  async function initWebUI() {
+    let attempts = 0;
+    while (!getKsuBridge() && attempts < 20) {
+      await new Promise(r => setTimeout(r, 100));
+      attempts++;
+    }
+    resolveModDir();
+    const k = getKsuBridge();
+    if (k && typeof k.fullScreen === 'function') {
+      try { k.fullScreen(false); } catch (_) {}
+    }
+    updateStatus();
+    loadConfigFile();
+    setInterval(updateStatus, 5000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initWebUI);
+  } else {
+    initWebUI();
+  }
+</script>
+</body>
+</html>
