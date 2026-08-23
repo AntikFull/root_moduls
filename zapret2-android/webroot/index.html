@@ -1,1204 +1,2446 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111018">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1318">
 <title>Zapret2 eCubz</title>
 <style>
-:root{
-  color-scheme:dark;
-  --md-primary:#d8b9ff;--md-on-primary:#3b1766;--md-primary-container:#552c80;--md-on-primary-container:#eedbff;
-  --md-secondary:#c7c2dc;--md-on-secondary:#302d41;--md-secondary-container:#474459;--md-on-secondary-container:#e4dff9;
-  --md-tertiary:#f0b8c3;--md-on-tertiary:#49252d;--md-tertiary-container:#633b44;--md-on-tertiary-container:#ffd9e0;
-  --md-error:#ffb4ab;--md-on-error:#690005;--md-error-container:#93000a;--md-on-error-container:#ffdad6;
-  --md-bg:#111018;--md-on-bg:#e6e0e9;--md-surface:#111018;--md-surface-1:#1b1821;--md-surface-2:#211e27;--md-surface-3:#29252f;
-  --md-on-surface:#e6e0e9;--md-on-surface-variant:#cac4d0;--md-outline:#938f99;--md-outline-variant:#49454f;
-  --md-success:#94d7a2;--md-on-success:#073914;--md-warning:#f3c774;--md-on-warning:#432c00;
-  --shadow-1:0 1px 2px rgba(0,0,0,.24),0 2px 10px rgba(0,0,0,.16);
-  --shadow-2:0 10px 30px rgba(0,0,0,.24);
-  --spring:cubic-bezier(.2,.9,.2,1.15);--standard:cubic-bezier(.2,0,0,1);
-  --radius-xs:12px;--radius-sm:18px;--radius-md:24px;--radius-lg:32px;--radius-xl:42px;
-}
-@media (prefers-color-scheme:light){
-  :root{color-scheme:light;--md-primary:#6f3ca1;--md-on-primary:#fff;--md-primary-container:#efdbff;--md-on-primary-container:#2b0052;--md-secondary:#635b70;--md-on-secondary:#fff;--md-secondary-container:#e9def8;--md-on-secondary-container:#1f182a;--md-tertiary:#7d5260;--md-on-tertiary:#fff;--md-tertiary-container:#ffd9e3;--md-on-tertiary-container:#31101d;--md-bg:#fff7ff;--md-on-bg:#1d1a20;--md-surface:#fff7ff;--md-surface-1:#f8f0f9;--md-surface-2:#f3ebf4;--md-surface-3:#ece4ed;--md-on-surface:#1d1a20;--md-on-surface-variant:#4a454e;--md-outline:#7b747e;--md-outline-variant:#ccc4ce;--md-success:#176b31;--md-on-success:#fff;--md-warning:#825500;--md-on-warning:#fff}
-}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html{scroll-behavior:smooth;background:var(--md-bg)}
-body{margin:0;background:
-  radial-gradient(900px 540px at 95% -10%,color-mix(in srgb,var(--md-primary) 22%,transparent),transparent 70%),
-  radial-gradient(700px 480px at -20% 20%,color-mix(in srgb,var(--md-tertiary) 14%,transparent),transparent 68%),var(--md-bg);
-  color:var(--md-on-bg);font:15px/1.45 "Google Sans","Roboto Flex","Roboto",system-ui,-apple-system,sans-serif;min-height:100vh}
-button,input,select,textarea{font:inherit}
-button,select,input[type=checkbox]{touch-action:manipulation}
-button:focus-visible,.nav-chip:focus-visible,.control:focus-visible,.switch-label:has(input:focus-visible),.app-chip:has(input:focus-visible){outline:3px solid color-mix(in srgb,var(--md-primary) 62%,transparent);outline-offset:2px}
-.field.is-disabled{opacity:.46;filter:saturate(.65)}.field.is-disabled .control{pointer-events:none}.control:disabled{opacity:.62;cursor:not-allowed}
-.shell{max-width:1040px;margin:0 auto;padding:12px 14px max(36px,env(safe-area-inset-bottom))}
-.hero{position:relative;overflow:hidden;margin:8px 0 14px;padding:24px;border-radius:var(--radius-xl);background:linear-gradient(135deg,var(--md-primary-container),color-mix(in srgb,var(--md-tertiary-container) 55%,var(--md-primary-container)));box-shadow:var(--shadow-2);isolation:isolate}
-.hero:after{content:"";position:absolute;width:260px;height:260px;right:-92px;top:-122px;border-radius:44% 56% 62% 38%/45% 36% 64% 55%;background:color-mix(in srgb,var(--md-primary) 20%,transparent);transform:rotate(18deg);z-index:-1;animation:heroFloat 10s ease-in-out infinite alternate}
-.brand-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.brand-kicker{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--md-on-primary-container);opacity:.78;font-weight:700}.hero h1{margin:2px 0 4px;font-size:clamp(28px,6vw,42px);line-height:1.05;letter-spacing:-.035em;font-weight:760}.hero-sub{margin:0;color:var(--md-on-primary-container);opacity:.86;max-width:650px}.hero-badge{display:inline-flex;align-items:center;gap:7px;min-height:34px;padding:0 13px;border-radius:999px;background:color-mix(in srgb,var(--md-on-primary-container) 12%,transparent);color:var(--md-on-primary-container);font-weight:700;white-space:nowrap;backdrop-filter:blur(12px)}
-.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:20px}.status-tile{min-width:0;padding:12px 13px;border-radius:22px;background:color-mix(in srgb,var(--md-bg) 18%,transparent);border:1px solid color-mix(in srgb,var(--md-on-primary-container) 14%,transparent);backdrop-filter:blur(14px)}.status-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.68;font-weight:700}.status-value{margin-top:3px;font-size:14px;font-weight:760;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.status-value .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:currentColor;box-shadow:0 0 0 4px color-mix(in srgb,currentColor 15%,transparent)}
-.nav-rail{position:sticky;top:0;z-index:20;margin:0 -4px 14px;padding:7px 4px;display:flex;gap:7px;overflow:auto;scrollbar-width:none;background:linear-gradient(var(--md-bg) 70%,transparent);backdrop-filter:blur(18px)}.nav-rail::-webkit-scrollbar{display:none}.nav-chip{position:relative;overflow:hidden;flex:0 0 auto;border:0;min-height:40px;padding:0 16px;border-radius:999px;color:var(--md-on-surface-variant);background:var(--md-surface-2);font-weight:700;cursor:pointer;transition:transform .18s var(--spring),border-radius .22s var(--spring),background .2s,color .2s}.nav-chip:active{transform:scale(.94);border-radius:16px}.nav-chip:hover{background:var(--md-surface-3);color:var(--md-on-surface)}.nav-chip.active{background:var(--md-primary-container);color:var(--md-on-primary-container);border-radius:16px 24px 16px 24px;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--md-primary) 22%,transparent)}
-.content{display:grid;gap:14px}.card{position:relative;overflow:hidden;background:color-mix(in srgb,var(--md-surface-1) 95%,transparent);border:1px solid color-mix(in srgb,var(--md-outline-variant) 72%,transparent);border-radius:var(--radius-lg);padding:19px;box-shadow:var(--shadow-1);transition:transform .35s var(--spring),border-radius .35s var(--spring),background .25s,padding .25s ease;transform-origin:center}.card:nth-of-type(3n+2){border-radius:38px 24px 38px 24px}.card:nth-of-type(3n){border-radius:24px 38px 24px 38px}.card.reveal{animation:cardIn .48s var(--spring) both}.card.collapsed{padding-top:14px;padding-bottom:14px}.card-body{margin-top:14px;transition:opacity .22s ease}.card.collapsed .card-body{display:none}.section-head{display:flex;align-items:center;gap:12px;margin-bottom:0;cursor:pointer;user-select:none;border-radius:18px;padding:4px 6px;transition:background .2s var(--spring)}.section-head:hover{background:color-mix(in srgb,var(--md-surface-2) 65%,transparent)}.section-head-text{flex:1;min-width:0}.section-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:16px;background:var(--md-secondary-container);color:var(--md-on-secondary-container);font-size:19px;flex:0 0 auto;transition:transform .3s var(--spring),border-radius .3s var(--spring)}.card:hover .section-icon{transform:rotate(-4deg) scale(1.04);border-radius:20px 12px 20px 12px}.section-title{margin:0;font-size:20px;line-height:1.2;letter-spacing:-.02em}.section-desc{margin:4px 0 0;color:var(--md-on-surface-variant);font-size:13px}.collapse-chevron{width:32px;height:32px;flex:0 0 32px;display:grid;place-items:center;border-radius:50%;background:var(--md-surface-2);color:var(--md-on-surface-variant);font-size:16px;font-weight:700;transition:transform .28s var(--spring),background .2s,color .2s}.card:not(.collapsed) .collapse-chevron{transform:rotate(0deg);background:var(--md-primary-container);color:var(--md-on-primary-container)}.card.collapsed .collapse-chevron{transform:rotate(-90deg)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px}.field{display:grid;gap:6px;min-width:0}.field>span,.field-title{font-size:12px;color:var(--md-on-surface-variant);font-weight:700;letter-spacing:.01em}.control{width:100%;min-height:48px;border:1px solid var(--md-outline-variant);border-radius:17px;background:var(--md-surface-2);color:var(--md-on-surface);padding:10px 13px;outline:none;transition:border-color .2s,background .2s,box-shadow .2s,transform .18s var(--spring),border-radius .2s}.control:hover{background:var(--md-surface-3)}.control:focus{border-color:var(--md-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--md-primary) 18%,transparent);border-radius:14px}.control::placeholder{color:color-mix(in srgb,var(--md-on-surface-variant) 65%,transparent)}select.control{appearance:auto}textarea.control{resize:vertical;min-height:104px;font:12.5px/1.5 ui-monospace,"SFMono-Regular",Consolas,monospace}
-.hint{margin:13px 0 0;padding:12px 14px;border-radius:18px;background:color-mix(in srgb,var(--md-secondary-container) 55%,transparent);color:var(--md-on-surface-variant);font-size:13px;border-left:4px solid var(--md-primary)}.hint strong{color:var(--md-on-surface)}
-.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}.md-button{--btn-bg:var(--md-primary);--btn-fg:var(--md-on-primary);position:relative;isolation:isolate;overflow:hidden;border:0;min-height:46px;padding:0 18px;border-radius:17px;background:var(--btn-bg);color:var(--btn-fg);font-weight:760;letter-spacing:.01em;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.18);transition:transform .16s var(--spring),border-radius .24s var(--spring),box-shadow .2s,filter .2s}.md-button:hover{filter:brightness(1.05);box-shadow:0 4px 12px rgba(0,0,0,.2)}.md-button:active{transform:scale(.955);border-radius:25px 13px 25px 13px;box-shadow:none}.md-button.tonal{--btn-bg:var(--md-secondary-container);--btn-fg:var(--md-on-secondary-container)}.md-button.tertiary{--btn-bg:var(--md-tertiary-container);--btn-fg:var(--md-on-tertiary-container)}.md-button.outlined{--btn-bg:transparent;--btn-fg:var(--md-primary);border:1px solid var(--md-outline)}.md-button:disabled{opacity:.6;cursor:wait;transform:none}.md-button.is-loading{padding-left:42px}.md-button.is-loading:before{content:"";position:absolute;left:17px;width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}.ripple{position:absolute;border-radius:50%;pointer-events:none;background:currentColor;opacity:.16;transform:translate(-50%,-50%) scale(0);animation:ripple .48s ease-out forwards;z-index:-1}
-.divider{height:1px;background:var(--md-outline-variant);opacity:.7;margin:17px 0}.subhead{font-size:15px;margin:0 0 11px}.cap-panel{display:grid;gap:10px;margin-top:12px}.cap-summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:0 11px;border-radius:999px;background:var(--md-surface-3);color:var(--md-on-surface-variant);font-size:12px;font-weight:760}.pill.ok{background:color-mix(in srgb,var(--md-success) 18%,var(--md-surface-2));color:var(--md-success)}.pill.warn{background:color-mix(in srgb,var(--md-warning) 18%,var(--md-surface-2));color:var(--md-warning)}.pill.bad{background:color-mix(in srgb,var(--md-error) 18%,var(--md-surface-2));color:var(--md-error)}.pill.info{background:color-mix(in srgb,var(--md-primary) 14%,var(--md-surface-2));color:var(--md-primary)}.cap-note{margin:0;color:var(--md-on-surface-variant);font-size:13px}
-.searchbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.searchbar .control{flex:1;min-width:210px}.switch-label{display:flex;align-items:center;gap:9px;min-height:44px;padding:0 13px;border-radius:16px;background:var(--md-surface-2);color:var(--md-on-surface-variant);font-weight:700;cursor:pointer}.switch-label input{width:18px;height:18px;accent-color:var(--md-primary)}#apps{max-height:62vh;overflow:auto;margin-top:12px;padding-right:3px;scrollbar-color:var(--md-outline-variant) transparent}.app-summary{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}.app-row{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:6px 0;border-radius:20px;background:var(--md-surface-2);border:1px solid transparent;transition:background .2s,transform .18s var(--spring),border-radius .2s,border-color .2s}.app-row.selected{border-color:color-mix(in srgb,var(--md-primary) 30%,transparent);background:color-mix(in srgb,var(--md-primary-container) 27%,var(--md-surface-2))}.app-row:active{transform:scale(.99);border-radius:14px}.app-row:hover{background:var(--md-surface-3)}.app-icon{position:relative;width:42px;height:42px;flex:0 0 42px;border-radius:14px;overflow:hidden;display:grid;place-items:center;background:linear-gradient(145deg,var(--md-secondary-container),var(--md-primary-container));color:var(--md-on-primary-container);font-weight:850;text-transform:uppercase}.app-icon img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:var(--md-surface-3)}.app-name{flex:1;min-width:110px}.app-name b{display:block;font-size:14px}.app-name small{display:block;margin-top:2px;color:var(--md-on-surface-variant);font:11px/1.35 ui-monospace,monospace;word-break:break-all}.app-chip{display:flex;align-items:center;gap:5px;flex:0 0 auto;padding:7px 9px;border-radius:999px;background:var(--md-surface-3);font-size:10px;font-weight:800;letter-spacing:.02em;cursor:pointer;transition:transform .16s var(--spring),background .2s}.app-chip:active{transform:scale(.94)}.app-chip.include:has(input:checked){background:var(--md-primary-container);color:var(--md-on-primary-container)}.app-chip.exclude:has(input:checked){background:var(--md-tertiary-container);color:var(--md-on-tertiary-container)}.auto-badge{display:inline-flex;align-items:center;gap:5px;margin-top:5px;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--md-success) 14%,var(--md-surface-3));color:var(--md-success);font-size:9px;font-weight:850;letter-spacing:.06em}.auto-badge.off{background:var(--md-surface-3);color:var(--md-on-surface-variant)}.app-chip input{width:15px;height:15px;margin:0;accent-color:var(--md-primary)}.app-row.pending{opacity:.72;pointer-events:none}.app-row.pending .app-icon:after{content:'';position:absolute;inset:8px;border:2px solid color-mix(in srgb,var(--md-primary) 28%,transparent);border-top-color:var(--md-primary);border-radius:50%;animation:spin .75s linear infinite}.app-apply{display:none;margin-top:4px;font-size:10px;color:var(--md-primary);font-weight:800}.app-row.pending .app-apply{display:block}.app-empty{padding:26px 14px;text-align:center;border-radius:22px;background:var(--md-surface-2);color:var(--md-on-surface-variant)}
-.expert{margin-top:14px;padding:12px 14px;border-radius:20px;background:var(--md-surface-2);border:1px solid var(--md-outline-variant)}.expert summary{cursor:pointer;font-weight:800;color:var(--md-on-surface);padding:4px 0}.expert[open] summary{margin-bottom:12px}.service-profiles{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.logbox{max-height:40vh;white-space:pre;overflow:auto}.muted{color:var(--md-on-surface-variant);font-size:13px}.ok{color:var(--md-success)}.warn{color:var(--md-warning)}.bad{color:var(--md-error)}
-.startup-overlay{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,var(--md-bg) 72%,transparent);backdrop-filter:blur(18px) saturate(1.08);opacity:0;visibility:hidden;transition:opacity .24s var(--standard),visibility .24s}.startup-overlay.show{opacity:1;visibility:visible}.startup-card{width:min(88vw,390px);padding:26px 24px 22px;border-radius:38px 24px 38px 24px;background:linear-gradient(145deg,var(--md-surface-2),color-mix(in srgb,var(--md-primary-container) 24%,var(--md-surface-2)));border:1px solid color-mix(in srgb,var(--md-primary) 24%,var(--md-outline-variant));box-shadow:0 24px 72px rgba(0,0,0,.34);text-align:center;transform:scale(.92) translateY(10px);transition:transform .38s var(--spring)}.startup-overlay.show .startup-card{transform:scale(1) translateY(0)}.startup-progress{--progress:8;position:relative;width:78px;height:78px;margin:0 auto 17px;display:grid;place-items:center}.startup-progress svg{width:78px;height:78px;overflow:visible;transform:rotate(-90deg)}.startup-progress circle{fill:none;stroke-width:7}.startup-progress .track{stroke:color-mix(in srgb,var(--md-primary) 15%,var(--md-outline-variant))}.startup-progress .indicator{stroke:var(--md-primary);stroke-linecap:round;stroke-dasharray:100;stroke-dashoffset:calc(100 - var(--progress));transition:stroke-dashoffset .5s var(--spring)}.startup-progress.indeterminate svg{animation:spin .9s linear infinite}.startup-progress.indeterminate .indicator{stroke-dasharray:30 70;stroke-dashoffset:0;animation:progressPulse 1.3s ease-in-out infinite}.startup-percent{position:absolute;font-size:13px;font-weight:800;color:var(--md-on-surface)}.startup-progress.indeterminate .startup-percent{display:none}.startup-title{margin:0;font-size:21px;letter-spacing:-.02em}.startup-phase{margin:7px 0 0;color:var(--md-on-surface-variant);min-height:42px}.startup-note{margin:13px 0 0;font-size:12px;color:var(--md-on-surface-variant);opacity:.76}.status-value.starting{color:var(--md-primary)}
-.snackbar{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));z-index:50;width:min(92vw,680px);transform:translate(-50%,24px) scale(.98);opacity:0;pointer-events:none;padding:13px 16px;border-radius:18px;background:var(--md-on-surface);color:var(--md-surface);box-shadow:var(--shadow-2);font-weight:700;transition:opacity .22s,transform .3s var(--spring)}.snackbar.show{opacity:1;transform:translate(-50%,0) scale(1)}
-.fab-top{position:fixed;right:16px;bottom:max(76px,calc(env(safe-area-inset-bottom) + 76px));z-index:18;width:50px;height:50px;border:0;border-radius:18px;background:var(--md-tertiary-container);color:var(--md-on-tertiary-container);box-shadow:var(--shadow-2);font-size:20px;cursor:pointer;opacity:0;transform:scale(.8) rotate(8deg);pointer-events:none;transition:.25s var(--spring)}.fab-top.visible{opacity:1;transform:scale(1) rotate(0);pointer-events:auto}.fab-top:active{transform:scale(.9);border-radius:25px}
-.footer{padding:18px 6px 6px;text-align:center;color:var(--md-on-surface-variant);font-size:12px}
-.faq-search{margin-bottom:14px}
-.faq-list{display:grid;gap:10px}
-.faq-item{border:1px solid var(--md-outline-variant);border-radius:20px;background:var(--md-surface-2);overflow:hidden;transition:background .2s,border-color .2s}
-.faq-item[open]{background:color-mix(in srgb,var(--md-primary-container) 16%,var(--md-surface-2));border-color:color-mix(in srgb,var(--md-primary) 38%,transparent)}
-.faq-title{padding:14px 16px;cursor:pointer;font-weight:760;font-size:15px;display:flex;align-items:center;justify-content:space-between;gap:12px;user-select:none}
-.faq-title:hover{background:color-mix(in srgb,var(--md-surface-3) 60%,transparent)}
-.faq-title::-webkit-details-marker{display:none}
-.faq-chevron{font-size:13px;transition:transform .2s var(--spring);color:var(--md-primary)}
-.faq-item[open] .faq-chevron{transform:rotate(180deg)}
-.faq-body{padding:0 16px 16px;color:var(--md-on-surface-variant);font-size:13.5px;line-height:1.55}
-.faq-body p{margin:6px 0}
-.faq-body code{background:var(--md-surface-3);padding:2px 6px;border-radius:6px;font-size:12px;color:var(--md-primary)}
-.faq-body ul{margin:6px 0;padding-left:20px}
-.faq-body li{margin:4px 0}
-.faq-tag{font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px;background:var(--md-secondary-container);color:var(--md-on-secondary-container);text-transform:uppercase;margin-right:8px}
-.app-chip.warp:has(input:checked){background:color-mix(in srgb,var(--md-primary) 32%,var(--md-surface-3));color:var(--md-primary)}
-.app-filter-chips{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px;margin-bottom:8px;scrollbar-width:none}
-.app-filter-chips::-webkit-scrollbar{display:none}
-.filter-chip{padding:6px 14px;border-radius:999px;border:1px solid var(--md-outline-variant);background:var(--md-surface-2);color:var(--md-on-surface-variant);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .18s var(--spring)}
-.filter-chip:hover{background:var(--md-surface-3)}
-.filter-chip.active{background:var(--md-primary);color:var(--md-on-primary);border-color:var(--md-primary);box-shadow:var(--shadow-1)}
-@keyframes spin{to{transform:rotate(360deg)}}@keyframes progressPulse{0%,100%{stroke-dasharray:18 82}50%{stroke-dasharray:58 42}}@keyframes ripple{to{transform:translate(-50%,-50%) scale(3.5);opacity:0}}@keyframes cardIn{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}@keyframes heroFloat{to{transform:translate(-14px,12px) rotate(34deg) scale(1.08)}}
-@media (max-width:720px){.shell{padding-left:10px;padding-right:10px}.hero{padding:20px;border-radius:34px}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.brand-row{display:block}.hero-badge{margin-top:12px}.card{padding:16px}.grid{grid-template-columns:1fr}.actions .md-button{flex:1 1 170px}.app-row{align-items:flex-start;flex-wrap:wrap}.app-name{flex:1 1 calc(100% - 58px);min-width:0}.app-chip{flex:1 1 calc(33.3% - 5px);justify-content:center}}
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
+  :root {
+    /* Material 3 Expressive - Dark Tonal Palette */
+    --md-sys-color-primary: #a8c7fa;
+    --md-sys-color-on-primary: #043058;
+    --md-sys-color-primary-container: #1b4773;
+    --md-sys-color-on-primary-container: #d3e3fd;
+    --md-sys-color-secondary: #bcc7dc;
+    --md-sys-color-on-secondary: #273142;
+    --md-sys-color-secondary-container: #3d4758;
+    --md-sys-color-on-secondary-container: #d8e3f8;
+    --md-sys-color-tertiary: #70d2ff;
+    --md-sys-color-on-tertiary: #003549;
+    --md-sys-color-tertiary-container: #004d69;
+    --md-sys-color-on-tertiary-container: #c2e8ff;
+    --md-sys-color-error: #ffb4ab;
+    --md-sys-color-on-error: #690005;
+    --md-sys-color-error-container: #93000a;
+    --md-sys-color-on-error-container: #ffdad6;
+    --md-sys-color-background: #0f1318;
+    --md-sys-color-on-background: #e0e2ec;
+    --md-sys-color-surface: #0f1318;
+    --md-sys-color-on-surface: #e0e2ec;
+    --md-sys-color-surface-variant: #424750;
+    --md-sys-color-on-surface-variant: #c2c7d2;
+    --md-sys-color-outline: #8c919c;
+    --md-sys-color-outline-variant: #424750;
+    --md-sys-color-surface-container-lowest: #0a0e13;
+    --md-sys-color-surface-container-low: #171b21;
+    --md-sys-color-surface-container: #1b2026;
+    --md-sys-color-surface-container-high: #262a31;
+    --md-sys-color-surface-container-highest: #30353c;
+    --md-sys-color-success: #6dd58c;
+    --md-sys-color-on-success: #003915;
+    --md-sys-color-success-container: #005322;
+    --md-sys-color-on-success-container: #89f2a6;
+    --md-sys-color-warning: #f3c774;
+    --md-sys-color-on-warning: #432c00;
+    --md-sys-color-warning-container: #5d3f00;
+    --md-sys-color-on-warning-container: #ffdea4;
+
+    /* M3 Expressive Shapes */
+    --md-sys-shape-xs: 4px;
+    --md-sys-shape-sm: 8px;
+    --md-sys-shape-md: 12px;
+    --md-sys-shape-lg: 16px;
+    --md-sys-shape-xl: 24px;
+    --md-sys-shape-2xl: 28px;
+    --md-sys-shape-full: 9999px;
+
+    /* Typography */
+    --md-ref-typeface-plain: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --md-ref-typeface-mono: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--md-sys-color-background);
+    color: var(--md-sys-color-on-surface);
+    font-family: var(--md-ref-typeface-plain);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding-bottom: 96px;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  /* Google Icons standard inline SVG styles */
+  .g-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  .g-icon-sm { width: 16px; height: 16px; }
+  .g-icon-lg { width: 26px; height: 26px; }
+
+  /* M3 Expressive Top App Bar */
+  header.m3-top-app-bar {
+    background: rgba(23, 27, 33, 0.88);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .m3-avatar {
+    width: 38px;
+    height: 38px;
+    background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+    color: var(--md-sys-color-on-primary);
+    border-radius: var(--md-sys-shape-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 16px;
+    box-shadow: 0 4px 16px rgba(168, 199, 250, 0.25);
+    flex-shrink: 0;
+  }
+
+  .m3-app-bar-title { flex: 1; }
+  .m3-app-bar-title h1 {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    color: var(--md-sys-color-on-surface);
+    line-height: 1.2;
+  }
+  .m3-app-bar-title p {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-top: 2px;
+  }
+
+  .m3-badge-pill {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    padding: 4px 10px;
+    border-radius: var(--md-sys-shape-full);
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--md-ref-typeface-mono);
+    letter-spacing: 0.02em;
+  }
+
+  /* Main Container */
+  main {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* M3 Expressive Cards */
+  .m3-card {
+    background: var(--md-sys-color-surface-container);
+    border-radius: var(--md-sys-shape-2xl);
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+  }
+  .m3-card-low { background: var(--md-sys-color-surface-container-low); }
+  .m3-card-high { background: var(--md-sys-color-surface-container-high); }
+
+  .m3-card-header {
+    padding: 16px 18px 8px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .m3-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--md-sys-color-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .m3-card-body {
+    padding: 16px 18px;
+  }
+  .m3-card-body.pt-0 { padding-top: 4px; }
+
+  /* Hero Status Indicator */
+  .m3-status-hero {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 4px 0 14px 0;
+  }
+  .m3-status-icon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--md-sys-shape-xl);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.3s;
+  }
+  .m3-status-icon-box.running {
+    background: var(--md-sys-color-success-container);
+    color: var(--md-sys-color-on-success-container);
+    box-shadow: 0 0 0 6px rgba(109, 213, 140, 0.15);
+  }
+  .m3-status-icon-box.stopped {
+    background: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+    box-shadow: 0 0 0 6px rgba(255, 180, 171, 0.1);
+  }
+  .m3-status-icon-box.warning {
+    background: var(--md-sys-color-warning-container);
+    color: var(--md-sys-color-on-warning-container);
+    box-shadow: 0 0 0 6px rgba(243, 199, 116, 0.15);
+  }
+  .m3-status-icon-box.loading {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    animation: m3-pulse 1.4s infinite;
+  }
+  @keyframes m3-pulse { 0%,100%{opacity:1; transform:scale(1)} 50%{opacity:0.5; transform:scale(0.96)} }
+
+  .m3-status-texts { flex: 1; min-width: 0; }
+  .m3-status-headline {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--md-sys-color-on-surface);
+    letter-spacing: -0.2px;
+  }
+  .m3-status-subhead {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: var(--md-ref-typeface-mono);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Status Chips Grid */
+  .m3-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .m3-summary-item {
+    background: var(--md-sys-color-surface-container-high);
+    border-radius: var(--md-sys-shape-md);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .m3-summary-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--md-sys-color-on-surface-variant);
+  }
+  .m3-summary-val {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--md-sys-color-on-surface);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* M3 Expressive Buttons */
+  .m3-btn-group {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+  }
+  .m3-btn {
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 11px 18px;
+    border-radius: var(--md-sys-shape-full);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    text-decoration: none;
+    user-select: none;
+  }
+  .m3-btn:active { transform: scale(0.96); }
+  .m3-btn:disabled { opacity: 0.38; cursor: not-allowed; transform: none; }
+
+  .m3-btn-filled {
+    background: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .m3-btn-filled:hover:not(:disabled) { opacity: 0.94; }
+
+  .m3-btn-tonal {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+  .m3-btn-tonal:hover:not(:disabled) { background: #4a5468; }
+
+  .m3-btn-danger {
+    background: var(--md-sys-color-error);
+    color: var(--md-sys-color-on-error);
+  }
+  .m3-btn-success {
+    background: var(--md-sys-color-success);
+    color: var(--md-sys-color-on-success);
+  }
+  .m3-btn-outlined {
+    background: transparent;
+    color: var(--md-sys-color-primary);
+    border: 1px solid var(--md-sys-color-outline-variant);
+  }
+  .m3-btn-outlined:hover:not(:disabled) {
+    background: rgba(168, 199, 250, 0.08);
+    border-color: var(--md-sys-color-primary);
+  }
+  .m3-btn-sm { padding: 7px 12px; font-size: 12px; }
+
+  /* M3 Filter Chips Row */
+  .m3-chips-row {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .m3-chips-row::-webkit-scrollbar { display: none; }
+  .m3-chip {
+    background: var(--md-sys-color-surface-container-high);
+    color: var(--md-sys-color-on-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-md);
+    padding: 7px 13px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .m3-chip:hover {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    border-color: transparent;
+  }
+  .m3-chip.active {
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+    border-color: var(--md-sys-color-primary);
+  }
+  .m3-chip:active { transform: scale(0.96); }
+
+  /* M3 Status Pills */
+  .m3-pills-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .m3-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: var(--md-sys-shape-full);
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-on-surface-variant);
+  }
+  .m3-pill.ok {
+    background: var(--md-sys-color-success-container);
+    color: var(--md-sys-color-on-success-container);
+  }
+  .m3-pill.warn {
+    background: var(--md-sys-color-warning-container);
+    color: var(--md-sys-color-on-warning-container);
+  }
+  .m3-pill.bad {
+    background: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+  }
+  .m3-pill.info {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+
+  /* Form Fields */
+  .m3-text-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+  .m3-text-field:last-child { margin-bottom: 0; }
+  .m3-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--md-sys-color-on-surface-variant);
+  }
+  .m3-input, .m3-select, .m3-textarea {
+    background: var(--md-sys-color-surface-container-high);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-md);
+    color: var(--md-sys-color-on-surface);
+    font-size: 13px;
+    font-family: var(--md-ref-typeface-mono);
+    padding: 10px 12px;
+    outline: none;
+    transition: all 0.2s;
+    width: 100%;
+  }
+  .m3-input:focus, .m3-select:focus, .m3-textarea:focus {
+    border-color: var(--md-sys-color-primary);
+    box-shadow: 0 0 0 3px rgba(168, 199, 250, 0.2);
+    background: var(--md-sys-color-surface-container-highest);
+  }
+  .m3-textarea {
+    resize: vertical;
+    min-height: 140px;
+    line-height: 1.5;
+    font-size: 12px;
+    white-space: pre;
+  }
+  .m3-helper {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-top: 2px;
+  }
+  .m3-hint-box {
+    background: var(--md-sys-color-surface-container-lowest);
+    border-left: 3px solid var(--md-sys-color-primary);
+    border-radius: var(--md-sys-shape-sm);
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin: 10px 0;
+    line-height: 1.45;
+  }
+  .m3-hint-box strong { color: var(--md-sys-color-on-surface); }
+  .m3-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  @media (max-width: 480px) {
+    .m3-form-grid { grid-template-columns: 1fr; }
+    .m3-summary-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Details / Accordion */
+  .m3-details {
+    background: var(--md-sys-color-surface-container-high);
+    border-radius: var(--md-sys-shape-lg);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    overflow: hidden;
+    margin-top: 10px;
+    transition: all 0.2s;
+  }
+  .m3-details summary {
+    padding: 12px 14px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+    color: var(--md-sys-color-on-surface);
+  }
+  .m3-details summary::-webkit-details-marker { display: none; }
+  .m3-details summary:hover { background: var(--md-sys-color-surface-container-highest); }
+  .m3-details-content {
+    padding: 12px 14px 14px 14px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-container);
+  }
+
+  /* Channel Banner */
+  .m3-banner {
+    background: linear-gradient(135deg, rgba(27, 71, 115, 0.6), rgba(0, 77, 105, 0.6));
+    border: 1px solid rgba(168, 199, 250, 0.2);
+    border-radius: var(--md-sys-shape-2xl);
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .m3-banner-title { font-size: 14px; font-weight: 700; color: var(--md-sys-color-on-surface); }
+  .m3-banner-sub { font-size: 11px; color: var(--md-sys-color-on-surface-variant); margin-top: 2px; }
+
+  /* Donation Items */
+  .m3-donate-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .m3-donate-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--md-sys-color-surface-container-high);
+    border-radius: var(--md-sys-shape-lg);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .m3-donate-card:hover {
+    background: var(--md-sys-color-surface-container-highest);
+    transform: translateY(-1px);
+  }
+  .m3-donate-card:active { transform: scale(0.98); }
+  .m3-donate-info { display: flex; flex-direction: column; min-width: 0; }
+  .m3-donate-name { font-size: 13px; font-weight: 700; color: var(--md-sys-color-on-surface); }
+  .m3-donate-val {
+    font-size: 11px;
+    color: var(--md-sys-color-primary);
+    font-family: var(--md-ref-typeface-mono);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m3-donate-hint { font-size: 10px; color: var(--md-sys-color-on-surface-variant); }
+
+  /* Log Box */
+  .m3-log-view {
+    background: var(--md-sys-color-surface-container-lowest);
+    border-radius: var(--md-sys-shape-lg);
+    padding: 12px 14px;
+    font-family: var(--md-ref-typeface-mono);
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    max-height: 380px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+    border: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  /* FAQ Items */
+  .m3-faq-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .m3-faq-card {
+    background: var(--md-sys-color-surface-container-high);
+    border-radius: var(--md-sys-shape-lg);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    overflow: hidden;
+    transition: all 0.2s;
+  }
+  .m3-faq-card summary {
+    padding: 12px 14px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+    color: var(--md-sys-color-on-surface);
+  }
+  .m3-faq-card summary::-webkit-details-marker { display: none; }
+  .m3-faq-card summary:hover { background: var(--md-sys-color-surface-container-highest); }
+  .m3-faq-card[open] { border-color: rgba(168, 199, 250, 0.4); }
+  .m3-faq-content {
+    padding: 12px 14px 14px 14px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-container);
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface-variant);
+    line-height: 1.6;
+  }
+  .m3-faq-content p { margin: 6px 0; }
+  .m3-faq-content ul { padding-left: 18px; margin: 6px 0; }
+  .m3-faq-content li { margin: 4px 0; }
+  .m3-faq-content code {
+    background: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: var(--md-ref-typeface-mono);
+  }
+
+  /* M3 Expressive Bottom Navigation Bar */
+  nav.m3-nav-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(23, 27, 33, 0.94);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    display: flex;
+    justify-content: space-around;
+    padding: 8px 8px 14px 8px;
+    z-index: 100;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .m3-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    max-width: 76px;
+    pointer-events: auto;
+  }
+  .m3-nav-item * { pointer-events: none; }
+  .m3-nav-indicator {
+    width: 44px;
+    height: 26px;
+    border-radius: var(--md-sys-shape-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .m3-nav-item.active {
+    color: var(--md-sys-color-on-surface);
+    font-weight: 700;
+  }
+  .m3-nav-item.active .m3-nav-indicator {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+
+  /* Tab Page Visibility */
+  .tab-page { display: none; flex-direction: column; gap: 14px; }
+  .tab-page.active { display: flex; }
+
+  /* M3 Snackbar Toast */
+  #m3-snackbar {
+    position: fixed;
+    bottom: 96px;
+    left: 50%;
+    transform: translateX(-50%) translateY(40px);
+    background: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-on-surface);
+    padding: 12px 20px;
+    border-radius: var(--md-sys-shape-full);
+    font-size: 13px;
+    font-weight: 600;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    z-index: 200;
+    white-space: nowrap;
+  }
+  #m3-snackbar.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* Startup / Progress Modal Overlay */
+  .startup-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(15, 19, 24, 0.82);
+    backdrop-filter: blur(16px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.24s, visibility 0.24s;
+  }
+  .startup-overlay.show { opacity: 1; visibility: visible; }
+  .startup-card {
+    width: min(88vw, 380px);
+    padding: 24px 20px;
+    border-radius: var(--md-sys-shape-2xl);
+    background: var(--md-sys-color-surface-container-high);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    text-align: center;
+    transform: scale(0.94);
+    transition: transform 0.3s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .startup-overlay.show .startup-card { transform: scale(1); }
+  .startup-progress-circle {
+    width: 60px;
+    height: 60px;
+    margin: 0 auto 14px;
+    position: relative;
+    display: grid;
+    place-items: center;
+  }
+  .startup-progress-circle svg {
+    width: 60px;
+    height: 60px;
+    transform: rotate(-90deg);
+  }
+  .startup-progress-circle circle {
+    fill: none;
+    stroke-width: 5;
+  }
+  .startup-progress-circle .track {
+    stroke: var(--md-sys-color-surface-container-highest);
+  }
+  .startup-progress-circle .indicator {
+    stroke: var(--md-sys-color-primary);
+    stroke-linecap: round;
+    stroke-dasharray: 100;
+    stroke-dashoffset: calc(100 - var(--progress, 10));
+    transition: stroke-dashoffset 0.4s;
+  }
+  .startup-progress-circle.indeterminate svg {
+    animation: m3-spin 1.1s linear infinite;
+  }
+  .startup-progress-circle.indeterminate .indicator {
+    stroke-dasharray: 30 70;
+    stroke-dashoffset: 0;
+  }
+  @keyframes m3-spin { to { transform: rotate(270deg); } }
+  .startup-title { font-size: 18px; font-weight: 700; color: var(--md-sys-color-on-surface); }
+  .startup-phase { font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-top: 6px; min-height: 36px; }
+  .startup-note { font-size: 11px; color: var(--md-sys-color-outline); margin-top: 8px; }
 </style>
 </head>
 <body>
-<div class="shell">
-<header class="hero" id="overview">
-  <div class="brand-row">
-    <div><div class="brand-kicker">AntiDPI · Root module</div><h1>Zapret2 eCubz</h1><p class="hero-sub">Обход DPI, точечный туннель для любых приложений и раздача интернета.</p></div>
-    <span class="hero-badge" id="heroVersion">v3.2.30 (3150)</span>
+
+<!-- M3 Top App Bar -->
+<header class="m3-top-app-bar">
+  <div class="m3-avatar">eC</div>
+  <div class="m3-app-bar-title">
+    <h1>Zapret2 eCubz</h1>
+    <p>AntiDPI &amp; Tunnel · Systemless Root</p>
   </div>
-  <div class="status-grid" id="state" aria-live="polite">
-    <div class="status-tile"><div class="status-label">Служба</div><div class="status-value" id="statusRunning"><span class="dot"></span>Загрузка…</div></div>
-    <div class="status-tile"><div class="status-label">Стратегия</div><div class="status-value" id="statusStrategy">—</div></div>
-    <div class="status-tile"><div class="status-label">Состояние</div><div class="status-value" id="statusHealth">—</div></div>
-    <div class="status-tile"><div class="status-label">Сеть и защита</div><div class="status-value" id="statusMeta">—</div></div>
-  </div>
+  <span class="m3-badge-pill" id="heroVersion">v4.1.0</span>
 </header>
-<nav class="nav-rail" aria-label="Разделы">
-  <button type="button" class="nav-chip" data-target="scopeSection">Обход DPI</button><button type="button" class="nav-chip" data-target="warpSection">Точечный обход</button><button type="button" class="nav-chip" data-target="hotspotSection">Раздача интернета</button><button type="button" class="nav-chip" data-target="strategySection">Стратегии</button><button type="button" class="nav-chip" data-target="listsSection">Списки</button><button type="button" class="nav-chip" data-target="diagSection">Диагностика</button><button type="button" class="nav-chip" data-target="faqSection">Справка / FAQ</button><button type="button" class="nav-chip tonal" id="toggleAllBtn" onclick="toggleAllCards()" title="Свернуть / Развернуть все">⇕ Свернуть</button>
-</nav>
-<main class="content">
-<section class="card" id="scopeSection">
-  <div class="section-head" onclick="toggleCard('scopeSection')"><div class="section-icon">◈</div><div class="section-head-text"><h2 class="section-title">Обход DPI</h2><div class="section-sub">Что делать с трафиком</div></div><div class="section-chevron">▾</div></div>
-  <div class="card-body">
-    <p class="hint">Обход применяется ко всей системе. Какие именно домены и подсети трогать — задаётся в разделе «Списки доменов и подсетей».</p>
-    <div class="grid">
-      <label class="field"><span>QUIC (HTTP/3)</span>
-        <select class="control" id="quic">
-          <option value="on">Блокировать — заставить приложения работать по TCP</option>
-          <option value="off">Не блокировать</option>
-        </select>
-      </label>
-      <input type="hidden" id="tcp" value="1">
-    </div>
-    <p class="hint">Имя сайта внутри QUIC не видно, поэтому блокировка действует на весь UDP/443 либо не действует вовсе. Выборочно тут нельзя. Без блокировки браузеры уходят в QUIC, и обход DPI до них не достаёт.</p>
-    <div class="actions"><button type="button" class="md-button" id="applyCore" onclick="applyCore()">Применить</button></div>
-  </div>
-</section>
 
-<section class="card" id="warpSection">
-  <div class="section-head" onclick="toggleCard('warpSection')"><div class="section-icon">⚡</div><div class="section-head-text"><h2 class="section-title">Точечный обход</h2><p class="section-desc">Туннель для выбранных приложений (мессенджеры, AI, браузеры, игры).</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
-  <div class="card-body">
-    <div class="cap-summary" style="margin-bottom:14px">
-      <span class="pill" id="warpStatusPill">Статус: Отключен</span>
-      <span class="pill info" id="warpIfacePill">Интерфейс: awg99</span>
-      <span class="pill info" id="warpSipPill">Маскировка: BASIC</span>
-      <span class="pill info" id="warpProfilePill">Профиль: J —</span>
-      <span class="pill" id="warpHandshakePill">Рукопожатие: —</span>
-      <span class="pill" id="warpTrafficPill">Трафик: ↓ 0 B · ↑ 0 B</span>
-    </div>
-    <div class="grid">
-      <label class="field" style="grid-column:1/-1"><span>Состояние обхода</span><select class="control" id="enableWarp" onchange="syncWarpControls()"><option value="0">Отключен (0)</option><option value="1">Включен (1) — Точечный туннель</option></select></label>
-    </div>
-    <details class="expert" id="expertWarp" style="margin-top:10px">
-      <summary>⚙ Дополнительные параметры маскировки</summary>
-      <div class="grid" style="margin-top:12px">
-        <label class="field"><span>Серверный адрес (IP или домен)</span><input class="control" id="warpEndpoint" placeholder="162.159.192.1"></label>
-        <label class="field"><span>Порт</span><input class="control" id="warpPort" type="number" placeholder="500"></label>
-        <label class="field"><span>Подбор маскировки</span><select class="control" id="warpAdaptive" onchange="syncWarpControls()"><option value="1">AUTO — менять J / порт / SIP при сбое</option><option value="0">Ручной — не менять мои значения</option></select></label>
-        <label class="field"><span>SIP I1/I2 в ручном режиме</span><select class="control" id="warpSipForce"><option value="0">Выключен — BASIC</option><option value="1">Включен — I1/I2</option></select></label>
-        <label class="field"><span>Пакеты шума (Jc)</span><input class="control" id="warpJc" type="number" min="1" max="128" placeholder="5"></label>
-        <label class="field"><span>Мин. размер пакета (Jmin)</span><input class="control" id="warpJmin" type="number" placeholder="40"></label>
-        <label class="field"><span>Макс. размер пакета (Jmax)</span><input class="control" id="warpJmax" type="number" placeholder="70"></label>
-        <label class="field" style="grid-column:1/-1"><span>DNS туннеля</span><input class="control" id="warpDns" placeholder="Список IP через пробел (или из файла dns.list)"></label>
+<main>
+  <!-- Вкладка 1: Главная -->
+  <div class="tab-page active" id="tab-main">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+          Состояние службы
+        </span>
       </div>
-      <p class="muted">Jc/Jmin/Jmax — клиентские junk-пакеты. AUTO сначала пробует BASIC, затем SIP I1/I2 и разные J на официальных WARP-портах; сохранённый официальный порт получает приоритет. В ручном режиме endpoint/port/J используются буквально и не меняются. Большой Jmax может фрагментироваться, если превышает MTU текущей сети.</p>
-    </details>
-    <p class="hint"><strong>Точечный обход для приложений:</strong> Трафик любых выбранных вами приложений направляется через защищённый туннель без необходимости включать глобальный VPN на весь телефон. Список приложений настраивается во вкладке «Приложения» (кнопка ТУННЕЛЬ) или в <code>warp_apps.list</code>.</p>
-    <div class="actions">
-      <button type="button" class="md-button" id="saveWarpBtn" onclick="saveWarp()">Сохранить и применить</button>
-      <button type="button" class="md-button tonal" id="restartWarpBtn" onclick="restartWarp()">Перезапустить туннель</button><button type="button" class="md-button tonal" id="rekeyWarpBtn" onclick="rekeyWarp()">Сгенерировать новый ключ</button>
-      <button type="button" class="md-button outlined" id="refreshWarpBtn" onclick="manualRefreshWarp()">Обновить статус</button>
+      <div class="m3-card-body pt-0">
+        <div class="m3-status-hero">
+          <div class="m3-status-icon-box loading" id="status-box">
+            <span id="status-icon-holder">
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>
+            </span>
+          </div>
+          <div class="m3-status-texts">
+            <div class="m3-status-headline" id="status-title">Проверка службы…</div>
+            <div class="m3-status-subhead" id="status-details">—</div>
+          </div>
+        </div>
+
+        <div class="m3-summary-grid">
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Стратегия</span>
+            <span class="m3-summary-val" id="summary-strategy">—</span>
+          </div>
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Здоровье</span>
+            <span class="m3-summary-val" id="summary-health">—</span>
+          </div>
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Сеть</span>
+            <span class="m3-summary-val" id="summary-net">—</span>
+          </div>
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Раздача</span>
+            <span class="m3-summary-val" id="summary-hotspot">—</span>
+          </div>
+        </div>
+
+        <div class="m3-btn-group" style="margin-top: 14px;">
+          <button class="m3-btn m3-btn-filled" id="btn-restart" onclick="runRestart()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            Перезапуск
+          </button>
+          <button class="m3-btn m3-btn-tonal" id="btn-run-auto" onclick="runAuto()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>
+            Подобрать SMART
+          </button>
+          <button class="m3-btn m3-btn-outlined" id="btn-clear-auto" onclick="clearAuto()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M15 16h4v2h-4zm0-8h7v2h-7zm0 4h6v2h-6zM3 18c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2V8H3v10zM14 5h-3l-1-1H6L5 5H2v2h12z"/></svg>
+            Сброс кэша
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Баннер сообщества eCubz -->
+    <div class="m3-banner">
+      <div>
+        <div class="m3-banner-title">Канал модулей eCubz</div>
+        <div class="m3-banner-sub">Свежие релизы, root-модули и обновления</div>
+      </div>
+      <button class="m3-btn m3-btn-filled m3-btn-sm" onclick="openChannel()">
+        <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+        Открыть
+      </button>
+    </div>
+
+    <!-- Донаты eCubz -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          Поддержать автора eCubz
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Ваша поддержка мотивирует развивать модуль и выпускать регулярные обновления!
+        </p>
+        <div class="m3-donate-list">
+          <div class="m3-donate-card" onclick="copyText('410011494875904', 'Номер ЮMoney скопирован!')">
+            <div class="m3-donate-info">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="m3-donate-name">Ю.Money (Яндекс)</span>
+                <span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; background: rgba(255, 180, 0, 0.15); color: #ffb400; padding: 2px 6px; border-radius: 999px;">
+                  <svg class="g-icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                  Предпочтительно
+                </span>
+              </div>
+              <span class="m3-donate-val">4100 1149 4875 904</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://yoomoney.ru/to/410011494875904')">
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg>
+              Перевод
+            </button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('+79236188993', 'Номер СБП скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">СБП (Россия) / Т-Банк</span>
+              <span class="m3-donate-val">+7 923 618-89-93</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131')">
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg>
+              Перевод
+            </button>
+          </div>
+
+          <div class="m3-donate-card" onclick="openUrl('http://t.me/send?start=IVjCT8LiszJ2')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">Crypto Bot (Telegram)</span>
+              <span class="m3-donate-val">USDT / TON / GRAM</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm">
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              Открыть
+            </button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4', 'Адрес TON кошелька скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">TON Wallet</span>
+              <span class="m3-donate-val">UQCLyovMu5882XPekfUq...MqEC4</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm">
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+              Копировать
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
-</section>
 
-<section class="card" id="hotspotSection">
-  <div class="section-head" onclick="toggleCard('hotspotSection')"><div class="section-icon">☵</div><div class="section-head-text"><h2 class="section-title">Раздача интернета</h2><p class="section-desc">Обход блокировок и VPN для подключённых по Wi-Fi и USB устройств.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
-  <div class="card-body">
-    <div class="grid">
-      <label class="field"><span>Обрабатывать клиентов</span><select class="control" id="hotspot" onchange="syncDependentControls()"><option value="1">Да</option><option value="0">Нет</option></select></label>
-      <label class="field"><span>Направлять через VPN</span><select class="control" id="vpnHotspot" onchange="syncDependentControls()"><option value="1">Да</option><option value="0">Нет</option></select></label>
-      <label class="field"><span>VPN-интерфейс</span><input class="control" id="tun" maxlength="32" placeholder="AUTO или tun0"></label>
-      <label class="field"><span>Если VPN недоступен</span><select class="control" id="vpnFallback"><option value="ANTIDPI">AntiDPI · продолжить через Zapret2</option><option value="BLOCK">Блокировать интернет клиентов</option></select></label>
-      <label class="field"><span>Отключать QUIC клиентов</span><select class="control" id="hotspotQuic"><option value="1">Да · использовать TCP</option><option value="0">Нет</option></select></label>
-      <label class="field"><span>Перенаправлять DNS</span><select class="control" id="dnsForward" onchange="syncDependentControls()"><option value="1">Да</option><option value="0">Нет</option></select></label>
-      <label class="field"><span>DNS-пул · UDP/TCP 53</span><input class="control" id="dnsServers" placeholder="1.1.1.1 8.8.8.8"></label>
-    </div>
-    <div class="cap-summary" style="margin-top:14px"><span class="pill info" id="roleDown">Подключение: Wi-Fi / USB</span><span class="pill info" id="roleVpn">VPN: Не используется</span><span class="pill" id="roleMode">Раздача: Ожидание устройств</span><span class="pill" id="roleWatch">Защита от утечек: Активна ✓</span></div>
-    <p class="hint"><strong>AUTO для VPN — рекомендуемый вариант.</strong> Пока VPN активен, защита от утечки блокирует выход клиентов в обход VPN. Если VPN исчезнет, AntiDPI по умолчанию вернёт обычный upstream. DNS forcing перехватывает UDP/TCP 53, но не DoH/DoT.</p>
-    <div class="actions"><button type="button" class="md-button" id="applyHotspot" onclick="applyHotspot()">Применить настройки раздачи</button></div>
-  </div>
-</section>
-
-<section class="card" id="strategySection">
-  <div class="section-head" onclick="toggleCard('strategySection')"><div class="section-icon">✦</div><div class="section-head-text"><h2 class="section-title">SMART AntiDPI</h2><p class="section-desc">Один автоматический режим: модуль сам выбирает движок и сервисный профиль.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
-  <div class="card-body">
-    <div class="service-profiles"><span class="pill ok" id="compatBadge">Совместимость: 100% ✓</span><span class="pill info" id="smartYoutubeProfile">YouTube: Автоподбор</span><span class="pill" id="smartGeneralProfile">Сайты: General</span><span class="pill ok" id="smartAutoProfile">AUTO · Активен</span></div>
-    <div class="grid" style="margin-top:14px">
-      <label class="field"><span>Режим</span><select class="control" id="smartMode" onchange="syncSmartControls()"><option value="SMART">SMART · автоматически</option><option value="CUSTOM">CUSTOM · экспертный</option></select></label>
-    </div>
-    <p class="hint"><strong>SMART_NATIVE</strong> и <strong>SMART_ACTIVE</strong> автоматически тестируют и подбирают профили под вашего оператора связи. При смене Wi-Fi на сотовую сеть переподбор происходит мгновенно в фоне.</p>
-    <p class="hint" id="smartStrategyOrder">Порядок AUTO: загрузка…</p>
-    <details class="expert" id="expertStrategy"><summary>Экспертная настройка CUSTOM</summary><label class="field"><span>Пользовательские аргументы nfqws2</span><textarea class="control" id="strategyCustom" rows="5" placeholder="--filter-tcp=80,443 …"></textarea></label><p class="muted">CUSTOM отключает встроенное SMART-профилирование. Используйте только если хотите полностью управлять стратегией вручную.</p></details>
-    <div class="actions"><button type="button" class="md-button tertiary" id="saveSmart" onclick="saveSmart()">Сохранить SMART</button><button type="button" class="md-button tonal" id="runAuto" onclick="runAuto()">Подобрать сейчас</button><button type="button" class="md-button outlined" id="clearAuto" onclick="clearAuto()">Сбросить кэш AUTO</button></div>
-  </div>
-</section>
-
-<section class="card" id="listsSection">
-  <div class="section-head" onclick="toggleCard('listsSection')"><div class="section-icon">▤</div><div class="section-title">Списки доменов и подсетей</div><div class="section-chevron">▾</div></div>
-  <div class="card-body">
-    <div class="app-summary">
-      <span class="pill info" id="listMode">Режим: —</span>
-      <span class="pill" id="listUser">Свои домены: —</span>
-      <span class="pill" id="listLearned">Выучено: —</span>
-      <span class="pill" id="listNets">Подсети: —</span>
-    </div>
-
-    <label class="field">
-      <span>Режим выбора доменов</span>
-      <select class="control" id="hostlistMode" onchange="applyHostlistMode()">
-        <option value="AUTO">AUTO — свои домены плюс выученные автоматически</option>
-        <option value="LIST">LIST — только свои домены, без обучения</option>
-        <option value="ALL">ALL — все домены, кроме исключений</option>
-      </select>
-    </label>
-    <p class="hint">В режиме AUTO модуль сам замечает недоступный домен и добавляет его в свой список: три неудачи за минуту — и домен под обходом. Вести список вручную не обязательно.</p>
-
-    <div class="app-filter-chips">
-      <button type="button" class="filter-chip active" data-list="domains" onclick="selectList('domains')">Домены под обходом</button>
-      <button type="button" class="filter-chip" data-list="exclude-domains" onclick="selectList('exclude-domains')">Домены-исключения</button>
-      <button type="button" class="filter-chip" data-list="ipset" onclick="selectList('ipset')">Подсети под обходом</button>
-      <button type="button" class="filter-chip" data-list="ipset-exclude" onclick="selectList('ipset-exclude')">Подсети-исключения</button>
-      <button type="button" class="filter-chip" data-list="warp-domains" onclick="selectList('warp-domains')">Домены в туннель</button>
-      <button type="button" class="filter-chip" data-list="warp-nets" onclick="selectList('warp-nets')">Подсети в туннель</button>
-    </div>
-    <p class="hint" id="listHint">Одна запись на строку. Поддомены подхватываются сами: строка «youtube.com» покрывает и «www.youtube.com».</p>
-    <textarea class="control logbox" id="listEditor" rows="12" spellcheck="false" placeholder="Загрузка…"></textarea>
-    <div class="actions">
-      <button type="button" class="md-button" id="saveList" onclick="saveCurrentList()">Сохранить список</button>
-      <button type="button" class="md-button tonal" onclick="loadCurrentList()">Отменить правки</button>
-    </div>
-
-    <div class="app-summary" style="margin-top:14px">
-      <span class="pill" id="learnedCount">Выученные домены: —</span>
-    </div>
-    <p class="hint">Список, который модуль составил сам. Если провайдер снял блокировку, его можно очистить — он наполнится заново по факту.</p>
-    <div class="actions">
-      <button type="button" class="md-button tonal" onclick="showLearned()">Показать выученные</button>
-      <button type="button" class="md-button tonal" onclick="clearLearned()">Очистить обучение</button>
-    </div>
-    <textarea class="control logbox" id="learnedBox" rows="6" readonly placeholder="Нажмите «Показать выученные»"></textarea>
-  </div>
-</section>
-
-<section class="card" id="diagSection">
-  <div class="section-head" onclick="toggleCard('diagSection')"><div class="section-icon">⌁</div><div class="section-head-text"><h2 class="section-title">Диагностика и отчёты</h2><p class="section-desc" id="diagInfo">Проверка работы служб и сбор журналов для поддержки.</p></div><span class="collapse-chevron" aria-hidden="true">▾</span></div>
-  <div class="card-body">
-    <div class="grid"><label class="field"><span>Подробный журнал отладки (Debug)</span><select class="control" id="nfqwsDebug"><option value="0">Выключен — обычный режим</option><option value="1">Включён — подробный лог</option></select></label></div>
-    <p class="hint">Обычный журнал содержит общую информацию о состоянии сети. Подробный Debug записывает технические сетевые заголовки — включайте его только при необходимости.</p>
-    <div class="actions"><button type="button" class="md-button tonal" id="applyDebug" onclick="applyNfqwsDebug()">Применить режим</button><button type="button" class="md-button" id="collectDiag" onclick="collectDiagnostics()">Собрать отчёт для поддержки</button><button type="button" class="md-button tonal" id="exportLogs" onclick="exportLogs()">Экспорт логов</button><button type="button" class="md-button outlined" id="showLog" onclick="showServiceLog()">Журнал работы</button><button type="button" class="md-button outlined" id="showNfqwsLog" onclick="showNfqwsLog()">Журнал обхода</button></div>
-    <textarea class="control logbox" id="diagLog" rows="12" readonly placeholder="Здесь появится журнал работы или диагностический отчёт"></textarea>
-  </div>
-</section>
-
-<section class="card" id="faqSection">
-  <div class="section-head" onclick="toggleCard('faqSection')">
-    <div class="section-icon">?</div>
-    <div class="section-head-text">
-      <h2 class="section-title">База знаний и FAQ</h2>
-      <p class="section-desc">Подробное руководство по всем настройкам, режимам и решению проблем.</p>
-    </div>
-    <span class="collapse-chevron" aria-hidden="true">▾</span>
-  </div>
-  <div class="card-body">
-    <div class="searchbar faq-search">
-      <input class="control" id="faqSearch" placeholder="Поиск по справке и вопросам…" oninput="filterFaq()">
-    </div>
-    <div class="faq-list" id="faqList">
-      
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">Основы</span>Как работает модуль Zapret2 eCubz?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <p>Zapret2 — это полностью <strong>systemless root-модуль</strong> для обхода DPI-блокировок и замедлений (ТСПУ) провайдеров в РФ.</p>
-          <p>В отличие от обычных VPN, модуль работает локально прямо на вашем телефоне:</p>
-          <ul>
-            <li><strong>Демон <code>nfqws2</code></strong> перехватывает исходящие TCP/TLS запросы и незаметно десинхронизирует их (мульти-сплит ClientHello, фальшивые заголовки, fakesni). Цензурные фильтры провайдера не могут распознать заблокированный ресурс и пропускают трафик.</li>
-            <li><strong>Точечный туннель AmneziaWG v3 (Cloudflare WARP)</strong> поднимается на интерфейсе <code>awg99</code> для любых выбранных вами приложений (мессенджеры, Discord, AI-сервисы, браузеры, игры), где требуется обход жестких IP-блокировок.</li>
-            <li>Весь остальной трафик (игры, банки, видео, загрузки) идёт на максимальной скорости вашего провайдера без задержек и расхода VPN-трафика.</li>
-          </ul>
+  <!-- Вкладка 2: AntiDPI и раздача -->
+  <div class="tab-page" id="tab-antidpi">
+    <!-- Параметры обхода и QUIC -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>
+          Параметры AntiDPI и QUIC
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-text-field">
+          <label class="m3-label">QUIC (HTTP/3)</label>
+          <select class="m3-select" id="quic">
+            <option value="on">Блокировать (принудительно переводить в TCP/TLS)</option>
+            <option value="off">Не блокировать (разрешить прямой UDP/443)</option>
+          </select>
+          <span class="m3-helper">Имя сайта внутри QUIC зашифровано. Блокировка переводит браузеры и плееры в TCP, где работает nfqws2.</span>
         </div>
-      </details>
-
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">Пресеты</span>В чём разница между пресетами SELECTED, SAFE, ALL и CUSTOM?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <ul>
-            <li><strong>SELECTED (Рекомендуемый):</strong> AntiDPI обрабатывает только установленные приложения из встроенного доверенного каталога (YouTube, браузеры, соцсети, плееры). Банковские приложения, Госуслуги и системные сервисы не затрагиваются и идут напрямую.</li>
-            <li><strong>SAFE (Широкий):</strong> Обрабатывается весь трафик телефона, кроме приложений, добавленных в список <code>exclude.list</code>.</li>
-            <li><strong>ALL (Глобальный):</strong> Глобальная обработка 100% сетевого трафика устройства.</li>
-            <li><strong>CUSTOM:</strong> Ручной выбор режима (INCLUDE / EXCLUDE / GLOBAL) и тонкое управление QUIC/TCP.</li>
-          </ul>
+        <div class="m3-btn-group" style="justify-content: flex-end;">
+          <button class="m3-btn m3-btn-filled" id="applyCore" onclick="applyCore()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Применить
+          </button>
         </div>
-      </details>
+      </div>
+    </div>
 
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">AntiDPI</span>Что такое SMART AntiDPI и авто-подбор стратегий?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <p>Каждый оператор связи (МТС, МегаФон, Билайн, Tele2, Ростелеком, Дом.ru) настраивает ТСПУ по-своему. Универсальной стратегии не существует.</p>
-          <p><strong>Движок SMART</strong> решает эту проблему:</p>
-          <ul>
-            <li>При переключении между Wi-Fi и мобильной сетью фоновый зонд мгновенно тестирует готовые профили десинхронизации (<code>strategy_1</code>, <code>strategy_2</code> и т.д.) по контрольным узлам.</li>
-            <li>Если сеть не имеет блокировок (например, домашний зарубежный Wi-Fi), активируется режим <code>DIRECT</code> (модуль не тратит ресурсы батареи и процессора).</li>
-            <li>Для сетей с блокировками автоматически выбирается и кэшируется профиль, дающий 100% доступ к YouTube (включая 4K 60fps) и заблокированным сайтам.</li>
-          </ul>
+    <!-- SMART AntiDPI -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+          SMART AntiDPI и стратегии
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-pills-row">
+          <span class="m3-pill ok" id="compatBadge">Совместимость: 100%</span>
+          <span class="m3-pill info" id="smartYoutubeProfile">YouTube: Автоподбор</span>
+          <span class="m3-pill info" id="smartGeneralProfile">Сайты: General</span>
+          <span class="m3-pill ok" id="smartAutoProfile">AUTO: Активен</span>
         </div>
-      </details>
 
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">Туннель</span>Как устроен точечный туннель для любых приложений?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <p>Туннель работает через виртуальный сетевой интерфейс <code>awg99</code>.</p>
-          <ul>
-            <li><strong>Точечная маршрутизация:</strong> В туннель направляются любые выбранные приложения из списка <code>warp_apps.list</code> (Telegram, Discord, AI-клиенты ChatGPT/Claude, браузеры, игры, любые программы, отмеченные кнопкой ТУННЕЛЬ), а также подсети серверов Telegram (CDN, голос, медиа).</li>
-            <li><strong>Маскировка:</strong> Для устойчивости к блокировкам перед соединением отправляются специальные мусорные пакеты (<code>Jc=5</code>, <code>Jmin=40</code>, <code>Jmax=70</code>).</li>
-            <li><strong>Адаптивная маскировка:</strong> Сначала модуль пробует BASIC без I1/I2: меняет официальные WARP-порты и несколько Jc/Jmin/Jmax-профилей. SIP I1/I2 включается только после полного провала BASIC, после чего перебор J-профилей продолжается уже с SIP.</li>
-          </ul>
+        <div class="m3-text-field">
+          <label class="m3-label">Режим работы движка</label>
+          <select class="m3-select" id="smartMode" onchange="syncSmartControls()">
+            <option value="SMART">SMART — автоматический подбор под оператора</option>
+            <option value="CUSTOM">CUSTOM — экспертный ручной режим</option>
+          </select>
         </div>
-      </details>
 
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">QUIC</span>Почему YouTube и видео работают так быстро?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <p>Протокол <strong>QUIC (HTTP/3)</strong> работает поверх UDP. Большинство мобильных и проводных операторов в РФ выборочно глушат или замедляют UDP-трафик к серверам Google и YouTube.</p>
-          <p>Модуль Zapret2 автоматически оптимизирует сетевой стек, принуждая приложения (браузеры, официальный клиент YouTube, ReVanced) работать через надёжный <strong>TCP/TLS</strong>, где алгоритмы <code>nfqws2</code> обеспечивают стабильное воспроизведение 4K 60fps без зависаний.</p>
+        <div class="m3-hint-box" id="smartStrategyOrder">Порядок AUTO: загрузка…</div>
+
+        <details class="m3-details" id="expertStrategy">
+          <summary>
+            <span>Экспертная настройка CUSTOM</span>
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+          </summary>
+          <div class="m3-details-content">
+            <div class="m3-text-field">
+              <label class="m3-label">Пользовательские аргументы nfqws2</label>
+              <textarea class="m3-textarea" id="strategyCustom" placeholder="--filter-tcp=80,443 …"></textarea>
+              <span class="m3-helper">CUSTOM отключает встроенное SMART-профилирование.</span>
+            </div>
+          </div>
+        </details>
+
+        <div class="m3-btn-group" style="margin-top: 14px;">
+          <button class="m3-btn m3-btn-filled" id="saveSmart" onclick="saveSmart()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Сохранить SMART
+          </button>
+          <button class="m3-btn m3-btn-tonal" id="runAutoBtn" onclick="runAuto()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>
+            Подобрать сейчас
+          </button>
+          <button class="m3-btn m3-btn-outlined" id="clearAutoBtn" onclick="clearAuto()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M15 16h4v2h-4zm0-8h7v2h-7zm0 4h6v2h-6zM3 18c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2V8H3v10zM14 5h-3l-1-1H6L5 5H2v2h12z"/></svg>
+            Сбросить кэш
+          </button>
         </div>
-      </details>
+      </div>
+    </div>
 
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">Раздача</span>Как работает раздача интернета (Hotspot / USB)?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <p>Секция <strong>«Раздача интернета»</strong> позволяет раздавать защищённый интернет на ноутбук, ПК, консоль или Smart TV:</p>
-          <ul>
-            <li><strong>Обрабатывать клиентов = Да:</strong> Автоматически применяет AntiDPI ко всем подключённым к точке доступа устройствам.</li>
-            <li><strong>Направлять через VPN = Да:</strong> Если на телефоне поднят VPN, трафик клиентов точки доступа безопасно маршрутизируется через этот VPN без утечек.</li>
-            <li><strong>Перенаправлять DNS = Да:</strong> Принудительно заворачивает DNS-запросы клиентов на защищённые серверы (1.1.1.1, 8.8.8.8), исключая подмену DNS провайдером.</li>
-          </ul>
+    <!-- Раздача интернета -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4C7.31 4 3.07 5.9 0 8.98L12 21 24 8.98C20.93 5.9 16.69 4 12 4zm0 3.5c3.5 0 6.69 1.4 9.02 3.68L12 19.33 2.98 11.18C5.31 8.9 8.5 7.5 12 7.5z"/></svg>
+          Раздача интернета (Hotspot &amp; USB)
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-pills-row">
+          <span class="m3-pill info" id="roleDown">Подключение: Wi-Fi / USB</span>
+          <span class="m3-pill info" id="roleVpn">VPN: Не используется</span>
+          <span class="m3-pill" id="roleMode">Раздача: Ожидание</span>
+          <span class="m3-pill ok" id="roleWatch">Защита от утечек: Активна</span>
         </div>
-      </details>
 
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">Списки</span>Как управлять списками приложений и исключениями?</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <ul>
-            <li><strong>ВРУЧНУЮ (apps.list):</strong> Принудительно включает выбранное приложение в обработку AntiDPI.</li>
-            <li><strong>ТУННЕЛЬ (warp_apps.list):</strong> Направляет трафик приложения в точечный туннель.</li>
-            <li><strong>ИСКЛЮЧИТЬ (exclude.list):</strong> Высший приоритет. Приложение гарантированно пойдёт 100% напрямую мимо всех правил AntiDPI и туннелей (используйте для банков, Госуслуг, онлайн-касс).</li>
-            <li><strong>AUTO (Встроенный каталог):</strong> Автоматически подхватывает популярные заблокированные сервисы при их установке.</li>
-          </ul>
+        <div class="m3-form-grid">
+          <div class="m3-text-field">
+            <label class="m3-label">Обрабатывать клиентов</label>
+            <select class="m3-select" id="hotspot" onchange="syncDependentControls()">
+              <option value="1">Да (включено)</option>
+              <option value="0">Нет (выключено)</option>
+            </select>
+          </div>
+          <div class="m3-text-field">
+            <label class="m3-label">Направлять через VPN</label>
+            <select class="m3-select" id="vpnHotspot" onchange="syncDependentControls()">
+              <option value="1">Да (маршрутизировать)</option>
+              <option value="0">Нет</option>
+            </select>
+          </div>
         </div>
-      </details>
 
-      <details class="faq-item">
-        <summary class="faq-title"><span><span class="faq-tag">Помощь</span>Решение частых проблем</span><span class="faq-chevron">▼</span></summary>
-        <div class="faq-body">
-          <ul>
-            <li><strong>Не подключается Telegram/Exteragram:</strong> Откройте секцию «Точечный обход». Убедитесь, что статус — «Работает», а в списке приложений нажата кнопка «ТУННЕЛЬ». Если соединение застряло, нажмите «Сгенерировать новый ключ» или переключите «SIP DPI».</li>
-            <li><strong>YouTube не воспроизводит 1080p/4K:</strong> Убедитесь, что переключатель <code>QUIC → TCP</code> включен. В секции «SMART AntiDPI» нажмите «Подобрать сейчас».</li>
-            <li><strong>Не работает приложение банка / Госуслуг:</strong> Во вкладке «Приложения» найдите банк и нажмите «ИСКЛЮЧИТЬ».</li>
-            <li><strong>Как открыть WebUI:</strong> обычный способ — страница модуля в KernelSU / APatch / MMRL, там ничего включать не нужно. Доступ через браузер — это отдельная опция <code>ENABLE_HTTP_API="1"</code> в <code>zapret2.conf</code>; после её включения и перезапуска адрес <code>http://127.0.0.1:8080/</code> открывается <em>на самом телефоне</em>. Сервер намеренно слушает только loopback и снаружи, с другого устройства в сети, недоступен.</li>
-            <li><strong>Отправка логов для поддержки:</strong> Во вкладке «Диагностика» нажмите «Экспорт логов» — журналы будут скопированы в <code>/sdcard/eCubz/</code>. Автоматически при загрузке логи туда больше не копируются: <code>/sdcard</code> читает любое приложение с доступом к хранилищу, а в журналах есть имя Wi-Fi сети, оператор и список установленных приложений.</li>
-          </ul>
+        <div class="m3-form-grid">
+          <div class="m3-text-field">
+            <label class="m3-label">VPN-интерфейс</label>
+            <input type="text" class="m3-input" id="tun" maxlength="32" placeholder="AUTO или tun0">
+          </div>
+          <div class="m3-text-field">
+            <label class="m3-label">Если VPN недоступен</label>
+            <select class="m3-select" id="vpnFallback">
+              <option value="ANTIDPI">AntiDPI · продолжить через Zapret2</option>
+              <option value="BLOCK">Блокировать интернет клиентов</option>
+            </select>
+          </div>
         </div>
-      </details>
 
+        <div class="m3-form-grid">
+          <div class="m3-text-field">
+            <label class="m3-label">Отключать QUIC клиентов</label>
+            <select class="m3-select" id="hotspotQuic">
+              <option value="1">Да · использовать TCP</option>
+              <option value="0">Нет</option>
+            </select>
+          </div>
+          <div class="m3-text-field">
+            <label class="m3-label">Перенаправлять DNS</label>
+            <select class="m3-select" id="dnsForward" onchange="syncDependentControls()">
+              <option value="1">Да (форсировать DNS)</option>
+              <option value="0">Нет</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="m3-text-field">
+          <label class="m3-label">DNS-пул (UDP/TCP 53)</label>
+          <input type="text" class="m3-input" id="dnsServers" placeholder="1.1.1.1 8.8.8.8">
+          <span class="m3-helper">Защищенные DNS серверы для клиентов через пробел.</span>
+        </div>
+
+        <div class="m3-btn-group" style="justify-content: flex-end; margin-top: 10px;">
+          <button class="m3-btn m3-btn-filled" id="applyHotspot" onclick="applyHotspot()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Применить раздачу
+          </button>
+        </div>
+      </div>
     </div>
   </div>
-</section>
+
+  <!-- Вкладка 3: Точечный туннель -->
+  <div class="tab-page" id="tab-warp">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+          Точечный туннель AmneziaWG
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-pills-row">
+          <span class="m3-pill" id="warpStatusPill">Статус: Отключен</span>
+          <span class="m3-pill info" id="warpIfacePill">Интерфейс: awg99</span>
+          <span class="m3-pill info" id="warpSipPill">Маскировка: BASIC</span>
+          <span class="m3-pill info" id="warpProfilePill">Профиль: J —</span>
+          <span class="m3-pill" id="warpHandshakePill">Рукопожатие: —</span>
+          <span class="m3-pill" id="warpTrafficPill">Трафик: ↓ 0 B · ↑ 0 B</span>
+        </div>
+
+        <div class="m3-text-field">
+          <label class="m3-label">Состояние туннеля</label>
+          <select class="m3-select" id="enableWarp" onchange="syncWarpControls()">
+            <option value="0">Отключен (0)</option>
+            <option value="1">Включен (1) — Точечный туннель</option>
+          </select>
+        </div>
+
+        <details class="m3-details" id="expertWarp" open>
+          <summary>
+            <span>Параметры маскировки и адаптивного подбора</span>
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+          </summary>
+          <div class="m3-details-content">
+            <div class="m3-form-grid">
+              <div class="m3-text-field">
+                <label class="m3-label">Серверный адрес (Endpoint)</label>
+                <input type="text" class="m3-input" id="warpEndpoint" placeholder="162.159.192.1">
+              </div>
+              <div class="m3-text-field">
+                <label class="m3-label">Порт</label>
+                <input type="number" class="m3-input" id="warpPort" placeholder="500">
+              </div>
+            </div>
+
+            <div class="m3-form-grid">
+              <div class="m3-text-field">
+                <label class="m3-label">Подбор маскировки</label>
+                <select class="m3-select" id="warpAdaptive" onchange="syncWarpControls()">
+                  <option value="1">AUTO — подбирать J/порт/SIP при сбое</option>
+                  <option value="0">Ручной — фиксированные параметры</option>
+                </select>
+              </div>
+              <div class="m3-text-field">
+                <label class="m3-label">SIP I1/I2 в ручном режиме</label>
+                <select class="m3-select" id="warpSipForce">
+                  <option value="0">Выключен — BASIC</option>
+                  <option value="1">Включен — SIP I1/I2</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="m3-form-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+              <div class="m3-text-field">
+                <label class="m3-label">Пакеты шума (Jc)</label>
+                <input type="number" class="m3-input" id="warpJc" min="1" max="128" placeholder="5">
+              </div>
+              <div class="m3-text-field">
+                <label class="m3-label">Мин. размер (Jmin)</label>
+                <input type="number" class="m3-input" id="warpJmin" placeholder="40">
+              </div>
+              <div class="m3-text-field">
+                <label class="m3-label">Макс. размер (Jmax)</label>
+                <input type="number" class="m3-input" id="warpJmax" placeholder="70">
+              </div>
+            </div>
+
+            <div class="m3-text-field">
+              <label class="m3-label">DNS туннеля</label>
+              <input type="text" class="m3-input" id="warpDns" placeholder="1.1.1.1 1.0.0.1">
+              <span class="m3-helper">Используется для DNS-резолва внутри туннеля WARP.</span>
+            </div>
+          </div>
+        </details>
+
+        <div class="m3-hint-box">
+          <strong>Точечная маршрутизация:</strong> Трафик заблокированных доменов и подсетей направляется через защищенный туннель без необходимости включать глобальный VPN. Списки настраиваются во вкладке «Списки».
+        </div>
+
+        <div class="m3-btn-group" style="margin-top: 14px;">
+          <button class="m3-btn m3-btn-filled" id="saveWarpBtn" onclick="saveWarp()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Сохранить и применить
+          </button>
+          <button class="m3-btn m3-btn-tonal" id="restartWarpBtn" onclick="restartWarp()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            Перезапуск
+          </button>
+          <button class="m3-btn m3-btn-tonal" id="rekeyWarpBtn" onclick="rekeyWarp()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></svg>
+            Новый ключ
+          </button>
+          <button class="m3-btn m3-btn-outlined" id="refreshWarpBtn" onclick="manualRefreshWarp()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            Обновить статус
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 4: Списки -->
+  <div class="tab-page" id="tab-lists">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2zm-4 8H7v-2h6v2z"/></svg>
+          Списки доменов и подсетей
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-pills-row">
+          <span class="m3-pill info" id="listMode">Режим: AUTO</span>
+          <span class="m3-pill" id="listUser">Свои: 0</span>
+          <span class="m3-pill" id="listLearned">Выучено: 0</span>
+          <span class="m3-pill" id="listNets">Подсети: 0</span>
+        </div>
+
+        <div class="m3-text-field">
+          <label class="m3-label">Режим выбора доменов</label>
+          <select class="m3-select" id="hostlistMode" onchange="applyHostlistMode()">
+            <option value="AUTO">AUTO — свои домены + автоматическое обучение</option>
+            <option value="LIST">LIST — строго свои домены (без обучения)</option>
+            <option value="ALL">ALL — все домены (кроме исключений)</option>
+          </select>
+        </div>
+
+        <div class="m3-text-field" style="margin-top: 10px;">
+          <label class="m3-label">Категория списка</label>
+          <div class="m3-chips-row">
+            <button class="m3-chip active" data-list="domains" onclick="selectList('domains')">Домены обхода</button>
+            <button class="m3-chip" data-list="exclude-domains" onclick="selectList('exclude-domains')">Исключения</button>
+            <button class="m3-chip" data-list="ipset" onclick="selectList('ipset')">Подсети обхода</button>
+            <button class="m3-chip" data-list="ipset-exclude" onclick="selectList('ipset-exclude')">Искл. подсетей</button>
+            <button class="m3-chip" data-list="warp-domains" onclick="selectList('warp-domains')">Домены в туннель</button>
+            <button class="m3-chip" data-list="warp-nets" onclick="selectList('warp-nets')">Подсети в туннель</button>
+          </div>
+        </div>
+
+        <div class="m3-hint-box" id="listHint">Одна запись на строку. Поддомены подхватываются сами: строка «youtube.com» покрывает и «www.youtube.com».</div>
+
+        <textarea class="m3-textarea" id="listEditor" spellcheck="false" placeholder="Загрузка списка…"></textarea>
+
+        <div class="m3-btn-group" style="justify-content: flex-end; margin-top: 10px;">
+          <button class="m3-btn m3-btn-outlined" onclick="loadCurrentList()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            Отменить
+          </button>
+          <button class="m3-btn m3-btn-filled" id="saveList" onclick="saveCurrentList()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Сохранить список
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Выученные домены -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zM5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z"/></svg>
+          Выученные домены (AUTO-learning)
+        </span>
+        <span class="m3-pill info" id="learnedCount">Выучено: 0</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Список доменов, которые модуль определил как заблокированные и автоматически добавил под обход.
+        </p>
+        <textarea class="m3-textarea" id="learnedBox" style="min-height: 100px;" readonly placeholder="Нажмите «Показать выученные»…"></textarea>
+        <div class="m3-btn-group" style="margin-top: 10px;">
+          <button class="m3-btn m3-btn-tonal" onclick="showLearned()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+            Показать выученные
+          </button>
+          <button class="m3-btn m3-btn-outlined" onclick="clearLearned()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M15 16h4v2h-4zm0-8h7v2h-7zm0 4h6v2h-6zM3 18c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2V8H3v10zM14 5h-3l-1-1H6L5 5H2v2h12z"/></svg>
+            Очистить обучение
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 5: Диагностика -->
+  <div class="tab-page" id="tab-diag">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-10 12.5l-1.41-1.41L11.17 12 8.59 9.41 10 8l4 4-4 4.5zm7-1.5h-5v-2h5v2z"/></svg>
+          Диагностика и журналы
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-text-field">
+          <label class="m3-label">Уровень подробности (Debug)</label>
+          <div style="display: flex; gap: 8px;">
+            <select class="m3-select" id="nfqwsDebug">
+              <option value="0">Выключен — стандартный журнал</option>
+              <option value="1">Включен — подробный сетевой Debug</option>
+            </select>
+            <button class="m3-btn m3-btn-tonal" id="applyDebug" onclick="applyNfqwsDebug()">
+              Применить
+            </button>
+          </div>
+          <span class="m3-helper" id="diagInfo">Сбор журналов и отчётов для поддержки.</span>
+        </div>
+
+        <div class="m3-btn-group" style="margin: 12px 0 10px 0;">
+          <button class="m3-btn m3-btn-filled m3-btn-sm" id="collectDiag" onclick="collectDiagnostics()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5c-.49 0-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
+            Отчёт для поддержки
+          </button>
+          <button class="m3-btn m3-btn-tonal m3-btn-sm" id="exportLogs" onclick="exportLogs()">
+            <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+            Экспорт в /sdcard
+          </button>
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" id="showLog" onclick="showServiceLog()">
+            Лог службы
+          </button>
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" id="showNfqwsLog" onclick="showNfqwsLog()">
+            Лог обхода
+          </button>
+        </div>
+
+        <div class="m3-log-view" id="diagLog">Нажмите кнопку выше для просмотра журнала или создания диагностического отчёта…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вкладка 6: Справка и FAQ -->
+  <div class="tab-page" id="tab-about">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          О проекте Zapret2 eCubz
+        </span>
+      </div>
+      <div class="m3-card-body pt-0" style="font-size: 13px; line-height: 1.8;">
+        <p><b>Разработчик модуля:</b> eCubz</p>
+        <p><b>Канал обновлений:</b> <a href="javascript:void(0)" onclick="openChannel()" style="color: var(--md-sys-color-primary); text-decoration: none; font-weight: 600;">t.me/module_ecubz</a></p>
+        <p><b>Чат сообщества:</b> <a href="javascript:void(0)" onclick="openChat()" style="color: var(--md-sys-color-primary); text-decoration: none; font-weight: 600;">t.me/eCubz</a></p>
+        <p><b>Движок AntiDPI:</b> nfqws2 (bol-van), AmneziaWG v3</p>
+        <p style="margin-top: 10px; font-size: 11px; color: var(--md-sys-color-on-surface-variant);">Разработано с акцентом на стабильность, энергоэффективность и открытый исходный код.</p>
+      </div>
+    </div>
+
+    <!-- Поиск и FAQ -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">
+          <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          База знаний и FAQ
+        </span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-text-field">
+          <input type="text" class="m3-input" id="faqSearch" placeholder="Поиск по справке и вопросам…" oninput="filterFaq()">
+        </div>
+
+        <div class="m3-faq-list" id="faqList">
+          <details class="m3-faq-card">
+            <summary>
+              <span>Как работает модуль Zapret2 eCubz?</span>
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+            </summary>
+            <div class="m3-faq-content">
+              <p>Zapret2 — это полностью systemless root-модуль для обхода DPI-блокировок и замедлений (ТСПУ) провайдеров в РФ.</p>
+              <ul>
+                <li><b>Демон nfqws2:</b> перехватывает исходящие TCP/TLS запросы и незаметно десинхронизирует их (мульти-сплит ClientHello, fakesni, фальшивые заголовки). Цензурные фильтры провайдера не могут распознать ресурс и пропускают трафик.</li>
+                <li><b>Точечный туннель AmneziaWG (Cloudflare WARP):</b> поднимается на интерфейсе <code>awg99</code> для выбранных доменов и подсетей, где требуется обход жестких IP-блокировок.</li>
+                <li>Весь остальной трафик идёт на максимальной скорости провайдера без задержек и расхода VPN.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="m3-faq-card">
+            <summary>
+              <span>Что такое SMART AntiDPI и авто-подбор?</span>
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+            </summary>
+            <div class="m3-faq-content">
+              <p>Каждый оператор связи настраивает ТСПУ по-своему, поэтому универсальной стратегии не существует.</p>
+              <p><b>Движок SMART</b> автоматически решает эту задачу:</p>
+              <ul>
+                <li>При переключении между Wi-Fi и сотовой связью фоновый зонд тестирует готовые профили десинхронизации.</li>
+                <li>Если сеть не имеет блокировок (например, домашний зарубежный Wi-Fi), активируется режим <code>DIRECT</code> для полной экономии батареи.</li>
+                <li>Для сетей с блокировками автоматически выбирается и кэшируется профиль, дающий 100% доступ к YouTube (включая 4K 60fps) и сайтам.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="m3-faq-card">
+            <summary>
+              <span>Как устроен точечный туннель WARP?</span>
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+            </summary>
+            <div class="m3-faq-content">
+              <p>Туннель работает через виртуальный интерфейс <code>awg99</code>:</p>
+              <ul>
+                <li><b>Точечная маршрутизация:</b> в туннель направляются домены из <code>warp_domains.list</code> и подсети из <code>warp_bypass_nets.list</code>.</li>
+                <li><b>Маскировка:</b> отправляются мусорные junk-пакеты (Jc, Jmin, Jmax).</li>
+                <li><b>Адаптивный подбор:</b> модуль автоматически перебирает официальные порты, J-профили и SIP I1/I2 для преодоления блокировок протокола WireGuard.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="m3-faq-card">
+            <summary>
+              <span>Почему YouTube и видео работают так быстро?</span>
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+            </summary>
+            <div class="m3-faq-content">
+              <p>Протокол <b>QUIC (HTTP/3)</b> работает поверх UDP. Операторы в РФ часто выборочно глушат или замедляют UDP-трафик к Google Video.</p>
+              <p>Модуль блокирует QUIC, принуждая приложения работать через стабильный <b>TCP/TLS</b>, где алгоритмы nfqws2 обеспечивают воспроизведение 4K без зависаний.</p>
+            </div>
+          </details>
+
+          <details class="m3-faq-card">
+            <summary>
+              <span>Как работает раздача интернета (Hotspot)?</span>
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+            </summary>
+            <div class="m3-faq-content">
+              <ul>
+                <li><b>Обрабатывать клиентов = Да:</b> автоматически применяет AntiDPI ко всем подключенным устройствам (ноутбуки, ТВ, консоли).</li>
+                <li><b>Направлять через VPN = Да:</b> безопасно заворачивает трафик раздачи в поднятый на телефоне VPN с защитой от утечек.</li>
+                <li><b>Перенаправлять DNS = Да:</b> заворачивает DNS клиентов на защищенные серверы (1.1.1.1, 8.8.8.8).</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="m3-faq-card">
+            <summary>
+              <span>Решение частых проблем</span>
+              <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+            </summary>
+            <div class="m3-faq-content">
+              <ul>
+                <li><b>Не открывается YouTube:</b> убедитесь, что QUIC заблокирован (переведен в TCP), и на вкладке AntiDPI нажмите «Подобрать сейчас».</li>
+                <li><b>Не подключается WARP:</b> на вкладке Туннеля нажмите «Сгенерировать новый ключ» или «Перезапустить туннель».</li>
+                <li><b>Не работает банк / Госуслуги:</b> добавьте домен в список «Исключения» во вкладке «Списки».</li>
+                <li><b>Как открыть WebUI в браузере:</b> включите <code>ENABLE_HTTP_API="1"</code> в <code>zapret2.conf</code> и откройте <code>http://127.0.0.1:8080/</code> на устройстве.</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+  </div>
 </main>
-<footer class="footer">Zapret2 eCubz · Material 3 Expressive WebUI · без внешних библиотек</footer>
-</div>
+
+<!-- M3 Expressive Bottom Navigation Bar -->
+<nav class="m3-nav-bar">
+  <button class="m3-nav-item active" id="nav-main" onclick="switchTabByName('main')">
+    <div class="m3-nav-indicator">
+      <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+    </div>
+    <span>Главная</span>
+  </button>
+  <button class="m3-nav-item" id="nav-antidpi" onclick="switchTabByName('antidpi')">
+    <div class="m3-nav-indicator">
+      <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>
+    </div>
+    <span>AntiDPI</span>
+  </button>
+  <button class="m3-nav-item" id="nav-warp" onclick="switchTabByName('warp')">
+    <div class="m3-nav-indicator">
+      <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+    </div>
+    <span>Туннель</span>
+  </button>
+  <button class="m3-nav-item" id="nav-lists" onclick="switchTabByName('lists')">
+    <div class="m3-nav-indicator">
+      <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2zm-4 8H7v-2h6v2z"/></svg>
+    </div>
+    <span>Списки</span>
+  </button>
+  <button class="m3-nav-item" id="nav-diag" onclick="switchTabByName('diag')">
+    <div class="m3-nav-indicator">
+      <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-10 12.5l-1.41-1.41L11.17 12 8.59 9.41 10 8l4 4-4 4.5zm7-1.5h-5v-2h5v2z"/></svg>
+    </div>
+    <span>Логи</span>
+  </button>
+  <button class="m3-nav-item" id="nav-about" onclick="switchTabByName('about')">
+    <div class="m3-nav-indicator">
+      <svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+    </div>
+    <span>Справка</span>
+  </button>
+</nav>
+
+<!-- Модальный прогресс запуска / перезапуска -->
 <div id="startupOverlay" class="startup-overlay" aria-hidden="true">
   <div class="startup-card" role="status" aria-live="polite">
-    <div class="startup-progress" id="startupProgress" style="--progress:8">
-      <svg viewBox="0 0 48 48" aria-hidden="true"><circle class="track" cx="24" cy="24" r="18" pathLength="100"></circle><circle class="indicator" cx="24" cy="24" r="18" pathLength="100"></circle></svg>
-      <span class="startup-percent" id="startupPercent">8%</span>
+    <div class="startup-progress-circle indeterminate" id="startupProgressCircle">
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <circle class="track" cx="24" cy="24" r="18"></circle>
+        <circle class="indicator" cx="24" cy="24" r="18" pathLength="100"></circle>
+      </svg>
     </div>
     <h2 class="startup-title" id="startupTitle">Запуск Zapret2</h2>
     <p class="startup-phase" id="startupPhase">Подготавливаю службу…</p>
-    <p class="startup-note">Интерфейс не завис — правила и nfqws2 запускаются в фоне.</p>
+    <p class="startup-note">Служба перезапускается в фоне.</p>
   </div>
 </div>
-<div id="notice" class="snackbar" role="status" aria-live="polite"></div>
-<button type="button" class="fab-top" id="fabTop" aria-label="Наверх" title="Наверх">↑</button>
+
+<!-- Floating Snackbar -->
+<div id="m3-snackbar">Уведомление</div>
+
 <script>
-const byId=id=>document.getElementById(id);let modDir='/data/adb/modules/zapret2-android';let noticeTimer;let startupPollTimer=0;let asyncExecSeq=0;
-let latestWarpHandshake=0;let latestWarpRunning=false;let latestWarpRx=0;let latestWarpTx=0;let liveTickerTimer=null;let livePollingTimer=null;let isPollingActive=false;let appVisibilitySyncTimer=0;let warpFormDirty=false;let warpSaveInFlight=false;
-const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
+  const byId = id => document.getElementById(id);
+  let modDir = '/data/adb/modules/zapret2-android';
+  let asyncExecSeq = 0;
+  let noticeTimer = null;
+  let startupPollTimer = 0;
+  let liveTickerTimer = null;
+  let livePollingTimer = null;
+  let isPollingActive = false;
+  let warpFormDirty = false;
+  let warpSaveInFlight = false;
+  let latestWarpRunning = false;
+  let latestWarpHandshake = 0;
+  let latestWarpRx = 0;
+  let latestWarpTx = 0;
+  let workingApiEndpoint = null;
 
-let workingApiEndpoint = null;
+  const shellQuote = value => "'" + String(value).replace(/'/g, "'\\''") + "'";
 
-function cleanCgiOutput(raw){
-  if(!raw) return '';
-  let t = String(raw).trim();
-  if(t.startsWith('Status:') || t.startsWith('HTTP/') || t.startsWith('Content-Type:')){
-    const splitIdx = t.indexOf('\r\n\r\n');
-    if(splitIdx !== -1) return t.substring(splitIdx + 4).trim();
-    const splitIdxLf = t.indexOf('\n\n');
-    if(splitIdxLf !== -1) return t.substring(splitIdxLf + 2).trim();
+  // SVG Icons constants
+  const ICON_RUNNING = '<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
+  const ICON_STOPPED = '<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>';
+  const ICON_BOLT = '<svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13.01 3h1l-1 7h3.5c.66 0 .8.55.6.87l-6.11 10.13z"/></svg>';
+
+  function getKsuBridge() {
+    return window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk || (typeof ksu !== 'undefined' ? ksu : null);
   }
-  return t;
-}
 
-function isRealApiResponse(text){
-  if(text === null || text === undefined) return false;
-  const t = cleanCgiOutput(text);
-  if(!t) return true;
-  if(t.startsWith('<!doctype') || t.startsWith('<!DOCTYPE') || t.startsWith('<html>') || t.startsWith('<head') || t.startsWith('<?xml') || t.startsWith('<!')) return false;
-  if(t.startsWith('#!') || t.startsWith('local ') || t.startsWith('ngx.') || t.includes('ngx.header') || t.startsWith('function ') || t.includes('local moddir')) return false;
-  return true;
-}
-
-async function httpExec(command, args=[]){
-  if(typeof fetch !== 'function') return null;
-
-  // `args` are already the controller argv produced by control(...args).
-  // Never serialize a shell command string for the HTTP bridge.
-  const action = String((args && args.length) ? args[0] : '').trim();
-  if(!action) return null;
-  const argv = Array.from(args || []).slice(1).map(v=>String(v));
-  const readOnly = new Set([
-    'status','json-status','json-hotspot-settings','json-strategies',
-    'json-diagnostics','json-warp-status','json-hostlist','json-learned',
-    'module-version','auto-status','log','nfqws-log'
-  ]);
-
-  const loc = window.location;
-  const curPath = (loc && loc.pathname) ? loc.pathname.replace(/\/[^\/]*$/, '') : '';
-
-  const candidates = [];
-  if(workingApiEndpoint) candidates.push(workingApiEndpoint);
-  candidates.push('api.sh','./api.sh');
-  if(curPath) candidates.push(curPath + '/api.sh');
-  candidates.push('/api.sh','/zapret2-android/api.sh','/zapret2-android/webroot/api.sh',
-    '/modules/zapret2-android/webroot/api.sh','/modules/zapret2-android/api.sh');
-  // Direct browser/Magisk fallback. Cross-origin access is intentionally not
-  // opened with wildcard CORS; direct localhost UI remains same-origin.
-  candidates.push('http://127.0.0.1:8080/api.sh','http://localhost:8080/api.sh',
-    'http://127.0.0.1:8088/api.sh','http://localhost:8088/api.sh');
-
-  const uniqueCandidates = [...new Set(candidates)];
-  const form = new URLSearchParams();
-  form.set('action', action);
-  form.set('argc', String(Math.min(argv.length, 12)));
-  argv.slice(0,12).forEach((v,i)=>form.set('arg'+(i+1),v));
-
-  for(const ep of uniqueCandidates){
-    try{
-      const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
-      const tId = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
-      let resp;
-      if(readOnly.has(action)){
-        const sep=ep.includes('?')?'&':'?';
-        // Маркер обязателен и для чтения: без него api.sh отвечает 403.
-        resp=await fetch(ep+sep+form.toString(), {
-          method:'GET',
-          headers:{'X-Zapret2-WebUI':'1'},
-          credentials:'same-origin',
-          signal:ctrl?ctrl.signal:undefined
-        });
-      }else{
-        resp=await fetch(ep, {
-          method:'POST',
-          headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-Zapret2-WebUI':'1'},
-          body:form.toString(),
-          credentials:'same-origin',
-          signal:ctrl?ctrl.signal:undefined
-        });
-      }
-      if(tId) clearTimeout(tId);
-      if(resp && resp.ok){
-        const raw=await resp.text();
-        const cleaned=cleanCgiOutput(raw);
-        if(isRealApiResponse(cleaned)){
-          workingApiEndpoint=ep;
-          return cleaned;
-        }
-      }
-    }catch(_){}
+  function showToast(msg) {
+    const s = byId('m3-snackbar');
+    if (!s) return;
+    s.textContent = msg || '';
+    s.classList.add('show');
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => s.classList.remove('show'), 3000);
   }
-  return null;
-}
 
-function nativeExec(command,...passArgs){
-  const k = window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk;
-  if(k && typeof k.exec === 'function'){
-    return new Promise((resolve,reject)=>{
-      const id='__ksuCb_'+(++asyncExecSeq);
-      let done=false;
-      const timer=setTimeout(()=>{
-        if(done)return;
-        done=true;
-        delete window[id];
-        reject(new Error('Превышено время ожидания ответа'));
-      },60000);
-      window[id]=(code,stdout,stderr)=>{
-        if(done)return;
-        done=true;
-        clearTimeout(timer);
-        delete window[id];
-        const exitCode=Number(code??0);
-        if(exitCode!==0){
-          reject(new Error(String(stderr||('exec error rc='+exitCode))));
+  function copyText(text, successMsg) {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    } catch (_) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (_) {}
+    showToast(successMsg || 'Скопировано!');
+  }
+
+  function openUrl(url) {
+    const k = getKsuBridge();
+    if (k && typeof k.exec === 'function') {
+      sh('am start -a android.intent.action.VIEW -d "' + url + '"');
+    } else {
+      window.open(url, '_blank');
+    }
+  }
+
+  function openChannel() {
+    openUrl('https://t.me/module_ecubz');
+  }
+
+  function openChat() {
+    openUrl('https://t.me/eCubz');
+  }
+
+  function switchTabByName(tabName) {
+    const tabs = ['main', 'antidpi', 'warp', 'lists', 'diag', 'about'];
+    tabs.forEach(t => {
+      const page = byId('tab-' + t);
+      const nav = byId('nav-' + t);
+      if (page) page.classList.toggle('active', t === tabName);
+      if (nav) nav.classList.toggle('active', t === tabName);
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function showStartup(title, phase, progress = null) {
+    const overlay = byId('startupOverlay');
+    const circle = byId('startupProgressCircle');
+    byId('startupTitle').textContent = title || 'Запуск Zapret2';
+    byId('startupPhase').textContent = phase || 'Подготавливаю службу…';
+    const n = Number(progress);
+    if (Number.isFinite(n) && n >= 0) {
+      const p = Math.max(0, Math.min(100, Math.round(n)));
+      circle.classList.remove('indeterminate');
+      circle.style.setProperty('--progress', p);
+    } else {
+      circle.classList.add('indeterminate');
+    }
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+
+  function hideStartup() {
+    const overlay = byId('startupOverlay');
+    overlay.classList.remove('show');
+    overlay.setAttribute('aria-hidden', 'true');
+    clearTimeout(startupPollTimer);
+    startupPollTimer = 0;
+  }
+
+  function scheduleStartupPoll() {
+    if (startupPollTimer) return;
+    startupPollTimer = setTimeout(async () => {
+      startupPollTimer = 0;
+      try {
+        await loadStatus({ silent: true });
+      } catch (_) {}
+    }, 800);
+  }
+
+  function cleanCgiOutput(raw) {
+    if (!raw) return '';
+    let t = String(raw).trim();
+    if (t.startsWith('Status:') || t.startsWith('HTTP/') || t.startsWith('Content-Type:')) {
+      const splitIdx = t.indexOf('\r\n\r\n');
+      if (splitIdx !== -1) return t.substring(splitIdx + 4).trim();
+      const splitIdxLf = t.indexOf('\n\n');
+      if (splitIdxLf !== -1) return t.substring(splitIdxLf + 2).trim();
+    }
+    return t;
+  }
+
+  function isRealApiResponse(text) {
+    if (text === null || text === undefined) return false;
+    const t = cleanCgiOutput(text);
+    if (!t) return true;
+    if (t.startsWith('<!doctype') || t.startsWith('<!DOCTYPE') || t.startsWith('<html>') || t.startsWith('<head') || t.startsWith('<?xml') || t.startsWith('<!')) return false;
+    if (t.startsWith('#!') || t.startsWith('local ') || t.startsWith('ngx.') || t.includes('ngx.header') || t.startsWith('function ') || t.includes('local moddir')) return false;
+    return true;
+  }
+
+  async function httpExec(command, args = []) {
+    if (typeof fetch !== 'function') return null;
+    const action = String((args && args.length) ? args[0] : '').trim();
+    if (!action) return null;
+    const argv = Array.from(args || []).slice(1).map(v => String(v));
+    const readOnly = new Set([
+      'status', 'json-status', 'json-hotspot-settings', 'json-strategies',
+      'json-diagnostics', 'json-warp-status', 'json-hostlist', 'json-learned',
+      'module-version', 'auto-status', 'log', 'nfqws-log'
+    ]);
+
+    const loc = window.location;
+    const curPath = (loc && loc.pathname) ? loc.pathname.replace(/\/[^\/]*$/, '') : '';
+    const candidates = [];
+    if (workingApiEndpoint) candidates.push(workingApiEndpoint);
+    candidates.push('api.sh', './api.sh');
+    if (curPath) candidates.push(curPath + '/api.sh');
+    candidates.push('/api.sh', '/zapret2-android/api.sh', '/zapret2-android/webroot/api.sh',
+      '/modules/zapret2-android/webroot/api.sh', '/modules/zapret2-android/api.sh',
+      'http://127.0.0.1:8080/api.sh', 'http://localhost:8080/api.sh');
+
+    const uniqueCandidates = [...new Set(candidates)];
+    const form = new URLSearchParams();
+    form.set('action', action);
+    form.set('argc', String(Math.min(argv.length, 12)));
+    argv.slice(0, 12).forEach((v, i) => form.set('arg' + (i + 1), v));
+
+    for (const ep of uniqueCandidates) {
+      try {
+        const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+        const tId = ctrl ? setTimeout(() => ctrl.abort(), 6000) : null;
+        let resp;
+        if (readOnly.has(action)) {
+          const sep = ep.includes('?') ? '&' : '?';
+          resp = await fetch(ep + sep + form.toString(), {
+            method: 'GET',
+            headers: { 'X-Zapret2-WebUI': '1' },
+            credentials: 'same-origin',
+            signal: ctrl ? ctrl.signal : undefined
+          });
         } else {
-          resolve(String(stdout??''));
-        }
-      };
-      try{
-        const ret=k.exec(command,'window.'+id);
-        if(ret&&typeof ret.then==='function'){
-          ret.then(res=>{
-            if(done)return;
-            done=true;
-            clearTimeout(timer);
-            delete window[id];
-            resolve(typeof res==='string'?res:String(res?.stdout??''));
-          }).catch(err=>{
-            if(done)return;
-            done=true;
-            clearTimeout(timer);
-            delete window[id];
-            reject(err);
+          resp = await fetch(ep, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', 'X-Zapret2-WebUI': '1' },
+            body: form.toString(),
+            credentials: 'same-origin',
+            signal: ctrl ? ctrl.signal : undefined
           });
         }
-      }catch(error){
-        if(done)return;
-        done=true;
-        clearTimeout(timer);
-        delete window[id];
-        try{
-          const syncOut=k.exec(command);
-          if(syncOut&&typeof syncOut==='object'){
-            const errno=Number(syncOut.errno??syncOut.exitCode??0);
-            if(errno)throw new Error(String(syncOut.stderr||('exec rc='+errno)));
-            resolve(String(syncOut.stdout??''));
-          }else{
-            resolve(String(syncOut??''));
+        if (tId) clearTimeout(tId);
+        if (resp && resp.ok) {
+          const raw = await resp.text();
+          const cleaned = cleanCgiOutput(raw);
+          if (isRealApiResponse(cleaned)) {
+            workingApiEndpoint = ep;
+            return cleaned;
           }
-        }catch(syncErr){
-          reject(syncErr);
         }
-      }
-    });
-  }
-
-  // HTTP / CGI bridge for Magisk, MMRL, Webroot Manager, Browser
-  if(typeof fetch === 'function'){
-    return httpExec(command,passArgs).then(result=>{
-      if(result!==null)return result;
-      throw new Error('HTTP API Webroot недоступен. Проверьте запуск службы или откройте http://localhost:8080');
-    });
-  }
-
-  return Promise.reject(new Error('Откройте WebUI через KernelSU / APatch / Magisk или в браузере (http://localhost:8080)'));
-}
-
-function control(...args){
-  const fullCmd=shellQuote(modDir+'/bin/zapret2-control')+' '+args.map(shellQuote).join(' ');
-  return nativeExec(fullCmd,...args);
-}
-function controlAsync(...args){return control(...args)}
-
-async function bridgeCall(name,...args){
-  const k=window.ksu||window.KernelSU||window.apatch;
-  const fn=k?.[name];
-  if(typeof fn==='function'){
-    return await Promise.resolve(fn.apply(k,args));
-  }
-  throw new Error('API '+name+' недоступен');
-}
-function nextPaint(){return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
-function showStartup(title,phase,progress=null){const overlay=byId('startupOverlay'),ring=byId('startupProgress');byId('startupTitle').textContent=title||'Запуск Zapret2';byId('startupPhase').textContent=phase||'Подготавливаю службу…';const n=Number(progress);if(Number.isFinite(n)&&n>=0){const p=Math.max(0,Math.min(100,Math.round(n)));ring.classList.remove('indeterminate');ring.style.setProperty('--progress',p);ring.querySelector('.indicator')?.style.setProperty('stroke-dashoffset',String(100-p));byId('startupPercent').textContent=p+'%'}else ring.classList.add('indeterminate');overlay.classList.add('show');overlay.setAttribute('aria-hidden','false')}
-function hideStartup(){const overlay=byId('startupOverlay');overlay.classList.remove('show');overlay.setAttribute('aria-hidden','true');clearTimeout(startupPollTimer);startupPollTimer=0}
-function scheduleStartupPoll(){if(startupPollTimer)return;startupPollTimer=setTimeout(async()=>{startupPollTimer=0;try{await loadStatus({silent:true})}catch(_){}},700)}
-function toast(message){const el=byId('notice');el.textContent=message||'';el.classList.toggle('show',!!message);clearTimeout(noticeTimer);if(message)noticeTimer=setTimeout(()=>el.classList.remove('show'),4200)}
-async function busy(id,message){toast(message);const el=byId(id);if(el){el.disabled=true;el.classList.add('is-loading');el.setAttribute('aria-busy','true')}await nextPaint()}
-function done(id,message){toast(message);const el=byId(id);if(el){el.disabled=false;el.classList.remove('is-loading');el.removeAttribute('aria-busy');if(!matchMedia('(prefers-reduced-motion: reduce)').matches)el.animate?.([{transform:'scale(.96)'},{transform:'scale(1.03)'},{transform:'scale(1)'}],{duration:320,easing:'cubic-bezier(.2,.9,.2,1.15)'})}}
-function escapeHtml(value){return String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}
-function cap(el,value,label){el.textContent=label+' '+(String(value)==='1'?'✓':'✕');el.className='pill '+(String(value)==='1'?'ok':'warn')}
-function setFieldEnabled(id,enabled){const el=byId(id);if(!el)return;el.disabled=!enabled;el.closest('.field')?.classList.toggle('is-disabled',!enabled)}
-function syncDependentControls(){const hotspot=byId('hotspot')?.value==='1',vpn=hotspot&&byId('vpnHotspot')?.value==='1',dns=hotspot&&byId('dnsForward')?.value==='1';['vpnHotspot','hotspotQuic','dnsForward'].forEach(id=>setFieldEnabled(id,hotspot));['tun','vpnFallback'].forEach(id=>setFieldEnabled(id,vpn));setFieldEnabled('dnsServers',dns)}
-
-function formatBytes(bytes){
-  const n=Number(bytes)||0;
-  if(n<=0)return '0 B';
-  if(n<1024)return n+' B';
-  if(n<1048576)return (n/1024).toFixed(1)+' KB';
-  if(n<1073741824)return (n/1048576).toFixed(2)+' MB';
-  return (n/1073741824).toFixed(2)+' GB';
-}
-
-function updateWarpHandshakeUI(){
-  const pill=byId('warpHandshakePill');
-  if(!pill)return;
-  if(!latestWarpRunning||!latestWarpHandshake||latestWarpHandshake<=0){
-    pill.textContent='Рукопожатие: —';
-    pill.className='pill';
-    return;
-  }
-  const now=Math.round(Date.now()/1000);
-  const diff=Math.max(0,now-latestWarpHandshake);
-  if(diff<5){
-    pill.textContent='Рукопожатие: только что';
-    pill.className='pill ok';
-  }else if(diff<60){
-    pill.textContent='Рукопожатие: '+diff+' с назад';
-    pill.className='pill ok';
-  }else if(diff<180){
-    const m=Math.floor(diff/60),s=diff%60;
-    pill.textContent='Рукопожатие: '+m+' мин '+(s<10?'0':'')+s+' с назад';
-    pill.className='pill ok';
-  }else{
-    const m=Math.floor(diff/60);
-    pill.textContent='Рукопожатие: '+m+' мин назад (ожидание)';
-    pill.className='pill warn';
-  }
-}
-
-async function loadStatus(options={}){
-  try{
-    const data=JSON.parse(await control('json-status'));
-    const engine=data.strategy_effective||data.strategy||'';
-    const starting=!data.running&&['WAITING','STARTING'].includes(data.startup_state);
-    const failed=!data.running&&['ERROR','STALE'].includes(data.startup_state);
-    byId('statusRunning').innerHTML='<span class="dot"></span>'+(data.direct?'DIRECT — обход не нужен':data.running?'Работает':starting?'Запускается':failed?'Ошибка запуска':'Остановлен');
-    byId('statusRunning').className='status-value '+(data.running?'ok':starting?'starting':'bad');
-    byId('statusStrategy').textContent=engine==='CUSTOM'?'Ручная (CUSTOM)':'Автоподбор ✓';
-    byId('statusHealth').textContent=starting?'Подготовка':(data.health||'UNKNOWN');
-    byId('statusHealth').className='status-value '+(starting?'starting':data.health==='OK'?'ok':data.health==='DEGRADED'?'warn':'bad');
-    
-    if(starting){
-      byId('statusMeta').textContent='Подготовка сети…';
-    }else if(data.direct){
-      byId('statusMeta').textContent='Прямой трафик (DIRECT)';
-    }else if(data.running){
-      const iface=(data.auto_network_iface||'').toLowerCase();
-      const ifaceName=iface.includes('wlan')?'Wi-Fi':(iface.includes('rmnet')||iface.includes('ccmni')||iface.includes('pdp'))?'Мобильная':(iface?iface:'Сеть');
-      byId('statusMeta').textContent=ifaceName+' · Защищено';
-    }else{
-      byId('statusMeta').textContent='Отключено';
+      } catch (_) {}
     }
-    
-    if(data.version&&byId('heroVersion'))byId('heroVersion').textContent=data.version;
-    
-    const active=document.activeElement;
-    if(active!==byId('quic'))byId('quic').value=String(data.quic_mode||'ON').toLowerCase();
-    if(active!==byId('hostlistMode'))byId('hostlistMode').value=String(data.hostlist_mode||'AUTO');
-    byId('listMode').textContent='Режим: '+String(data.hostlist_mode||'AUTO');
-    byId('listUser').textContent='Свои домены: '+(data.user_domains??0);
-    byId('listLearned').textContent='Выучено: '+(data.learned_domains??0);
-    byId('listNets').textContent='Подсети: '+(data.ipset_nets??0)+' / искл. '+(data.ipset_exclude_nets??0);
-    byId('learnedCount').textContent='Выученные домены: '+(data.learned_domains??0);
-    if(byId('tcp'))byId('tcp').value=data.force_tcp||'1';
+    return null;
+  }
 
-    byId('roleDown').textContent='Подключение: '+(data.tether_downstream||'Wi-Fi / USB');
-    byId('roleVpn').textContent='VPN: '+(data.vpn_iface||'Не используется');
-    byId('roleMode').textContent='Раздача: '+({VPN:'Через VPN',ANTIDPI:'Через AntiDPI',BLOCK:'Блокировка без VPN',OFF:'выкл.',IDLE:'Ожидание устройств'}[data.vpn_mode]||data.vpn_mode||'Ожидание устройств');
-    byId('roleMode').className='pill '+(data.vpn_mode==='VPN'||data.vpn_mode==='ANTIDPI'?'ok':data.vpn_mode==='BLOCK'?'warn':'');
-    byId('roleWatch').textContent='Защита от утечек: '+((data.vpn_watcher_alive||data.running)?'Включена ✓':'Выключена');
-    byId('roleWatch').className='pill '+(data.running?'ok':'');
-    
-    if(byId('compatBadge'))byId('compatBadge').textContent='Совместимость: 100% ✓';
-    if(byId('smartYoutubeProfile'))byId('smartYoutubeProfile').textContent='YouTube: '+(data.auto_profile||'Автоподбор');
-    if(byId('smartAutoProfile'))byId('smartAutoProfile').textContent='AUTO: '+(data.auto_status==='CACHED'?'Кэширован':data.auto_status==='OK'?'Активен':'Готов');
-    
-    if(starting){
-      showStartup(data.startup_state==='WAITING'?'Ожидание Android':'Запуск Zapret2',data.startup_phase||'Подготавливаю службу',data.startup_progress);
-      scheduleStartupPoll();
-    }else if(data.running){
+  function nativeExec(command, ...passArgs) {
+    const k = getKsuBridge();
+    if (k && typeof k.exec === 'function') {
+      return new Promise((resolve, reject) => {
+        const id = '__ksuCb_' + (++asyncExecSeq);
+        let done = false;
+        const timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          delete window[id];
+          delete window['window.' + id];
+          reject(new Error('Превышено время ожидания ответа'));
+        }, 60000);
+
+        const callbackHandler = (code, stdout, stderr) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          delete window[id];
+          delete window['window.' + id];
+          const exitCode = Number(code ?? 0);
+          if (exitCode !== 0) {
+            reject(new Error(String(stderr || ('exec error rc=' + exitCode))));
+          } else {
+            resolve(String(stdout ?? ''));
+          }
+        };
+
+        window[id] = callbackHandler;
+        window['window.' + id] = callbackHandler;
+
+        try {
+          const ret = k.exec(command, 'window.' + id);
+          if (ret && typeof ret.then === 'function') {
+            ret.then(res => {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              delete window[id];
+              delete window['window.' + id];
+              resolve(typeof res === 'string' ? res : String(res?.stdout ?? ''));
+            }).catch(err => {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              delete window[id];
+              delete window['window.' + id];
+              reject(err);
+            });
+          }
+        } catch (error) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          delete window[id];
+          delete window['window.' + id];
+          try {
+            const syncOut = k.exec(command);
+            if (syncOut && typeof syncOut === 'object') {
+              const errno = Number(syncOut.errno ?? syncOut.exitCode ?? 0);
+              if (errno) throw new Error(String(syncOut.stderr || ('exec rc=' + errno)));
+              resolve(String(syncOut.stdout ?? ''));
+            } else {
+              resolve(String(syncOut ?? ''));
+            }
+          } catch (syncErr) {
+            reject(syncErr);
+          }
+        }
+      });
+    }
+
+    if (typeof fetch === 'function') {
+      return httpExec(command, passArgs).then(result => {
+        if (result !== null) return result;
+        throw new Error('HTTP API Webroot недоступен.');
+      });
+    }
+
+    return Promise.reject(new Error('Откройте WebUI через KernelSU / APatch / Magisk или по адресу http://127.0.0.1:8080'));
+  }
+
+  function sh(cmd) {
+    return nativeExec(cmd);
+  }
+
+  function control(...args) {
+    const fullCmd = shellQuote(modDir + '/bin/zapret2-control') + ' ' + args.map(shellQuote).join(' ');
+    return nativeExec(fullCmd, ...args);
+  }
+
+  function formatBytes(bytes) {
+    const n = Number(bytes) || 0;
+    if (n <= 0) return '0 B';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(2) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function parseJson(value, fallback = []) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value !== 'string') return value;
+    const text = value.trim();
+    if (!text) return fallback;
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function setFieldEnabled(id, enabled) {
+    const el = byId(id);
+    if (!el) return;
+    el.disabled = !enabled;
+  }
+
+  function syncDependentControls() {
+    const hotspot = byId('hotspot')?.value === '1';
+    const vpn = hotspot && byId('vpnHotspot')?.value === '1';
+    const dns = hotspot && byId('dnsForward')?.value === '1';
+    ['vpnHotspot', 'hotspotQuic', 'dnsForward'].forEach(id => setFieldEnabled(id, hotspot));
+    ['tun', 'vpnFallback'].forEach(id => setFieldEnabled(id, vpn));
+    setFieldEnabled('dnsServers', dns);
+  }
+
+  function syncSmartControls() {
+    const custom = byId('smartMode')?.value === 'CUSTOM';
+    setFieldEnabled('strategyCustom', custom);
+    if (byId('expertStrategy')) byId('expertStrategy').open = custom;
+  }
+
+  function syncWarpControls() {
+    const enabled = byId('enableWarp')?.value === '1';
+    const adaptive = byId('warpAdaptive')?.value !== '0';
+    ['warpEndpoint', 'warpPort', 'warpAdaptive', 'warpJc', 'warpJmin', 'warpJmax', 'warpDns'].forEach(id => setFieldEnabled(id, enabled));
+    setFieldEnabled('warpSipForce', enabled && !adaptive);
+  }
+
+  function updateWarpHandshakeUI() {
+    const pill = byId('warpHandshakePill');
+    if (!pill) return;
+    if (!latestWarpRunning || !latestWarpHandshake || latestWarpHandshake <= 0) {
+      pill.textContent = 'Рукопожатие: —';
+      pill.className = 'm3-pill';
+      return;
+    }
+    const now = Math.round(Date.now() / 1000);
+    const diff = Math.max(0, now - latestWarpHandshake);
+    if (diff < 5) {
+      pill.textContent = 'Рукопожатие: только что';
+      pill.className = 'm3-pill ok';
+    } else if (diff < 60) {
+      pill.textContent = 'Рукопожатие: ' + diff + ' с назад';
+      pill.className = 'm3-pill ok';
+    } else if (diff < 180) {
+      const m = Math.floor(diff / 60), s = diff % 60;
+      pill.textContent = 'Рукопожатие: ' + m + ' мин ' + (s < 10 ? '0' : '') + s + ' с назад';
+      pill.className = 'm3-pill ok';
+    } else {
+      const m = Math.floor(diff / 60);
+      pill.textContent = 'Рукопожатие: ' + m + ' мин назад';
+      pill.className = 'm3-pill warn';
+    }
+  }
+
+  async function loadStatus(options = {}) {
+    try {
+      const data = JSON.parse(await control('json-status'));
+      const engine = data.strategy_effective || data.strategy || '';
+      const starting = !data.running && ['WAITING', 'STARTING'].includes(data.startup_state);
+      const failed = !data.running && ['ERROR', 'STALE'].includes(data.startup_state);
+
+      const statusBox = byId('status-box');
+      const statusTitle = byId('status-title');
+      const statusDetails = byId('status-details');
+
+      if (data.direct) {
+        statusBox.className = 'm3-status-icon-box running';
+        statusBox.innerHTML = ICON_RUNNING;
+        statusTitle.textContent = 'DIRECT (Прямой трафик)';
+        statusDetails.textContent = 'Блокировки отсутствуют · Энергосбережение';
+      } else if (data.running) {
+        statusBox.className = 'm3-status-icon-box running';
+        statusBox.innerHTML = ICON_RUNNING;
+        statusTitle.textContent = 'Zapret2 Активен';
+        const iface = (data.auto_network_iface || '').toLowerCase();
+        const ifaceName = iface.includes('wlan') ? 'Wi-Fi (' + (data.auto_network_iface || 'wlan0') + ')' : (iface.includes('rmnet') || iface.includes('ccmni') || iface.includes('pdp')) ? 'Мобильная сеть' : (iface || 'Сеть');
+        statusDetails.textContent = ifaceName + ' · Защищено AntiDPI';
+      } else if (starting) {
+        statusBox.className = 'm3-status-icon-box loading';
+        statusBox.innerHTML = ICON_BOLT;
+        statusTitle.textContent = 'Запуск службы…';
+        statusDetails.textContent = data.startup_phase || 'Подготовка сетевого стека';
+      } else if (failed) {
+        statusBox.className = 'm3-status-icon-box stopped';
+        statusBox.innerHTML = ICON_STOPPED;
+        statusTitle.textContent = 'Ошибка запуска';
+        statusDetails.textContent = 'Проверьте журнал работы в разделе «Логи»';
+      } else {
+        statusBox.className = 'm3-status-icon-box stopped';
+        statusBox.innerHTML = ICON_STOPPED;
+        statusTitle.textContent = 'Служба остановлена';
+        statusDetails.textContent = 'AntiDPI и правила отключены';
+      }
+
+      byId('summary-strategy').textContent = engine === 'CUSTOM' ? 'CUSTOM (Ручная)' : (data.auto_profile_name || 'SMART AUTO');
+      byId('summary-health').textContent = starting ? 'Подготовка' : (data.health || 'OK');
+      byId('summary-net').textContent = data.auto_network_iface ? (data.auto_network_iface + ' (' + (data.auto_status || 'OK') + ')') : 'Готово';
+      byId('summary-hotspot').textContent = { VPN: 'Через VPN', ANTIDPI: 'Через AntiDPI', BLOCK: 'Блок без VPN', OFF: 'Выкл', IDLE: 'Ожидание' }[data.vpn_mode] || data.vpn_mode || 'Ожидание';
+
+      if (data.version && byId('heroVersion')) byId('heroVersion').textContent = data.version;
+
+      const active = document.activeElement;
+      if (active !== byId('quic')) byId('quic').value = String(data.quic_mode || 'ON').toLowerCase();
+      if (active !== byId('hostlistMode')) byId('hostlistMode').value = String(data.hostlist_mode || 'AUTO');
+      byId('listMode').textContent = 'Режим: ' + String(data.hostlist_mode || 'AUTO');
+      byId('listUser').textContent = 'Свои: ' + (data.user_domains ?? 0);
+      byId('listLearned').textContent = 'Выучено: ' + (data.learned_domains ?? 0);
+      byId('listNets').textContent = 'Подсети: ' + (data.ipset_nets ?? 0);
+      byId('learnedCount').textContent = 'Выучено: ' + (data.learned_domains ?? 0);
+
+      byId('roleDown').textContent = 'Подключение: ' + (data.tether_downstream || 'Wi-Fi / USB');
+      byId('roleVpn').textContent = 'VPN: ' + (data.vpn_iface || 'Не используется');
+      byId('roleMode').textContent = 'Раздача: ' + ({ VPN: 'Через VPN', ANTIDPI: 'Через AntiDPI', BLOCK: 'Блокировка', OFF: 'Выкл', IDLE: 'Ожидание' }[data.vpn_mode] || data.vpn_mode || 'Ожидание');
+      byId('roleWatch').textContent = 'Защита от утечек: ' + ((data.vpn_watcher_alive || data.running) ? 'Активна' : 'Выключена');
+
+      if (byId('compatBadge')) byId('compatBadge').textContent = 'Совместимость: 100%';
+      if (byId('smartYoutubeProfile')) byId('smartYoutubeProfile').textContent = 'YouTube: ' + (data.auto_profile || 'Автоподбор');
+      if (byId('smartAutoProfile')) byId('smartAutoProfile').textContent = 'AUTO: ' + (data.auto_status === 'CACHED' ? 'Кэширован' : data.auto_status === 'OK' ? 'Активен' : 'Готов');
+
+      if (starting) {
+        showStartup(data.startup_state === 'WAITING' ? 'Ожидание Android' : 'Запуск Zapret2', data.startup_phase || 'Подготавливаю службу', data.startup_progress);
+        scheduleStartupPoll();
+      } else if (data.running) {
+        hideStartup();
+      } else if (failed) {
+        showStartup('Запуск не завершён', data.startup_phase || 'Проверьте журнал работы', 100);
+        setTimeout(hideStartup, 2500);
+      }
+      return data;
+    } catch (error) {
+      byId('status-title').textContent = 'Ошибка связи';
+      byId('status-details').textContent = error.message;
+      if (!options.silent) showToast(error.message);
+      throw error;
+    }
+  }
+
+  async function runRestart() {
+    showToast('Перезапуск службы…');
+    showStartup('Перезапуск Zapret2', 'Останавливаю службу и перестраиваю правила…', null);
+    scheduleStartupPoll();
+    try {
+      await control('restart');
+      await Promise.all([loadStatus(), loadHotspot(), loadWarp(), loadStrategies(), loadDiagnostics()]);
       hideStartup();
-    }else if(failed){
-      showStartup('Запуск не завершён',data.startup_phase||'Проверьте журнал работы',100);
-      setTimeout(hideStartup,2200);
+      showToast('Zapret2 перезапущен успешно');
+    } catch (error) {
+      hideStartup();
+      showToast('Ошибка перезапуска: ' + error.message);
     }
-    if(data.warnings&&!options.silent)toast('Диагностика: '+data.warnings);
-    return data;
-  }catch(error){
-    byId('statusRunning').textContent='Ошибка статуса';
-    byId('statusRunning').className='status-value bad';
-    if(!options.silent)toast(error.message);
-    throw error;
   }
-}
 
-async function loadHotspot(){
-  try{
-    const data=JSON.parse(await control('json-hotspot-settings'));
-    const active=document.activeElement;
-    if(active!==byId('hotspot'))byId('hotspot').value=data.enable_hotspot;
-    if(active!==byId('vpnHotspot'))byId('vpnHotspot').value=data.enable_vpn_hotspot;
-    if(active!==byId('tun'))byId('tun').value=data.vpn_tun_name;
-    if(active!==byId('vpnFallback'))byId('vpnFallback').value=data.vpn_fallback_mode||'ANTIDPI';
-    if(active!==byId('hotspotQuic'))byId('hotspotQuic').value=data.force_tcp_hotspot;
-    if(active!==byId('dnsForward'))byId('dnsForward').value=data.dns_forward_hotspot;
-    if(active!==byId('dnsServers'))byId('dnsServers').value=data.dns_forward_servers;
-    syncDependentControls();
-  }catch(error){
-    toast('Ошибка настроек раздачи: '+error.message);
-  }
-}
-
-async function runControl(command){
-  await busy('restart','Перезапуск…');
-  showStartup('Перезапуск Zapret2','Останавливаю старую службу и перестраиваю правила…',null);
-  await nextPaint();
-  scheduleStartupPoll();
-  try{
-    await control(command);
-    await Promise.all([loadStatus(),loadHotspot(),loadDiagnostics(),loadWarp(),loadCurrentList()]);
-    hideStartup();
-    done('restart','Модуль перезапущен');
-  }catch(error){
-    hideStartup();
-    done('restart','Ошибка: '+error.message);
-  }
-}
-
-async function applyCore(){
-  await busy('applyCore','Применение…');
-  try{
-    await control('quicmode',byId('quic').value);
-    await loadStatus();
-    done('applyCore','Настройки телефона применены');
-  }catch(error){
-    done('applyCore','Ошибка: '+error.message);
-  }
-}
-
-
-function validIpv4(value){const p=String(value).split('.');return p.length===4&&p.every(x=>/^\d{1,3}$/.test(x)&&Number(x)>=0&&Number(x)<=255)}
-function validDnsPool(value){const parts=String(value).trim().split(/\s+/).filter(Boolean);return parts.length>0&&parts.every(validIpv4)}
-
-async function applyHotspot(){
-  await busy('applyHotspot','Применение настроек раздачи…');
-  try{
-    const dns=byId('dnsServers').value.trim();
-    if(byId('dnsForward').value==='1'&&!validDnsPool(dns))throw new Error('DNS-пул должен содержать корректные IPv4-адреса через пробел');
-    await control('hotspot-settings',byId('hotspot').value,byId('vpnHotspot').value,byId('tun').value.trim(),byId('vpnFallback').value,byId('hotspotQuic').value,byId('dnsForward').value,dns);
-    await loadHotspot();
-    await loadStatus();
-    done('applyHotspot','Настройки раздачи применены');
-  }catch(error){
-    done('applyHotspot','Ошибка: '+error.message);
-  }
-}
-
-function syncSmartControls(){
-  const custom=byId('smartMode')?.value==='CUSTOM';
-  setFieldEnabled('strategyCustom',custom);
-  if(byId('expertStrategy'))byId('expertStrategy').open=custom;
-}
-
-async function loadStrategies(){
-  try{
-    const data=JSON.parse(await control('json-strategies'));
-    const active=document.activeElement;
-    if(active!==byId('smartMode'))byId('smartMode').value=data.active==='CUSTOM'?'CUSTOM':'SMART';
-    if(active!==byId('strategyCustom'))byId('strategyCustom').value=data.custom||'';
-    byId('smartYoutubeProfile').textContent='YouTube / Google Video · '+(data.youtube_domains||0)+' доменов';
-    byId('smartGeneralProfile').textContent=data.auto_profile_name==='DIRECT'?'Обход отключён · DIRECT':'AUTO — весь TLS/443 · General — HTTP/80';
-    byId('smartAutoProfile').textContent='AUTO · '+(data.auto_profile_name||data.auto_profile||'UNKNOWN')+' · '+(data.auto_status||'UNKNOWN')+(data.auto_iface?' · '+data.auto_iface:'');
-    byId('smartStrategyOrder').textContent='Порядок AUTO ('+(data.strategy_count||0)+'): '+(data.strategy_order||'нет валидных файлов');
-    syncSmartControls();
-  }catch(error){
-    toast('Ошибка SMART: '+error.message);
-  }
-}
-
-async function saveSmart(){
-  await busy('saveSmart','Сохранение SMART и перезапуск nfqws2…');
-  try{
-    const mode=byId('smartMode').value,custom=byId('strategyCustom').value.trim();
-    await control('save-smart',mode,custom);
-    await Promise.all([loadStatus(),loadStrategies()]);
-    done('saveSmart',(mode==='SMART'?'SMART включён':'CUSTOM включён')+' · AUTO-приложения '+(autoApps==='1'?'ON':'OFF'));
-  }catch(error){
-    done('saveSmart','Ошибка: '+error.message);
-  }
-}
-
-async function runAuto(){
-  await busy('runAuto','Проверяю DIRECT и стратегии…');
-  try{
-    await control('auto-run');
-    await Promise.all([loadStatus(),loadStrategies()]);
-    done('runAuto','AUTO-подбор завершён');
-  }catch(error){
-    done('runAuto','AUTO: '+error.message);
-  }
-}
-
-async function clearAuto(){
-  await busy('clearAuto','Сбрасываю кэш AUTO…');
-  try{
-    await control('auto-clear');
-    await Promise.all([loadStatus(),loadStrategies()]);
-    done('clearAuto','Кэш AUTO сброшен');
-  }catch(error){
-    done('clearAuto','Ошибка: '+error.message);
-  }
-}
-
-async function loadDiagnostics(){
-  try{
-    const data=JSON.parse(await control('json-diagnostics'));
-    if(document.activeElement!==byId('nfqwsDebug'))byId('nfqwsDebug').value=data.nfqws_debug;
-    byId('diagInfo').textContent='Boot-safe лог: '+data.service_log+' · экспорт: '+(data.export_dir||'/sdcard/eCubz');
-  }catch(error){
-    byId('diagInfo').textContent='Ошибка диагностики: '+error.message;
-  }
-}
-
-async function applyNfqwsDebug(){
-  await busy('applyDebug','Перезапуск с выбранным уровнем debug…');
-  try{
-    const text=await control('nfqws-debug',byId('nfqwsDebug').value);
-    await Promise.all([loadStatus(),loadDiagnostics()]);
-    done('applyDebug',text.trim()||'Debug применён');
-  }catch(error){
-    done('applyDebug','Ошибка: '+error.message);
-  }
-}
-
-async function collectDiagnostics(){
-  await busy('collectDiag','Сбор диагностики…');
-  try{
-    const path=(await control('diag')).trim();
-    byId('diagLog').value='Диагностический отчёт создан:\n'+path+'\n\nОтправьте этот файл вместе с bugreport KernelSU, если проблема повторяется.';
-    done('collectDiag','Диагностика собрана');
-  }catch(error){
-    done('collectDiag','Ошибка: '+error.message);
-  }
-}
-
-async function exportLogs(){
-  await busy('exportLogs','Экспорт в /sdcard/eCubz…');
-  try{
-    const path=(await control('export-logs')).trim();
-    byId('diagLog').value='Логи экспортированы:\n'+(path||'/sdcard/eCubz');
-    done('exportLogs','Логи экспортированы');
-  }catch(error){
-    done('exportLogs','Ошибка: '+error.message);
-  }
-}
-
-async function showServiceLog(){
-  await busy('showLog','Чтение лога…');
-  try{
-    byId('diagLog').value=await control('log','250');
-    done('showLog','Показаны последние строки обычного лога');
-  }catch(error){
-    done('showLog','Ошибка: '+error.message);
-  }
-}
-
-async function showNfqwsLog(){
-  await busy('showNfqwsLog','Чтение nfqws debug…');
-  try{
-    byId('diagLog').value=await control('nfqws-log','250');
-    done('showNfqwsLog','Показаны последние строки nfqws debug');
-  }catch(error){
-    done('showNfqwsLog','Ошибка: '+error.message);
-  }
-}
-
-function extractFirstJson(text){const src=String(text??'').trim();let start=-1,open='',close='';for(let i=0;i<src.length;i++){if(src[i]==='['||src[i]==='{'){start=i;open=src[i];close=open==='['?']':'}';break}}if(start<0)return null;let depth=0,inString=false,escaped=false;for(let i=start;i<src.length;i++){const ch=src[i];if(inString){if(escaped){escaped=false;continue}if(ch==='\\'){escaped=true;continue}if(ch==='"')inString=false;continue}if(ch==='"'){inString=true;continue}if(ch===open)depth++;else if(ch===close){depth--;if(depth===0)return src.slice(start,i+1)}}return null}
-function parseJson(value,fallback=[]){if(value===undefined||value===null||value==='')return fallback;if(typeof value!=='string')return value;const text=value.trim();if(!text)return fallback;try{const parsed=JSON.parse(text);if(typeof parsed==='string'){const nested=parsed.trim();if((nested.startsWith('[')&&nested.endsWith(']'))||(nested.startsWith('{')&&nested.endsWith('}')))return JSON.parse(nested)}return parsed}catch(firstError){const candidate=extractFirstJson(text);if(candidate){try{return JSON.parse(candidate)}catch(_){}}throw firstError}}
-function normalizePackageNames(value){const raw=parseJson(value,[]);return Array.isArray(raw)?[...new Set(raw.map(item=>typeof item==='string'?item:(item?.packageName||item?.pkg||'')).filter(Boolean))]:[]}
-// ---------------------------------------------------------------------------
-// Списки доменов и подсетей.
-// Отбор по приложениям убран: каталог пакетов отставал от реальности, а домен
-// заблокирован одинаково для любого клиента, который к нему ходит.
-// ---------------------------------------------------------------------------
-const LIST_META={
-  'domains':        {title:'Домены под обходом',    hint:'Одна запись на строку. Поддомены подхватываются сами: строка «youtube.com» покрывает и «www.youtube.com».'},
-  'exclude-domains':{title:'Домены-исключения',     hint:'Эти домены модуль не трогает никогда, в любом режиме. Сюда — банки, госуслуги, платёжные шлюзы.'},
-  'ipset':          {title:'Подсети под обходом',   hint:'IP или CIDR, по одному на строку. Нужно там, где сервис ходит по адресу и имя хоста неизвестно.'},
-  'ipset-exclude':  {title:'Подсети-исключения',    hint:'IP или CIDR, которые не трогать никогда. Приоритет выше всех остальных списков.'},
-  'warp-domains':   {title:'Домены в туннель',      hint:'Домены, которые уводятся в туннель WARP целиком. Нужны, когда обход DPI сайт не поднимает.'},
-  'warp-nets':      {title:'Подсети в туннель',     hint:'IP или CIDR, уводимые в туннель. Работает только при включённом туннеле.'}
-};
-let currentList='domains';
-
-function selectList(name){
-  if(!LIST_META[name])return;
-  currentList=name;
-  document.querySelectorAll('.filter-chip').forEach(el=>el.classList.toggle('active',el.dataset.list===name));
-  byId('listHint').textContent=LIST_META[name].hint;
-  loadCurrentList();
-}
-
-async function loadCurrentList(){
-  const box=byId('listEditor');
-  box.value='';box.placeholder='Загрузка…';
-  try{
-    const text=await readListFile(currentList);
-    box.value=text;
-    box.placeholder='Список пуст. Добавьте записи по одной на строку.';
-  }catch(error){
-    box.placeholder='Не удалось прочитать список: '+error.message;
-  }
-}
-
-const LIST_FILES={
-  'domains':'lists/user.list','exclude-domains':'lists/exclude_domains.list',
-  'ipset':'lists/ipset.list','ipset-exclude':'lists/ipset_exclude.list',
-  'warp-domains':'lists/warp_domains.list','warp-nets':'lists/warp_bypass_nets.list'
-};
-
-async function readListFile(name){
-  const rel=LIST_FILES[name];
-  if(typeof window.ksu?.readFile==='function'){
-    try{return String(await bridgeCall('readFile',modDir+'/'+rel)??'');}catch(_){}
-  }
-  return '';
-}
-
-async function saveCurrentList(){
-  const button=byId('saveList');
-  button.disabled=true;
-  try{
-    await control('replace-list',currentList,byId('listEditor').value);
-    toast(LIST_META[currentList].title+': сохранено');
-    await refreshStatus();
-  }catch(error){
-    toast('Не удалось сохранить: '+error.message);
-  }finally{
-    button.disabled=false;
-  }
-}
-
-async function applyHostlistMode(){
-  const mode=byId('hostlistMode').value;
-  try{
-    await control('hostlist-mode',mode);
-    toast('Режим доменов: '+mode);
-    await refreshStatus();
-  }catch(error){
-    toast('Не удалось сменить режим: '+error.message);
-  }
-}
-
-async function showLearned(){
-  const box=byId('learnedBox');
-  box.value='Загрузка…';
-  try{
-    const list=parseJson(await control('json-learned'),[]);
-    box.value=Array.isArray(list)&&list.length?list.join('\n'):'Пока ничего не выучено.';
-  }catch(error){
-    box.value='Не удалось получить список: '+error.message;
-  }
-}
-
-async function clearLearned(){
-  try{
-    await control('hostlist-clear');
-    byId('learnedBox').value='';
-    toast('Обучение сброшено');
-    await refreshStatus();
-  }catch(error){
-    toast('Не удалось очистить: '+error.message);
-  }
-}
-
-function syncWarpControls(){
-  const enabled=byId('enableWarp')?.value==='1';
-  const adaptive=byId('warpAdaptive')?.value!=='0';
-  ['warpEndpoint','warpPort','warpAdaptive','warpJc','warpJmin','warpJmax','warpDns'].forEach(id=>setFieldEnabled(id,enabled));
-  setFieldEnabled('warpSipForce',enabled&&!adaptive);
-}
-function markWarpDirty(){warpFormDirty=true;}
-
-async function loadWarp(options={}){
-  try{
-    const data=JSON.parse(await control('json-warp-status'));
-    latestWarpRunning=!!data.running;
-    latestWarpHandshake=Number(data.last_handshake)||0;
-    latestWarpRx=Number(data.rx_bytes)||0;
-    latestWarpTx=Number(data.tx_bytes)||0;
-
-    const enableEl=byId('enableWarp');
-    if(enableEl&&!warpFormDirty&&!warpSaveInFlight&&document.activeElement!==enableEl){
-      enableEl.value=data.enable_warp||'0';
+  async function applyCore() {
+    showToast('Применение настроек QUIC…');
+    try {
+      await control('quicmode', byId('quic').value);
+      await loadStatus();
+      showToast('Параметры QUIC применены');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
     }
-    const adaptResult=data.adaptive_result||'pending';
-    const step=Number(data.adaptive_step)||0,total=Math.max(1,Number(data.adaptive_total)||40);
-    const adaptUpdated=Number(data.adaptive_updated)||0,adaptAge=adaptUpdated?Math.max(0,Math.floor(Date.now()/1000)-adaptUpdated):0;
-    let warpState='Отключен',warpClass='';
-    if(data.running){warpState='Работает';warpClass='ok';}
-    else if(data.enable_warp==='1'&&adaptResult==='failed'){warpState='Рабочий профиль не найден';warpClass='bad';}
-    else if(data.enable_warp==='1'&&data.interface_up){
-      if(String(data.adaptive||'1')==='1'){
-        if(adaptResult==='pending'&&adaptAge>30){warpState='Подбор задержан на '+Math.min(step+1,total)+'/'+total+' · '+adaptAge+'с';warpClass='bad';}
-        else{warpState='Подбор профиля '+Math.min(step+1,total)+'/'+total;warpClass='warn';}
-      }
-      else{warpState='Нет рукопожатия · ручной профиль';warpClass='bad';}
-    }else if(data.enable_warp==='1'){warpState='Запуск туннеля…';warpClass='warn';}
-    byId('warpStatusPill').textContent='Статус: '+warpState;
-    byId('warpStatusPill').className='pill '+warpClass;
-    byId('warpIfacePill').textContent='Интерфейс: '+(data.warp_dev||'awg99');
-    byId('warpSipPill').textContent='Маскировка: '+(data.sip_active?'SIP I1/I2':'BASIC (без I1/I2)');
-    byId('warpSipPill').className='pill '+(data.sip_active?'warn':'ok');
-    const ajc=data.active_jc||data.jc||'5',ajmin=data.active_jmin||data.jmin||'40',ajmax=data.active_jmax||data.jmax||'70';
-    byId('warpProfilePill').textContent='Профиль: J='+ajc+' / '+ajmin+'–'+ajmax+' · '+((String(data.adaptive||'1')==='1')?('step '+(Number(data.adaptive_step||0)+1)+'/'+(data.adaptive_total||40)):'ручной');
+  }
 
-    // Live polling must never destroy unsaved expert edits. Active candidate
-    // is shown in pills, while fields always represent the saved baseline.
-    if(!warpFormDirty&&!warpSaveInFlight){
-      byId('warpEndpoint').value=data.configured_endpoint||'162.159.192.1';
-      byId('warpPort').value=data.configured_port||'500';
-      byId('warpJc').value=data.jc||'5';
-      byId('warpJmin').value=data.jmin||'40';
-      byId('warpJmax').value=data.jmax||'70';
-      byId('warpDns').value=data.dns||'1.1.1.1 1.0.0.1';
-      byId('warpAdaptive').value=String(data.adaptive??'1');
-      byId('warpSipForce').value=String(data.sip_force??'0');
+  async function loadHotspot() {
+    try {
+      const data = JSON.parse(await control('json-hotspot-settings'));
+      const active = document.activeElement;
+      if (active !== byId('hotspot')) byId('hotspot').value = data.enable_hotspot;
+      if (active !== byId('vpnHotspot')) byId('vpnHotspot').value = data.enable_vpn_hotspot;
+      if (active !== byId('tun')) byId('tun').value = data.vpn_tun_name;
+      if (active !== byId('vpnFallback')) byId('vpnFallback').value = data.vpn_fallback_mode || 'ANTIDPI';
+      if (active !== byId('hotspotQuic')) byId('hotspotQuic').value = data.force_tcp_hotspot;
+      if (active !== byId('dnsForward')) byId('dnsForward').value = data.dns_forward_hotspot;
+      if (active !== byId('dnsServers')) byId('dnsServers').value = data.dns_forward_servers;
+      syncDependentControls();
+    } catch (error) {
+      console.warn('Hotspot load error:', error);
     }
-
-    byId('warpTrafficPill').textContent='Трафик: ↓ '+formatBytes(latestWarpRx)+' · ↑ '+formatBytes(latestWarpTx);
-    updateWarpHandshakeUI();
-    syncWarpControls();
-  }catch(error){
-    if(!options.silent)toast('Ошибка WARP: '+error.message);
   }
-}
 
-async function manualRefreshWarp(){
-  await busy('refreshWarpBtn','Обновление данных WARP…');
-  try{
-    await loadWarp();
-    done('refreshWarpBtn','Данные WARP обновлены');
-  }catch(error){
-    done('refreshWarpBtn','Ошибка: '+error.message);
+  function validIpv4(value) {
+    const p = String(value).split('.');
+    return p.length === 4 && p.every(x => /^\d{1,3}$/.test(x) && Number(x) >= 0 && Number(x) <= 255);
   }
-}
-
-async function saveWarp(){
-  await busy('saveWarpBtn','Сохранение настроек WARP…');
-  warpSaveInFlight=true;
-  try{
-    const enabled=byId('enableWarp').value,ep=byId('warpEndpoint').value.trim()||'162.159.192.1',port=byId('warpPort').value.trim()||'500',jc=byId('warpJc').value.trim()||'5',jmin=byId('warpJmin').value.trim()||'40',jmax=byId('warpJmax').value.trim()||'70',dns=byId('warpDns').value.trim()||'1.1.1.1 1.0.0.1',adaptive=byId('warpAdaptive').value||'1',sipForce=byId('warpSipForce').value||'0';
-    await control('warp-save',enabled,ep,port,jc,jmin,jmax,'0','0',dns,adaptive,sipForce);
-    warpFormDirty=false;
-    warpSaveInFlight=false;
-    await loadWarp({silent:true});
-    done('saveWarpBtn',enabled==='1'?(adaptive==='1'?'Настройки сохранены · подбор запущен':'Настройки сохранены · ручной профиль запускается'):'WARP отключен');
-  }catch(error){
-    warpSaveInFlight=false;
-    done('saveWarpBtn','Ошибка: '+error.message);
+  function validDnsPool(value) {
+    const parts = String(value).trim().split(/\s+/).filter(Boolean);
+    return parts.length > 0 && parts.every(validIpv4);
   }
-}
 
-async function restartWarp(){
-  await busy('restartWarpBtn','Перезапуск туннеля…');
-  try{
-    await control('warp-restart');
-    await loadWarp();
-    done('restartWarpBtn','Туннель перезапускается, подбор профиля начат заново');
-  }catch(error){
-    done('restartWarpBtn','Ошибка: '+error.message);
-  }
-}
-
-async function rekeyWarp(){
-  await busy('rekeyWarpBtn','Регистрация нового ключа WARP…');
-  try{
-    await control('warp-rekey');
-    await loadWarp({silent:true});
-    done('rekeyWarpBtn','Перерегистрация ключа запущена');
-  }catch(error){
-    done('rekeyWarpBtn','Ошибка: '+error.message);
-  }
-}
-
-['enableWarp','warpEndpoint','warpPort','warpAdaptive','warpSipForce','warpJc','warpJmin','warpJmax','warpDns'].forEach(id=>{
-  const el=byId(id);if(!el)return;
-  el.addEventListener('input',markWarpDirty);
-  el.addEventListener('change',markWarpDirty);
-});
-
-function startLiveUpdates(){
-  if(!liveTickerTimer){
-    liveTickerTimer=setInterval(()=>{
-      if(document.visibilityState==='visible'){
-        updateWarpHandshakeUI();
+  async function applyHotspot() {
+    showToast('Сохранение настроек раздачи…');
+    try {
+      const dns = byId('dnsServers').value.trim();
+      if (byId('dnsForward').value === '1' && !validDnsPool(dns)) {
+        throw new Error('DNS-пул должен содержать корректные IPv4-адреса через пробел');
       }
-    },1000);
-  }
-  if(!livePollingTimer){
-    livePollingTimer=setInterval(async()=>{
-      if(document.visibilityState!=='visible'||isPollingActive)return;
-      isPollingActive=true;
-      try{
-        await Promise.all([
-          loadStatus({silent:true}),
-          loadWarp({silent:true})
-        ]);
-      }catch(_){
-      }finally{
-        isPollingActive=false;
-      }
-    },2500);
-  }
-}
-
-function stopLiveUpdates(){
-  if(liveTickerTimer){clearInterval(liveTickerTimer);liveTickerTimer=null;}
-  if(livePollingTimer){clearInterval(livePollingTimer);livePollingTimer=null;}
-}
-
-function getCollapsedSet(){
-  try{
-    const raw=localStorage.getItem('zapret2_collapsed_cards');
-    if(raw!==null)return new Set(JSON.parse(raw));
-  }catch(_){}
-  return new Set(['hotspotSection','strategySection','diagSection']);
-}
-function saveCollapsedSet(set){try{localStorage.setItem('zapret2_collapsed_cards',JSON.stringify([...set]))}catch(_){}}
-function toggleCard(id,forceState=null){const card=byId(id);if(!card)return;const set=getCollapsedSet();const shouldCollapse=forceState!==null?forceState:!card.classList.contains('collapsed');card.classList.toggle('collapsed',shouldCollapse);if(shouldCollapse)set.add(id);else set.delete(id);saveCollapsedSet(set);updateToggleAllBtn()}
-function expandCard(id){toggleCard(id,false)}
-function updateToggleAllBtn(){const btn=byId('toggleAllBtn');if(!btn)return;const cards=[...document.querySelectorAll('.content > .card')];const allCollapsed=cards.every(c=>c.classList.contains('collapsed'));btn.textContent=allCollapsed?'⇕ Развернуть':'⇕ Свернуть'}
-function toggleAllCards(){const cards=[...document.querySelectorAll('.content > .card')];const allCollapsed=cards.every(c=>c.classList.contains('collapsed'));cards.forEach(c=>toggleCard(c.id,!allCollapsed));updateToggleAllBtn()}
-function restoreCardStates(){const set=getCollapsedSet();document.querySelectorAll('.content > .card').forEach(card=>{card.classList.toggle('collapsed',set.has(card.id))});updateToggleAllBtn()}
-
-function installMotion(){
-  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-  document.addEventListener('pointerdown',event=>{
-    const button=event.target.closest('button');
-    if(!button||button.disabled||reduced)return;
-    const r=button.getBoundingClientRect(),size=Math.max(r.width,r.height)*.7,span=document.createElement('span');
-    span.className='ripple';
-    span.style.width=span.style.height=size+'px';
-    span.style.left=(event.clientX-r.left)+'px';
-    span.style.top=(event.clientY-r.top)+'px';
-    button.appendChild(span);
-    span.addEventListener('animationend',()=>span.remove());
-  });
-  const nav=[...document.querySelectorAll('.nav-chip[data-target]')];
-  nav.forEach(btn=>btn.addEventListener('click',()=>{
-    const targetId=btn.dataset.target;
-    if(targetId){
-      expandCard(targetId);
-      byId(targetId)?.scrollIntoView({behavior:reduced?'auto':'smooth',block:'start'});
+      await control('hotspot-settings', byId('hotspot').value, byId('vpnHotspot').value, byId('tun').value.trim(), byId('vpnFallback').value, byId('hotspotQuic').value, byId('dnsForward').value, dns);
+      await loadHotspot();
+      await loadStatus();
+      showToast('Настройки раздачи применены');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
     }
-  }));
-  const top=byId('fabTop');
-  top.onclick=()=>scrollTo({top:0,behavior:reduced?'auto':'smooth'});
-  addEventListener('scroll',()=>top.classList.toggle('visible',scrollY>520),{passive:true});
-  if('IntersectionObserver'in window){
-    const revealObserver=new IntersectionObserver(entries=>entries.forEach(e=>{
-      if(e.isIntersecting){
-        e.target.classList.add('reveal');
-        revealObserver.unobserve(e.target);
+  }
+
+  async function loadStrategies() {
+    try {
+      const data = JSON.parse(await control('json-strategies'));
+      const active = document.activeElement;
+      if (active !== byId('smartMode')) byId('smartMode').value = data.active === 'CUSTOM' ? 'CUSTOM' : 'SMART';
+      if (active !== byId('strategyCustom')) byId('strategyCustom').value = data.custom || '';
+      byId('smartYoutubeProfile').textContent = 'YouTube · ' + (data.youtube_domains || 0) + ' доменов';
+      byId('smartGeneralProfile').textContent = data.auto_profile_name === 'DIRECT' ? 'DIRECT (без обхода)' : 'AUTO (TLS/443)';
+      byId('smartAutoProfile').textContent = 'AUTO: ' + (data.auto_profile_name || data.auto_profile || 'OK');
+      byId('smartStrategyOrder').textContent = 'Порядок AUTO (' + (data.strategy_count || 0) + '): ' + (data.strategy_order || 'нет файлов');
+      syncSmartControls();
+    } catch (error) {
+      console.warn('Strategies load error:', error);
+    }
+  }
+
+  async function saveSmart() {
+    showToast('Сохранение стратегии SMART…');
+    try {
+      const mode = byId('smartMode').value;
+      const custom = byId('strategyCustom').value.trim();
+      await control('save-smart', mode, custom);
+      await Promise.all([loadStatus(), loadStrategies()]);
+      showToast('Стратегия SMART сохранена и применена');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function runAuto() {
+    showToast('Тестирование и подбор SMART-стратегии…');
+    try {
+      await control('auto-run');
+      await Promise.all([loadStatus(), loadStrategies()]);
+      showToast('Подбор SMART завершен');
+    } catch (error) {
+      showToast('Ошибка AUTO: ' + error.message);
+    }
+  }
+
+  async function clearAuto() {
+    showToast('Сброс кэша AUTO…');
+    try {
+      await control('auto-clear');
+      await Promise.all([loadStatus(), loadStrategies()]);
+      showToast('Кэш AUTO сброшен');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function loadWarp(options = {}) {
+    try {
+      const data = JSON.parse(await control('json-warp-status'));
+      latestWarpRunning = !!data.running;
+      latestWarpHandshake = Number(data.last_handshake) || 0;
+      latestWarpRx = Number(data.rx_bytes) || 0;
+      latestWarpTx = Number(data.tx_bytes) || 0;
+
+      const enableEl = byId('enableWarp');
+      if (enableEl && !warpFormDirty && !warpSaveInFlight && document.activeElement !== enableEl) {
+        enableEl.value = data.enable_warp || '0';
       }
-    }),{threshold:.08});
-    document.querySelectorAll('.card').forEach(c=>revealObserver.observe(c));
-    const navObserver=new IntersectionObserver(entries=>{
-      const visible=entries.filter(e=>e.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
-      if(!visible)return;
-      nav.forEach(btn=>btn.classList.toggle('active',btn.dataset.target===visible.target.id));
-    },{rootMargin:'-16% 0px -68% 0px',threshold:[0,.15,.35,.6]});
-    ['scopeSection','warpSection','hotspotSection','strategySection','diagSection','listsSection'].forEach(id=>{
-      const el=byId(id);
-      if(el)navObserver.observe(el);
+      const adaptResult = data.adaptive_result || 'pending';
+      const step = Number(data.adaptive_step) || 0;
+      const total = Math.max(1, Number(data.adaptive_total) || 40);
+      const adaptUpdated = Number(data.adaptive_updated) || 0;
+      const adaptAge = adaptUpdated ? Math.max(0, Math.floor(Date.now() / 1000) - adaptUpdated) : 0;
+
+      let warpState = 'Отключен', warpClass = '';
+      if (data.running) {
+        warpState = 'Работает';
+        warpClass = 'ok';
+      } else if (data.enable_warp === '1' && adaptResult === 'failed') {
+        warpState = 'Профиль не найден';
+        warpClass = 'bad';
+      } else if (data.enable_warp === '1' && data.interface_up) {
+        if (String(data.adaptive || '1') === '1') {
+          if (adaptResult === 'pending' && adaptAge > 30) {
+            warpState = 'Подбор ' + Math.min(step + 1, total) + '/' + total;
+            warpClass = 'warn';
+          } else {
+            warpState = 'Подбор ' + Math.min(step + 1, total) + '/' + total;
+            warpClass = 'warn';
+          }
+        } else {
+          warpState = 'Нет рукопожатия';
+          warpClass = 'bad';
+        }
+      } else if (data.enable_warp === '1') {
+        warpState = 'Запуск…';
+        warpClass = 'warn';
+      }
+
+      byId('warpStatusPill').textContent = 'Статус: ' + warpState;
+      byId('warpStatusPill').className = 'm3-pill ' + warpClass;
+      byId('warpIfacePill').textContent = 'Интерфейс: ' + (data.warp_dev || 'awg99');
+      byId('warpSipPill').textContent = 'Маскировка: ' + (data.sip_active ? 'SIP I1/I2' : 'BASIC');
+      byId('warpSipPill').className = 'm3-pill ' + (data.sip_active ? 'warn' : 'ok');
+
+      const ajc = data.active_jc || data.jc || '5', ajmin = data.active_jmin || data.jmin || '40', ajmax = data.active_jmax || data.jmax || '70';
+      byId('warpProfilePill').textContent = 'Профиль: J=' + ajc + ' / ' + ajmin + '–' + ajmax;
+
+      if (!warpFormDirty && !warpSaveInFlight) {
+        byId('warpEndpoint').value = data.configured_endpoint || '162.159.192.1';
+        byId('warpPort').value = data.configured_port || '500';
+        byId('warpJc').value = data.jc || '5';
+        byId('warpJmin').value = data.jmin || '40';
+        byId('warpJmax').value = data.jmax || '70';
+        byId('warpDns').value = data.dns || '1.1.1.1 1.0.0.1';
+        byId('warpAdaptive').value = String(data.adaptive ?? '1');
+        byId('warpSipForce').value = String(data.sip_force ?? '0');
+      }
+
+      byId('warpTrafficPill').textContent = 'Трафик: ↓ ' + formatBytes(latestWarpRx) + ' · ↑ ' + formatBytes(latestWarpTx);
+      updateWarpHandshakeUI();
+      syncWarpControls();
+    } catch (error) {
+      if (!options.silent) showToast('Ошибка WARP: ' + error.message);
+    }
+  }
+
+  async function manualRefreshWarp() {
+    showToast('Обновление данных туннеля…');
+    try {
+      await loadWarp();
+      showToast('Данные WARP обновлены');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function saveWarp() {
+    showToast('Сохранение параметров туннеля…');
+    warpSaveInFlight = true;
+    try {
+      const enabled = byId('enableWarp').value;
+      const ep = byId('warpEndpoint').value.trim() || '162.159.192.1';
+      const port = byId('warpPort').value.trim() || '500';
+      const jc = byId('warpJc').value.trim() || '5';
+      const jmin = byId('warpJmin').value.trim() || '40';
+      const jmax = byId('warpJmax').value.trim() || '70';
+      const dns = byId('warpDns').value.trim() || '1.1.1.1 1.0.0.1';
+      const adaptive = byId('warpAdaptive').value || '1';
+      const sipForce = byId('warpSipForce').value || '0';
+
+      await control('warp-save', enabled, ep, port, jc, jmin, jmax, '0', '0', dns, adaptive, sipForce);
+      warpFormDirty = false;
+      warpSaveInFlight = false;
+      await loadWarp({ silent: true });
+      showToast(enabled === '1' ? 'Параметры WARP сохранены' : 'Туннель WARP отключен');
+    } catch (error) {
+      warpSaveInFlight = false;
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function restartWarp() {
+    showToast('Перезапуск туннеля WARP…');
+    try {
+      await control('warp-restart');
+      await loadWarp();
+      showToast('Туннель перезапущен, подбор начат');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function rekeyWarp() {
+    showToast('Регистрация нового ключа WARP…');
+    try {
+      await control('warp-rekey');
+      await loadWarp({ silent: true });
+      showToast('Регистрация нового ключа запущена');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  const LIST_META = {
+    'domains': { title: 'Домены под обходом', hint: 'Одна запись на строку. Поддомены подхватываются сами: «youtube.com» покрывает и «www.youtube.com».' },
+    'exclude-domains': { title: 'Домены-исключения', hint: 'Эти домены модуль не трогает никогда в любом режиме (банки, Госуслуги, платежные шлюзы).' },
+    'ipset': { title: 'Подсети под обходом', hint: 'IP или CIDR подсети по одной на строку для прямого обхода по IP.' },
+    'ipset-exclude': { title: 'Подсети-исключения', hint: 'IP или CIDR подсети, которые никогда не направляются под обход.' },
+    'warp-domains': { title: 'Домены в туннель', hint: 'Домены, которые направляются через защищенный туннель WARP целиком.' },
+    'warp-nets': { title: 'Подсети в туннель', hint: 'IP или CIDR подсети, направляемые в туннель WARP.' }
+  };
+  let currentList = 'domains';
+
+  function selectList(name) {
+    if (!LIST_META[name]) return;
+    currentList = name;
+    document.querySelectorAll('.m3-chips-row .m3-chip').forEach(el => {
+      el.classList.toggle('active', el.dataset.list === name);
     });
-  }else document.querySelectorAll('.card').forEach(c=>c.classList.add('reveal'));
-}
-
-async function loadModuleIdentity(){
-  let version='';
-  try{
-    const info=JSON.parse(window.ksu?.moduleInfo?.()||'{}');
-    if(info.moduleDir)modDir=info.moduleDir;
-    if(info.version&&/^v?\d+(\.\d+)*(\s*\(\d+\))?$/.test(String(info.version).trim()))version=String(info.version).trim();
-  }catch(_){}
-  if(!version){
-    try{
-      const raw=(await control('module-version')).trim();
-      if(/^v?\d+(\.\d+)*(\s*\(\d+\))?$/.test(raw))version=raw;
-    }catch(_){}
+    byId('listHint').textContent = LIST_META[name].hint;
+    loadCurrentList();
   }
-  if(version&&byId('heroVersion'))byId('heroVersion').textContent=version;
-}
 
-document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'){
-    startLiveUpdates();
-    void Promise.all([loadStatus({silent:true}),loadWarp({silent:true})]);
-    clearTimeout(appVisibilitySyncTimer);
-    appVisibilitySyncTimer=setTimeout(()=>{if(apps.length)void syncAppListState()},300);
-  }else{
-    stopLiveUpdates();
+  const LIST_FILES = {
+    'domains': 'lists/user.list',
+    'exclude-domains': 'lists/exclude_domains.list',
+    'ipset': 'lists/ipset.list',
+    'ipset-exclude': 'lists/ipset_exclude.list',
+    'warp-domains': 'lists/warp_domains.list',
+    'warp-nets': 'lists/warp_bypass_nets.list'
+  };
+
+  async function readListFile(name) {
+    const rel = LIST_FILES[name];
+    const k = getKsuBridge();
+    if (k && typeof k.readFile === 'function') {
+      try { return String(await k.readFile(modDir + '/' + rel) ?? ''); } catch (_) {}
+    }
+    return '';
   }
-});
-window.addEventListener('focus',()=>{
-  startLiveUpdates();
-  void Promise.all([loadStatus({silent:true}),loadWarp({silent:true})]);
-});
 
-function filterFaq(){
-  const q=(byId('faqSearch')?.value||'').toLowerCase().trim();
-  document.querySelectorAll('.faq-item').forEach(item=>{
-    const text=item.textContent.toLowerCase();
-    const match=!q||text.includes(q);
-    item.style.display=match?'':'none';
-    if(q&&match) item.open=true;
+  async function loadCurrentList() {
+    const box = byId('listEditor');
+    box.value = '';
+    box.placeholder = 'Загрузка списка…';
+    try {
+      const text = await readListFile(currentList);
+      box.value = text;
+      box.placeholder = 'Список пуст. Добавьте записи по одной на строку.';
+    } catch (error) {
+      box.placeholder = 'Не удалось прочитать список: ' + error.message;
+    }
+  }
+
+  async function saveCurrentList() {
+    const btn = byId('saveList');
+    btn.disabled = true;
+    showToast('Сохранение списка…');
+    try {
+      await control('replace-list', currentList, byId('listEditor').value);
+      showToast(LIST_META[currentList].title + ': сохранено');
+      await loadStatus({ silent: true });
+    } catch (error) {
+      showToast('Ошибка сохранения: ' + error.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function applyHostlistMode() {
+    const mode = byId('hostlistMode').value;
+    try {
+      await control('hostlist-mode', mode);
+      showToast('Режим доменов изменен на ' + mode);
+      await loadStatus({ silent: true });
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function showLearned() {
+    const box = byId('learnedBox');
+    box.value = 'Загрузка…';
+    try {
+      const list = parseJson(await control('json-learned'), []);
+      box.value = Array.isArray(list) && list.length ? list.join('\n') : 'Пока ничего не выучено.';
+    } catch (error) {
+      box.value = 'Ошибка: ' + error.message;
+    }
+  }
+
+  async function clearLearned() {
+    showToast('Очистка выученных доменов…');
+    try {
+      await control('hostlist-clear');
+      byId('learnedBox').value = '';
+      showToast('Обучение успешно сброшено');
+      await loadStatus({ silent: true });
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function loadDiagnostics() {
+    try {
+      const data = JSON.parse(await control('json-diagnostics'));
+      if (document.activeElement !== byId('nfqwsDebug')) byId('nfqwsDebug').value = data.nfqws_debug;
+      byId('diagInfo').textContent = 'Лог: ' + data.service_log + ' · экспорт: ' + (data.export_dir || '/sdcard/eCubz');
+    } catch (error) {
+      console.warn('Diagnostics load error:', error);
+    }
+  }
+
+  async function applyNfqwsDebug() {
+    showToast('Применение уровня Debug…');
+    try {
+      const text = await control('nfqws-debug', byId('nfqwsDebug').value);
+      await Promise.all([loadStatus(), loadDiagnostics()]);
+      showToast(text.trim() || 'Уровень Debug обновлен');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function collectDiagnostics() {
+    showToast('Сбор диагностического отчёта…');
+    try {
+      const path = (await control('diag')).trim();
+      byId('diagLog').textContent = 'Диагностический отчёт создан:\n' + path + '\n\nОтправьте этот файл разработчику в Telegram, если проблема повторяется.';
+      showToast('Отчёт готов');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function exportLogs() {
+    showToast('Экспорт логов в /sdcard/eCubz…');
+    try {
+      const path = (await control('export-logs')).trim();
+      byId('diagLog').textContent = 'Логи успешно экспортированы:\n' + (path || '/sdcard/eCubz');
+      showToast('Логи экспортированы в /sdcard/eCubz');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function showServiceLog() {
+    showToast('Чтение лога службы…');
+    try {
+      byId('diagLog').textContent = await control('log', '300');
+      showToast('Лог службы загружен');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  async function showNfqwsLog() {
+    showToast('Чтение лога обхода nfqws2…');
+    try {
+      byId('diagLog').textContent = await control('nfqws-log', '300');
+      showToast('Лог обхода загружен');
+    } catch (error) {
+      showToast('Ошибка: ' + error.message);
+    }
+  }
+
+  function filterFaq() {
+    const q = (byId('faqSearch')?.value || '').toLowerCase().trim();
+    document.querySelectorAll('#faqList details').forEach(item => {
+      const text = item.textContent.toLowerCase();
+      const match = !q || text.includes(q);
+      item.style.display = match ? '' : 'none';
+      if (q && match) item.open = true;
+    });
+  }
+
+  function markWarpDirty() { warpFormDirty = true; }
+
+  ['enableWarp', 'warpEndpoint', 'warpPort', 'warpAdaptive', 'warpSipForce', 'warpJc', 'warpJmin', 'warpJmax', 'warpDns'].forEach(id => {
+    const el = byId(id);
+    if (!el) return;
+    el.addEventListener('input', markWarpDirty);
+    el.addEventListener('change', markWarpDirty);
   });
-}
 
-restoreCardStates();
-installMotion();
-syncDependentControls();
-syncSmartControls();
-syncWarpControls();
-void loadModuleIdentity();
-startLiveUpdates();
-Promise.all([loadStatus(),loadWarp(),loadHotspot(),loadStrategies(),loadDiagnostics(),loadCurrentList()]);
+  function startLiveUpdates() {
+    if (!liveTickerTimer) {
+      liveTickerTimer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          updateWarpHandshakeUI();
+        }
+      }, 1000);
+    }
+    if (!livePollingTimer) {
+      livePollingTimer = setInterval(async () => {
+        if (document.visibilityState !== 'visible' || isPollingActive) return;
+        isPollingActive = true;
+        try {
+          await Promise.all([
+            loadStatus({ silent: true }),
+            loadWarp({ silent: true })
+          ]);
+        } catch (_) {}
+        finally {
+          isPollingActive = false;
+        }
+      }, 2500);
+    }
+  }
+
+  function stopLiveUpdates() {
+    if (liveTickerTimer) { clearInterval(liveTickerTimer); liveTickerTimer = null; }
+    if (livePollingTimer) { clearInterval(livePollingTimer); livePollingTimer = null; }
+  }
+
+  async function loadModuleIdentity() {
+    let version = '';
+    try {
+      const k = getKsuBridge();
+      if (k && typeof k.moduleInfo === 'function') {
+        const info = JSON.parse(k.moduleInfo() || '{}');
+        if (info.moduleDir) modDir = info.moduleDir;
+        if (info.version) version = String(info.version).trim();
+      }
+    } catch (_) {}
+    if (!version) {
+      try {
+        const raw = (await control('module-version')).trim();
+        if (raw) version = raw;
+      } catch (_) {}
+    }
+    if (version && byId('heroVersion')) byId('heroVersion').textContent = version;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      startLiveUpdates();
+      void Promise.all([loadStatus({ silent: true }), loadWarp({ silent: true })]);
+    } else {
+      stopLiveUpdates();
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    startLiveUpdates();
+    void Promise.all([loadStatus({ silent: true }), loadWarp({ silent: true })]);
+  });
+
+  // Initialization
+  syncDependentControls();
+  syncSmartControls();
+  syncWarpControls();
+  void loadModuleIdentity();
+  startLiveUpdates();
+  Promise.all([
+    loadStatus({ silent: true }),
+    loadWarp({ silent: true }),
+    loadHotspot(),
+    loadStrategies(),
+    loadDiagnostics(),
+    loadCurrentList()
+  ]);
 </script>
-</body></html>
+</body>
+</html>
