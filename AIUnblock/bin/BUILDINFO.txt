@@ -1,5 +1,5 @@
 AIUnblock native build
-module_version=v3.1.0
+module_version=v3.1.1
 builder=go version go1.26.5 windows/amd64
 arm64-v8a=android/arm64 primary + linux/arm64 static fallback
 armeabi-v7a=linux/arm GOARM=7 static

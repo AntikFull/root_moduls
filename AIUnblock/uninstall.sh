@@ -6,13 +6,32 @@ ROUTER_PID_FILE="$MODDIR/.router.pid"
 [ -f "$MODDIR/lib/apps.sh" ] && . "$MODDIR/lib/apps.sh"
 [ -f "$MODDIR/lib/locales.sh" ] && . "$MODDIR/lib/locales.sh"
 
+pid_matches() {
+  local p="$1" expected="$2" exe comm cmdline
+  [ -n "$p" ] || return 1
+  case "$p" in *[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  [ -d "/proc/$p" ] || return 1
+
+  exe=$(readlink "/proc/$p/exe" 2>/dev/null)
+  case "$exe" in *"$expected"*) return 0 ;; esac
+
+  read -r comm 2>/dev/null < "/proc/$p/comm"
+  case "$comm" in *"$expected"*) return 0 ;; esac
+
+  if read -r cmdline 2>/dev/null < "/proc/$p/cmdline"; then
+    case "$cmdline" in *"$expected"*) return 0 ;; esac
+  fi
+
+  return 1
+}
+
 stop_pid_file() {
-  local file="$1" expected="$2" pid cmdline n=0
+  local file="$1" expected="$2" pid n=0
   pid=$(cat "$file" 2>/dev/null)
   case "$pid" in ""|*[!0-9]*) return 0 ;; esac
   kill -0 "$pid" 2>/dev/null || return 0
-  cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-  case "$cmdline" in *"$expected"*) ;; *) return 0 ;; esac
+  pid_matches "$pid" "$expected" || return 0
   kill "$pid" 2>/dev/null || return 0
   while [ "$n" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.1; n=$((n + 1)); done
   kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true

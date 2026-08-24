@@ -16,13 +16,33 @@ config_reload() {
   config_load "$AIUNBLOCK_CONFIG_FILE"
 }
 
+pid_matches() {
+  local p="$1" expected="$2" exe comm cmdline
+  [ -n "$p" ] || return 1
+  case "$p" in *[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  [ -d "/proc/$p" ] || return 1
+
+  exe=$(readlink "/proc/$p/exe" 2>/dev/null)
+  case "$exe" in *"$expected"*) return 0 ;; esac
+
+  read -r comm 2>/dev/null < "/proc/$p/comm"
+  case "$comm" in *"$expected"*) return 0 ;; esac
+
+  if read -r cmdline 2>/dev/null < "/proc/$p/cmdline"; then
+    case "$cmdline" in *"$expected"*) return 0 ;; esac
+  fi
+
+  return 1
+}
+
 router_state() {
-  local pid cmdline
+  local pid
   pid=$(cat "$MODDIR/.router.pid" 2>/dev/null)
   case "$pid" in ""|*[!0-9]*) echo "STOPPED"; return ;; esac
-  if kill -0 "$pid" 2>/dev/null; then
-    cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-    case "$cmdline" in *aiunblock-native*router*) echo "RUNNING pid=$pid"; return ;; esac
+  if kill -0 "$pid" 2>/dev/null && pid_matches "$pid" "aiunblock-native"; then
+    echo "RUNNING pid=$pid"
+    return
   fi
   echo "STALE pid=$pid"
 }
@@ -138,14 +158,13 @@ set_locale_mode() {
 }
 
 restart_router() {
-  local pid cmdline
+  local pid
   pid=$(cat "$MODDIR/.router.pid" 2>/dev/null)
   case "$pid" in
     ""|*[!0-9]*) ;;
     *)
-      if kill -0 "$pid" 2>/dev/null; then
-        cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-        case "$cmdline" in *aiunblock-native*router*) kill "$pid" 2>/dev/null || true ;; esac
+      if kill -0 "$pid" 2>/dev/null && pid_matches "$pid" "aiunblock-native"; then
+        kill "$pid" 2>/dev/null || true
       fi
       ;;
   esac

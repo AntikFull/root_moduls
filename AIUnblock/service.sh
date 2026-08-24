@@ -534,19 +534,43 @@ router_pid() {
   echo "$pid"
 }
 
+pid_matches() {
+  local p="$1" expected="$2" exe comm cmdline
+  [ -n "$p" ] || return 1
+  case "$p" in *[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  [ -d "/proc/$p" ] || return 1
+
+  # 1. Проверка exe link (быстро, атомарно, системный вызов readlink без чтения файлов)
+  exe=$(readlink "/proc/$p/exe" 2>/dev/null)
+  case "$exe" in *"$expected"*) return 0 ;; esac
+
+  # 2. Проверка comm (строго до 16 байт, безопасный read)
+  read -r comm 2>/dev/null < "/proc/$p/comm"
+  case "$comm" in *"$expected"*) return 0 ;; esac
+
+  # 3. Чистый read встроенным шеллом (останавливается на первом \0 или \n, не запуская внешний tr)
+  if read -r cmdline 2>/dev/null < "/proc/$p/cmdline"; then
+    case "$cmdline" in *"$expected"*) return 0 ;; esac
+  fi
+
+  return 1
+}
+
 # Вызывается на каждом пробуждении, поэтому без подстановок команд:
 # read из файла и kill -0 — встроенные в шелл, процессы не порождаются.
-# Полную сверку /proc/PID/cmdline делаем только при смене PID.
 router_running() {
-  local pid cmdline
+  local pid
   # 2>/dev/null обязан идти ПЕРЕД чтением: иначе сообщение об отсутствующем файле
   # печатает сам шелл, до применения перенаправления.
   read -r pid 2>/dev/null < "$ROUTER_PID_FILE" || return 1
   case "$pid" in ""|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
   [ "$pid" = "$ROUTER_PID_CACHE" ] && return 0
-  cmdline=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-  case "$cmdline" in *"$CORE_BIN"*) ROUTER_PID_CACHE="$pid"; return 0 ;; esac
+  if pid_matches "$pid" "aiunblock-native"; then
+    ROUTER_PID_CACHE="$pid"
+    return 0
+  fi
   return 1
 }
 
@@ -595,17 +619,17 @@ cleanup_stale_temp() {
 }
 
 acquire_lock() {
-  local old_pid cmdline
+  local old_pid
   if mkdir "$LOCKDIR" 2>/dev/null; then echo "$$" > "$LOCKDIR/pid"; return 0; fi
   old_pid=$(cat "$LOCKDIR/pid" 2>/dev/null)
   case "$old_pid" in
     ''|*[!0-9]*) ;;
     *)
       if kill -0 "$old_pid" 2>/dev/null; then
-        cmdline=$(tr '\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)
-        case "$cmdline" in
-          *"$MODDIR/service.sh"*) log "Повторный supervisor отклонн: PID $old_pid"; return 1 ;;
-        esac
+        if pid_matches "$old_pid" "service.sh" || pid_matches "$old_pid" "sh"; then
+          log "Повторный supervisor отклонён: PID $old_pid"
+          return 1
+        fi
         log "Найден stale lock с переиспользованным PID $old_pid; lock пересоздан"
       fi
       ;;
