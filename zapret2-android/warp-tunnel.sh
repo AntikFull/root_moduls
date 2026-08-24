@@ -1867,9 +1867,15 @@ adapt_retry_due() {
 }
 
 adaptive_bootstrap() {
-  local total step tries n=0 result
+  local total step tries n=0 result ptype is_custom_ru=0
   total=$(adaptive_total_steps)
-  if [ "${WARP_ADAPTIVE:-1}" != 1 ]; then
+  ptype=$(cat "$WARP_PROFILE_TYPE" 2>/dev/null | tr -d '\r\n')
+  case "$ptype" in
+    ""|"Free WARP"|"ecubz_warp.conf") is_custom_ru=0 ;;
+    *) is_custom_ru=1 ;;
+  esac
+
+  if [ "$is_custom_ru" -eq 1 ] || [ "${WARP_ADAPTIVE:-1}" != 1 ]; then
     if probe_handshake "$WARP_PROBE_TIMEOUT"; then write_adapt_state 0 ok || true; return 0; fi
     write_adapt_state 0 failed || true
     return 2
@@ -2059,7 +2065,14 @@ start_warp99_internal() {
 
   stop_warp99_internal
 
-  if [ "${WARP_ADAPTIVE:-1}" = 1 ]; then
+  local ptype is_custom_ru=0
+  ptype=$(cat "$WARP_PROFILE_TYPE" 2>/dev/null | tr -d '\r\n')
+  case "$ptype" in
+    ""|"Free WARP"|"ecubz_warp.conf") is_custom_ru=0 ;;
+    *) is_custom_ru=1 ;;
+  esac
+
+  if [ "$is_custom_ru" -eq 0 ] && [ "${WARP_ADAPTIVE:-1}" = 1 ]; then
     [ -f "$WARP_ADAPT_STATE" ] || write_adapt_state 0 pending || true
     apply_candidate 0 || log_w "WARP adaptive recovery: step=0 не применился; продолжим матрицу"
   else
