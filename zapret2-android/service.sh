@@ -37,8 +37,9 @@ STRATEGY_DIR="$MODDIR/strategies"
 STRATEGY_LIB="$MODDIR/strategy-lib.sh"
 [ -f "$STRATEGY_LIB" ] && . "$STRATEGY_LIB"
 
-mkdir -p "$LOG_DIR" "$RUN_DIR" 2>/dev/null
+mkdir -p "$LOG_DIR" "$RUN_DIR" "/data/adb/zapret2/ru" "/data/adb/zapret2/geo" 2>/dev/null
 chmod 0700 "$LOG_DIR" "$RUN_DIR" 2>/dev/null || true
+chmod 0755 /data/adb/zapret2 /data/adb/zapret2/ru /data/adb/zapret2/geo 2>/dev/null || true
 [ -d "$LISTS_DIR" ] && { chmod 0755 "$LISTS_DIR" 2>/dev/null || true; chmod 0644 "$LISTS_DIR"/* 2>/dev/null || true; }
 if ! : >> "$LOG_FILE" 2>/dev/null; then
   printf '[%s] pid=%s fatal: internal log is not writable: %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$$" "$LOG_FILE" >> "$RUN_DIR/boot-trace.log" 2>/dev/null

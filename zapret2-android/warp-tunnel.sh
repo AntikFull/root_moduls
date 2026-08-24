@@ -47,6 +47,8 @@ fi
 
 LISTS_DIR="$MODDIR/lists"
 [ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
+mkdir -p "$RU_CONF_DIR" "$GEO_CONF_DIR" "$RUN_DIR" "$STATE_DIR" 2>/dev/null || true
+chmod 0755 /data/adb/zapret2 "$RU_CONF_DIR" "$GEO_CONF_DIR" 2>/dev/null || true
 # ------------------------------------------------------------------------------
 # Конфигурация и единый источник правды (SSOT / DRY)
 # ------------------------------------------------------------------------------

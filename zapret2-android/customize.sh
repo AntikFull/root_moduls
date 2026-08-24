@@ -273,6 +273,8 @@ if [ -n "$UPGRADE_FROM" ] && [ -f "$MODPATH/zapret2.conf" ]; then
 fi
 mkdir -p "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "Не удалось создать рабочие каталоги logs/run/state"
 chmod 0700 "$MODPATH/logs" "$MODPATH/run" "$MODPATH/state" 2>/dev/null || fail_install "Не удалось установить права рабочих каталогов"
+mkdir -p /data/adb/zapret2/ru /data/adb/zapret2/geo 2>/dev/null || true
+chmod 0755 /data/adb/zapret2 /data/adb/zapret2/ru /data/adb/zapret2/geo 2>/dev/null || true
 
 ABI=$(getprop ro.product.cpu.abi 2>/dev/null)
 [ -n "$ABI" ] || ABI="$ARCH"
