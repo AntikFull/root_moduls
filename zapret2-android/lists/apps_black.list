@@ -1,0 +1,6 @@
+# Список приложений для принудительной маршрутизации в туннели AWG98 (Geo) / AWG99 (WARP).
+# Указывайте имя пакета (package name) или UID по одной записи на строку.
+# Строки, начинающиеся с #, игнорируются.
+ru.fourpda.client
+ru.fourpda.client.beta
+org.sovetnik.fourpda

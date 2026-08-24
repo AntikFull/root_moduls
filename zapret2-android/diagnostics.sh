@@ -163,17 +163,19 @@ pid_owned() {
   [ -x "$MODDIR/vpn-routing.sh" ] && "$MODDIR/vpn-routing.sh" verify >/dev/null 2>&1 && echo "vpn_rules=OK" || echo "vpn_rules=DRIFT/NOT_READY"
 
   section "СПИСКИ ДОМЕНОВ И ПОДСЕТЕЙ"
-  for f in user.list exclude_domains.list ipset.list ipset_exclude.list            warp_domains.list warp_bypass_nets.list probe_hosts.list wifi_direct_ssids.list; do
+  for f in user.list exclude_domains.list ipset.list ipset_exclude.list \
+           warp_domains.list warp_domains.user.list warp_bypass_nets.list \
+           geo_warp.list geo_warp.user.list apps_black.list \
+           dns.list dns.user.list probe_hosts.list wifi_direct_ssids.list; do
     n=$(grep -cvE '^[[:space:]]*(#|$)' "$lists_dir/$f" 2>/dev/null)
-    printf '%-24s %s записей
-' "$f" "$n"
+    printf '%-24s %s записей\n' "$f" "$n"
   done
   n=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/state/auto.list" 2>/dev/null)
-  printf '%-24s %s записей (выучено автоматически)
-' "state/auto.list" "$n"
+  printf '%-24s %s записей (выучено автоматически)\n' "state/auto.list" "$n"
   n=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/state/warp_auto_domains.list" 2>/dev/null)
-  printf '%-24s %s записей (уведено в туннель автоматически)
-' "state/warp_auto_domains.list" "$n"
+  printf '%-24s %s записей (уведено в туннель автоматически)\n' "state/warp_auto_domains.list" "$n"
+  n=$(grep -cvE '^[[:space:]]*(#|$)' "$MODDIR/state/geo_auto_domains.list" 2>/dev/null)
+  printf '%-24s %s записей (уведено в AWG98 автоматически)\n' "state/geo_auto_domains.list" "$n"
   echo
   echo "-- первые 20 выученных доменов --"
   grep -vE '^[[:space:]]*(#|$)' "$MODDIR/state/auto.list" 2>/dev/null | head -20
@@ -200,6 +202,9 @@ pid_owned() {
     run "$IPT" -w 5 -t nat -L ZAPRET2_NAT_PREROUTING -nvx --line-numbers
     run "$IPT" -w 5 -t nat -L ZAPRET2_VPN_NAT -nvx --line-numbers
     run "$IPT" -w 5 -t filter -L ZAPRET2_VPN_FORWARD -nvx --line-numbers
+    run "$IPT" -w 5 -t filter -L ZAPRET2_APPS_KILL -nvx --line-numbers
+    run "$IPT" -w 5 -t nat -L ZAPRET2_APPS_DNS -nvx --line-numbers
+    run "$IPT" -w 5 -t nat -L ZAPRET2_WARP_DNS -nvx --line-numbers
     echo "-- builtin hook counters --"
     run "$IPT" -w 5 -t mangle -L INPUT -nvx --line-numbers
     run "$IPT" -w 5 -t mangle -L FORWARD -nvx --line-numbers
@@ -217,6 +222,8 @@ pid_owned() {
     run "$IP6T" -w 5 -t filter -L ZAPRET2_FILTER -nvx --line-numbers
     run "$IP6T" -w 5 -t mangle -L ZAPRET2_MANGLE_FORWARD -nvx --line-numbers
     run "$IP6T" -w 5 -t filter -L ZAPRET2_FILTER_FORWARD -nvx --line-numbers
+    run "$IP6T" -w 5 -t filter -L ZAPRET2_APPS_KILL -nvx --line-numbers
+    run "$IP6T" -w 5 -t nat -L ZAPRET2_APPS_DNS -nvx --line-numbers
   }
 
   section "NFQUEUE / PROCESS"
@@ -244,6 +251,30 @@ pid_owned() {
   run "$IP" -6 route show table "$WARP_ROUTE_TABLE"
   [ -x "$IPT" ] && run "$IPT" -w 5 -t nat -L ZAPRET2_WARP_DNS -nvx --line-numbers
   [ -x "$IPT" ] && run "$IPT" -w 5 -t mangle -L ZAPRET2_WARP_MANGLE -nvx --line-numbers
+
+  section "GEO WARP & APPS BLACK (AWG98 / z2netd)"
+  echo "ENABLE_GEO_WARP=${ENABLE_GEO_WARP:-1}"
+  echo "GEO_DEV=${GEO_DEV:-awg98}"
+  if [ -x "$MODDIR/bin/awg" ]; then
+    run "$MODDIR/bin/awg" show "${GEO_DEV:-awg98}"
+  fi
+  echo "-- z2netd process --"
+  z2_pid=$(cat "$MODDIR/state/z2netd.pid" 2>/dev/null)
+  echo "z2netd_pid=$z2_pid"
+  [ -n "$z2_pid" ] && pid_cmdline "$z2_pid"
+  echo "-- geo policy routing (table 11887) --"
+  GEO_ROUTE_TABLE=$(sed -n 's/^GEO_ROUTE_TABLE="\([0-9][0-9]*\)"/\1/p' "$CONF_FILE" 2>/dev/null | head -n1)
+  [ -n "$GEO_ROUTE_TABLE" ] || GEO_ROUTE_TABLE=11887
+  run "$IP" -4 route show table "$GEO_ROUTE_TABLE"
+  run "$IP" -6 route show table "$GEO_ROUTE_TABLE"
+  [ -x "$IPT" ] && run "$IPT" -w 5 -t mangle -L ZAPRET2_APPS_MARK -nvx --line-numbers
+  [ -x "$IPT" ] && run "$IPT" -w 5 -t filter -L ZAPRET2_APPS_KILL -nvx --line-numbers
+  [ -x "$IPT" ] && run "$IPT" -w 5 -t nat -L ZAPRET2_APPS_DNS -nvx --line-numbers
+  [ -x "$IP6T" ] && run "$IP6T" -w 5 -t filter -L ZAPRET2_APPS_KILL -nvx --line-numbers
+  echo "-- apps_black resolved uids & active sockets --"
+  if [ -x "$MODDIR/bin/zapret2-control" ]; then
+    run "$MODDIR/bin/zapret2-control" diag-apps
+  fi
 
   section "ROUTING / TETHERING"
   run "$IP" rule show

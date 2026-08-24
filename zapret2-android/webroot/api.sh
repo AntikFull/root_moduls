@@ -32,13 +32,13 @@ send_response() {
 
 is_read_action() {
   case "$1" in
-    status|json-status|json-hotspot-settings|json-strategies|json-diagnostics|json-warp-status|json-hostlist|json-learned|module-version|auto-status|log|nfqws-log) return 0 ;;
+    status|json-status|json-connectivity|test-connectivity|json-hotspot-settings|json-strategies|json-diagnostics|json-warp-status|json-hostlist|json-learned|module-version|auto-status|log|nfqws-log) return 0 ;;
     *) return 1 ;;
   esac
 }
 is_write_action() {
   case "$1" in
-    hotspot-settings|save-smart|save-strategies|replace-list|nfqws-debug|diag|export-logs|auto-run|auto-clear|warp-toggle|warp-sip|warp-rekey|warp-restart|warp-save|restart|forcetcp|quicmode|hostlist-mode|hostlist-clear) return 0 ;;
+    hotspot-settings|save-smart|save-strategies|replace-list|replace-list-b64|nfqws-debug|diag|export-logs|auto-run|auto-clear|warp-toggle|warp-rekey|warp-restart|awg99-restart|awg99-stop|awg99-start|awg98-restart|awg98-stop|awg98-start|awg98-rotate|rotate-geo|restart|service-start|service-stop|start|stop|forcetcp|quicmode|hostlist-mode|hostlist-clear) return 0 ;;
     *) return 1 ;;
   esac
 }

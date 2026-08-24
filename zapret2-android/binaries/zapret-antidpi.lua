@@ -1245,3 +1245,94 @@ function dht_dn(ctx, desync)
 		return VERDICT_MODIFY
 	end
 end
+
+-- ==============================================================================
+-- ADVANCED DESYNC ENHANCEMENTS (2026 TSPU BYPASS SUITE)
+-- ==============================================================================
+
+-- zapret2 : QUIC (HTTP/3) Initial Spoofing & Desync
+-- standard args : direction, rawsend, fooling
+-- arg : dcid_rnd=1 - randomize destination connection ID in fake initial
+-- arg : pad=N - pad fake initial with garbage up to N bytes (default 1200)
+function quic_fake_initial(ctx, desync)
+	if not desync.dis.udp then
+		if not desync.dis.icmp then instance_cutoff_shim(ctx, desync) end
+		return
+	end
+	direction_cutoff_opposite(ctx, desync)
+	if direction_check(desync) and desync.l7payload=="quic_initial" then
+		DLOG("quic_fake_initial: preparing fake initial for QUIC packet")
+		local fake = deepcopy(desync.dis)
+		apply_fooling(desync, fake)
+		local pad_size = tonumber(desync.arg.pad) or 1200
+		-- create pseudo-random initial packet header (Long Header: 0xC0 | version 0x00000001)
+		local fake_payload = "\xc0\x00\x00\x00\x01\x08" .. brandom(8) .. "\x08" .. brandom(8)
+		if #fake_payload < pad_size then
+			fake_payload = fake_payload .. brandom(pad_size - #fake_payload)
+		end
+		fake.payload = fake_payload
+		local opts = desync_opts(desync)
+		rawsend_dissect_ipfrag(fake, opts)
+		DLOG("quic_fake_initial: fake QUIC initial sent (len="..#fake_payload..")")
+	end
+end
+
+-- zapret2 : Discord Voice WebRTC UDP Obfuscation & Padding
+-- standard args : direction
+-- arg : pad_rnd=N - add 0..N bytes random padding to RTP payload (default 16)
+-- arg : rtp_mask=1 - mask RTP header marker bits to bypass voice signatures
+function discord_voice_obfs(ctx, desync)
+	if not desync.dis.udp then
+		if not desync.dis.icmp then instance_cutoff_shim(ctx, desync) end
+		return
+	end
+	direction_cutoff_opposite(ctx, desync)
+	if direction_check(desync) and #desync.dis.payload >= 12 then
+		local dport = desync.dis.udp.th_dport or 0
+		-- Discord voice UDP servers operate on 50000-65535 or specific RTC ranges
+		if (dport >= 50000 and dport <= 65535) or desync.arg.force then
+			local pad_rnd = tonumber(desync.arg.pad_rnd) or 16
+			local add_bytes = math.random(0, pad_rnd)
+			if add_bytes > 0 then
+				desync.dis.payload = desync.dis.payload .. brandom(add_bytes)
+				DLOG("discord_voice_obfs: added "..add_bytes.." bytes padding for port "..dport)
+				return VERDICT_MODIFY
+			end
+		end
+	end
+end
+
+-- zapret2 : TLS Extension Multi-Split (SNI, ECH & Handshake Header)
+-- standard args : direction, rawsend, fooling, repeats
+-- arg : split_ext=1 - split at SNI extension boundary
+-- arg : seqovl=N - overlap bytes with pattern
+function tls_ext_split(ctx, desync)
+	if not desync.dis.tcp then
+		if not desync.dis.icmp then instance_cutoff_shim(ctx, desync) end
+		return
+	end
+	direction_cutoff_opposite(ctx, desync)
+	local data = desync.reasm_data or desync.dis.payload
+	if #data > 0 and direction_check(desync) and payload_check(desync) then
+		if replay_first(desync) then
+			-- resolve split positions: 1 (after Record Header), midsld (inside SNI)
+			local pos = resolve_multi_pos(data, desync.l7payload, "1,midsld")
+			delete_pos_1(pos)
+			if #pos > 0 then
+				local seqovl
+				if desync.arg.seqovl then
+					seqovl = resolve_pos(data, desync.l7payload, desync.arg.seqovl)
+				end
+				if multidisorder_send(desync, data, seqovl, pos) == VERDICT_PASS then
+					return VERDICT_PASS
+				end
+				replay_drop_set(desync)
+				return desync.arg.nodrop and VERDICT_PASS or VERDICT_DROP
+			end
+		end
+		if replay_drop(desync) then
+			return desync.arg.nodrop and VERDICT_PASS or VERDICT_DROP
+		end
+	end
+end
+

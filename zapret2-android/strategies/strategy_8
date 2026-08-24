@@ -1,0 +1,4 @@
+# NAME=YOUTUBE_DISORDER_COMBO
+--lua-desync=fake:blob=fake_default_tls:repeats=3:tls_mod=rnd,dupsid:tcp_ts_up
+--lua-desync=multidisorder:pos=1,midsld:seqovl=2:seqovl_pattern=0x1603030000
+--lua-desync=quic_fake_initial:pad=1200

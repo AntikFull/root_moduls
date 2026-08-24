@@ -135,10 +135,38 @@ del_bounded $IP6T -t filter -D FORWARD -j ZAPRET2_FILTER_FORWARD
 $IP6T -t filter -F ZAPRET2_FILTER_FORWARD 2>/dev/null
 $IP6T -t filter -X ZAPRET2_FILTER_FORWARD 2>/dev/null
 
-# Очистка цепочек WARP и устаревших правил AI Router
+# Очистка цепочек WARP, Geo WARP и apps_black Killswitch / DNS / Mangle / Bypass
+del_bounded $IPT -t mangle -D ZAPRET2_MANGLE -j ZAPRET2_APPS_BYPASS
+$IPT -t mangle -F ZAPRET2_APPS_BYPASS 2>/dev/null
+$IPT -t mangle -X ZAPRET2_APPS_BYPASS 2>/dev/null
+
+del_bounded $IPT -t mangle -D OUTPUT -j ZAPRET2_APPS_MARK
+$IPT -t mangle -F ZAPRET2_APPS_MARK 2>/dev/null
+$IPT -t mangle -X ZAPRET2_APPS_MARK 2>/dev/null
+
 del_bounded $IPT -t nat -D OUTPUT -j ZAPRET2_WARP_DNS
 $IPT -t nat -F ZAPRET2_WARP_DNS 2>/dev/null
 $IPT -t nat -X ZAPRET2_WARP_DNS 2>/dev/null
+
+del_bounded $IPT -t nat -D OUTPUT -j ZAPRET2_APPS_DNS
+$IPT -t nat -F ZAPRET2_APPS_DNS 2>/dev/null
+$IPT -t nat -X ZAPRET2_APPS_DNS 2>/dev/null
+
+del_bounded $IP6T -t nat -D OUTPUT -j ZAPRET2_APPS_DNS
+$IP6T -t nat -F ZAPRET2_APPS_DNS 2>/dev/null
+$IP6T -t nat -X ZAPRET2_APPS_DNS 2>/dev/null
+
+del_bounded $IPT -t filter -D OUTPUT -j ZAPRET2_APPS_KILL
+$IPT -t filter -F ZAPRET2_APPS_KILL 2>/dev/null
+$IPT -t filter -X ZAPRET2_APPS_KILL 2>/dev/null
+
+del_bounded $IP6T -t filter -D OUTPUT -j ZAPRET2_APPS_KILL
+$IP6T -t filter -F ZAPRET2_APPS_KILL 2>/dev/null
+$IP6T -t filter -X ZAPRET2_APPS_KILL 2>/dev/null
+
+del_bounded $IP6T -t raw -D OUTPUT -j ZAPRET2_APPS_KILL
+$IP6T -t raw -F ZAPRET2_APPS_KILL 2>/dev/null
+$IP6T -t raw -X ZAPRET2_APPS_KILL 2>/dev/null
 
 del_bounded $IPT -t mangle -D OUTPUT -j ZAPRET2_WARP_MANGLE
 del_bounded $IPT -t mangle -D POSTROUTING -j ZAPRET2_WARP_MANGLE
@@ -157,8 +185,27 @@ $IPT -t filter -F ZAPRET2_AI_FLT 2>/dev/null
 $IPT -t filter -X ZAPRET2_AI_FLT 2>/dev/null
 del_bounded $IPT -t nat -D OUTPUT -p tcp -m multiport --dports 80,443 -j REDIRECT --to-ports 15359
 
+# Безопасное снятие ip rule строго для таблиц модуля (11887, 11888, 11999) и fwmark 0x00040000
+ip -4 rule del fwmark 0x00040000/0x00040000 2>/dev/null || true
+ip -6 rule del fwmark 0x00040000/0x00040000 2>/dev/null || true
+
+for tbl in 11887 11888 11999; do
+  while ip -4 rule show 2>/dev/null | grep -q "lookup $tbl"; do
+    ip -4 rule del lookup "$tbl" 2>/dev/null || break
+  done
+  while ip -6 rule show 2>/dev/null | grep -q "lookup $tbl"; do
+    ip -6 rule del lookup "$tbl" 2>/dev/null || break
+  done
+  ip -4 route flush table "$tbl" 2>/dev/null || true
+  ip -6 route flush table "$tbl" 2>/dev/null || true
+done
+ip -4 route flush cache 2>/dev/null || true
+ip -6 route flush cache 2>/dev/null || true
+
+pkill -9 z2netd 2>/dev/null || true
+
 rm -f /tmp/zapret2_apps_cache.json 2>/dev/null
 rm -f /tmp/zapret2_apps_new.json 2>/dev/null
 
 rm -rf "$RUN_DIR/app-sync.lock" "$RUN_DIR/service.lock" "$RUN_DIR/vpn-routing.lock" "$RUN_DIR/auto-select.lock" "$RUN_DIR/warp.lock" "$RUN_DIR/on_change.lock" 2>/dev/null
-rm -f "$RUN_DIR/webui.token" "$RUN_DIR/webui.port" "$RUN_DIR/config.sig" 2>/dev/null  # webui.token — от прежних версий
+rm -f "$RUN_DIR/webui.token" "$RUN_DIR/webui.port" "$RUN_DIR/config.sig" "$RUN_DIR/z2netd.pid" "$RUN_DIR/apps-black-rules.state" 2>/dev/null

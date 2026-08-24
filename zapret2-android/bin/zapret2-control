@@ -6,6 +6,7 @@ case "$SELF_DIR" in /*) ;; *) SELF_DIR="$(pwd)/$SELF_DIR" ;; esac
 MODDIR="${SELF_DIR%/bin}"
 [ -f "$MODDIR/module.prop" ] || MODDIR="/data/adb/modules/zapret2-android"
 CONF_FILE="$MODDIR/zapret2.conf"
+: "${STATE_DIR:=$MODDIR/state}"
 LISTS_DIR="$MODDIR/lists"
 [ -d "$LISTS_DIR" ] || LISTS_DIR="$MODDIR"
 USER_DOMAINS_FILE="$LISTS_DIR/user.list"
@@ -179,7 +180,9 @@ list_file() {
     ipset) echo "$IPSET_FILE" ;;
     ipset-exclude) echo "$IPSET_EXCLUDE_FILE" ;;
     warp-domains) echo "$WARP_DOMAINS_FILE" ;;
+    geo-warp|geo-domains) echo "$MODDIR/lists/geo_warp.list" ;;
     warp-nets) echo "$WARP_BYPASS_NETS_FILE" ;;
+    apps-black|apps_black|apps) echo "$MODDIR/lists/apps_black.list" ;;
     *) return 1 ;;
   esac
 }
@@ -342,6 +345,7 @@ cmd_replace_list() {
   file=$(list_file "$list") || { echo "Неизвестный список: $list" >&2; return 1; }
   case "$list" in
     ipset|ipset-exclude|warp-nets) kind=net ;;
+    apps-black|apps_black|apps) kind=pkg ;;
     *) kind=domain ;;
   esac
   tmp="$RUN_DIR/list_replace.$$.tmp"; : > "$tmp" || return 1
@@ -351,6 +355,8 @@ cmd_replace_list() {
     esac
     if [ "$kind" = net ]; then
       case "$line" in *[!0-9A-Fa-f.:/\ \#-]*) exit 1 ;; esac
+    elif [ "$kind" = pkg ]; then
+      validate_pkg "$line" || exit 1
     else
       case "$line" in *[!A-Za-z0-9._*\ \#-]*) exit 1 ;; esac
     fi
@@ -361,14 +367,20 @@ cmd_replace_list() {
   mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
   chmod 0644 "$file" 2>/dev/null || true
   case "$list" in
-    warp-domains|warp-nets)
-      # Маршрутизация туннеля перестраивается без перезапуска nfqws2.
-      sh "$MODDIR/warp-tunnel.sh" sync >/dev/null 2>&1 || true
+    warp-domains|warp-nets|geo-warp|geo-domains|apps-black|apps_black|apps)
+      # Маршрутизация туннелей перестраивается без перезапуска nfqws2.
+      sh "$MODDIR/warp-tunnel.sh" sync-dest-rules >/dev/null 2>&1 || true
       echo '{"ok":true,"applied":"warp"}' ;;
     *)
       reload_service
       echo '{"ok":true,"applied":"service"}' ;;
   esac
+}
+
+cmd_replace_list_b64() {
+  local list="$1" b64="$2" decoded
+  decoded=$(printf '%s' "$b64" | base64 -d 2>/dev/null)
+  cmd_replace_list "$list" "$decoded"
 }
 
 cmd_json_diagnostics() {
@@ -462,6 +474,8 @@ cmd_tail_log() {
 
 cmd_json_warp_status() {
   load_conf
+  export WG_UAPI_DIR="/dev/wireguard"
+  export AMNEZIAWG_UAPI_DIR="/dev/wireguard"
   local dev="${WARP_DEV:-awg99}" table="${WARP_ROUTE_TABLE:-11888}" enabled="${ENABLE_WARP:-0}"
   local running=false interface_up=false routing_ok=false rules_ok=true endpoint="" rx_bytes=0 tx_bytes=0 last_handshake=0 warp_domains_count=0 active_dns=""
   local warp_domains_file="$LISTS_DIR/warp_domains.list" state_file="$MODDIR/state/warp-domain-ips.state"
@@ -479,29 +493,9 @@ cmd_json_warp_status() {
   if ip link show dev "$dev" >/dev/null 2>&1; then
     interface_up=true
     ip -4 route show table "$table" default 2>/dev/null | grep -q "default.*dev $dev" && routing_ok=true
-    # Маршруты туннеля теперь адресные, а не по UID. Состояние хранит строки вида
-    # "версия|домен|адрес"; проверяем, что для каждого адреса есть правило.
-    # Раньше здесь искался uidrange, поэтому rules_ok был false всегда, хотя
-    # маршрутизация работала.
     if [ -f "$state_file" ] && [ -s "$state_file" ]; then
-      # Снимок правил делаем один раз: адресов может быть много, а форк
-      # `ip rule show` на каждый из них заметно тормозит опрос статуса.
-      local rules4 rules6
-      rules4=$(ip -4 rule show 2>/dev/null)
-      rules6=$(ip -6 rule show 2>/dev/null)
-      while IFS='|' read -r fam _dom addr; do
-        [ -n "$addr" ] || continue
-        case "$addr" in *[!0-9A-Fa-f.:]*) continue ;; esac
-        if [ "$fam" = 6 ]; then
-          printf '%s
-' "$rules6" | grep -Fq "to $addr" || rules_ok=false
-        else
-          printf '%s
-' "$rules4" | grep -Fq "to $addr" || rules_ok=false
-        fi
-      done < "$state_file"
+      ip -4 rule show 2>/dev/null | grep -q "lookup $table" || rules_ok=false
     elif [ "${warp_domains_count:-0}" -gt 0 ] 2>/dev/null; then
-      # Домены заданы, но ни один адрес ещё не разрешён — маршрутов для них нет.
       rules_ok=false
     fi
 
@@ -516,8 +510,7 @@ cmd_json_warp_status() {
     fi
   fi
   [ -n "$endpoint" ] || endpoint="${WARP_ENDPOINT:-162.159.192.1}:${WARP_PORT:-500}"
-  case "$last_handshake" in ''|*[!0-9]*) last_handshake=0 ;; esac
-  [ "$interface_up" = true ] && [ "$routing_ok" = true ] && [ "$rules_ok" = true ] && [ "$last_handshake" -gt 0 ] 2>/dev/null && running=true
+  [ "$interface_up" = true ] && [ "$routing_ok" = true ] && [ "$last_handshake" -gt 0 ] 2>/dev/null && running=true
 
   local sip_active=false
   if [ -f "$warp_conf" ]; then
@@ -534,9 +527,43 @@ cmd_json_warp_status() {
   [ "$sip_active" = true ] && adapt_mode=sip || adapt_mode=basic
   now=$(date +%s 2>/dev/null || echo 0); case "$now" in ''|*[!0-9]*) now=0 ;; esac
   if [ "$last_handshake" -gt 0 ] 2>/dev/null && [ "$now" -ge "$last_handshake" ] 2>/dev/null; then handshake_age=$((now-last_handshake)); fi
-  if [ "$running" = true ] && { [ "$handshake_age" -lt 0 ] 2>/dev/null || [ "$handshake_age" -ge 180 ] 2>/dev/null; }; then running=false; fi
-  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"interface_up":%s,"routing_ok":%s,"rules_ok":%s,"endpoint":"%s","configured_endpoint":"%s","configured_port":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"handshake_age":%s,"jc":"%s","jmin":"%s","jmax":"%s","active_jc":"%s","active_jmin":"%s","active_jmax":"%s","adaptive":"%s","sip_force":"%s","adaptive_step":%s,"adaptive_total":%s,"adaptive_result":"%s","adaptive_updated":%s,"adaptive_retry_sec":%s,"adaptive_mode":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"warp_domains":%s,"dns":"%s","dns_force":"%s"}\n' \
-    "$enabled" "$dev" "$running" "$interface_up" "$routing_ok" "$rules_ok" "$(json_escape "$endpoint")" "$(json_escape "${WARP_ENDPOINT:-162.159.192.1}")" "${WARP_PORT:-500}" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "$handshake_age" "${WARP_JC:-5}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "$active_jc" "$active_jmin" "$active_jmax" "${WARP_ADAPTIVE:-1}" "${WARP_SIP_FORCE:-0}" "$adapt_step" "$adapt_total" "$adapt_result" "$adapt_updated" "${WARP_ADAPT_RETRY_SEC:-300}" "$adapt_mode" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$warp_domains_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}"
+
+  local profile_type="Free WARP"
+  if [ -f "$MODDIR/state/warp-profile.type" ]; then
+    profile_type=$(cat "$MODDIR/state/warp-profile.type" 2>/dev/null | tr -d '\r\n')
+  fi
+
+  # AWG98 (Geo) Status
+  local geo_dev="${GEO_WARP_DEV:-awg98}" geo_enabled="${ENABLE_GEO_WARP:-1}"
+  local geo_running=false geo_if_up=false geo_routing_ok=false geo_endpoint="" geo_rx_bytes=0 geo_tx_bytes=0 geo_last_hs=0 geo_hs_age=-1
+  local geo_domains_count=0 geo_profile_type="None"
+  geo_domains_count=$(awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}' "$LISTS_DIR/geo_warp.list" 2>/dev/null || echo 0)
+
+  if [ -f "$MODDIR/state/geo-profile.type" ]; then
+    geo_profile_type=$(cat "$MODDIR/state/geo-profile.type" 2>/dev/null | tr -d '\r\n')
+  fi
+
+  if ip link show dev "$geo_dev" >/dev/null 2>&1; then
+    geo_if_up=true
+    ip -4 route show table "${GEO_WARP_TABLE:-11887}" default 2>/dev/null | grep -q "default.*dev $geo_dev" && geo_routing_ok=true
+    if [ -x "$MODDIR/bin/awg" ]; then
+      _geo_raw=$(run_with_timeout 2 "$MODDIR/bin/awg" show "$geo_dev" 2>/dev/null) || _geo_raw=""
+      geo_endpoint=$(printf '%s\n' "$_geo_raw" | sed -n 's/^endpoint=//p' | head -n1)
+      geo_last_hs=$(printf '%s\n' "$_geo_raw" | sed -n 's/^last_handshake_time_sec=//p' | head -n1)
+      geo_rx_bytes=$(printf '%s\n' "$_geo_raw" | sed -n 's/^rx_bytes=//p' | head -n1)
+      geo_tx_bytes=$(printf '%s\n' "$_geo_raw" | sed -n 's/^tx_bytes=//p' | head -n1)
+      case "$geo_rx_bytes" in ''|*[!0-9]*) geo_rx_bytes=0 ;; esac
+      case "$geo_tx_bytes" in ''|*[!0-9]*) geo_tx_bytes=0 ;; esac
+    fi
+  fi
+  case "$geo_last_hs" in ''|*[!0-9]*) geo_last_hs=0 ;; esac
+  [ "$geo_if_up" = true ] && [ "$geo_routing_ok" = true ] && [ "$geo_last_hs" -gt 0 ] 2>/dev/null && geo_running=true
+  if [ "$geo_last_hs" -gt 0 ] 2>/dev/null && [ "$now" -ge "$geo_last_hs" ] 2>/dev/null; then geo_hs_age=$((now-geo_last_hs)); fi
+
+  printf '{"enable_warp":"%s","warp_dev":"%s","running":%s,"interface_up":%s,"routing_ok":%s,"rules_ok":%s,"endpoint":"%s","configured_endpoint":"%s","configured_port":"%s","rx_bytes":%s,"tx_bytes":%s,"last_handshake":%s,"handshake_age":%s,"jc":"%s","jmin":"%s","jmax":"%s","active_jc":"%s","active_jmin":"%s","active_jmax":"%s","adaptive":"%s","sip_force":"%s","adaptive_step":%s,"adaptive_total":%s,"adaptive_result":"%s","adaptive_updated":%s,"adaptive_retry_sec":%s,"adaptive_mode":"%s","s1":"%s","s2":"%s","i1":"%s","i2":"%s","sip_active":%s,"warp_domains":%s,"dns":"%s","dns_force":"%s","profile_type":"%s","enable_geo":"%s","geo_dev":"%s","geo_running":%s,"geo_interface_up":%s,"geo_profile_type":"%s","geo_endpoint":"%s","geo_rx_bytes":%s,"geo_tx_bytes":%s,"geo_last_handshake":%s,"geo_handshake_age":%s,"geo_domains":%s}\n' \
+    "$enabled" "$dev" "$running" "$interface_up" "$routing_ok" "$rules_ok" "$(json_escape "$endpoint")" "$(json_escape "${WARP_ENDPOINT:-162.159.192.1}")" "${WARP_PORT:-500}" "${rx_bytes:-0}" "${tx_bytes:-0}" "${last_handshake:-0}" "$handshake_age" "${WARP_JC:-5}" "${WARP_JMIN:-40}" "${WARP_JMAX:-70}" "$active_jc" "$active_jmin" "$active_jmax" "${WARP_ADAPTIVE:-1}" "${WARP_SIP_FORCE:-0}" "$adapt_step" "$adapt_total" "$adapt_result" "$adapt_updated" "${WARP_ADAPT_RETRY_SEC:-300}" "$adapt_mode" "${WARP_S1:-0}" "${WARP_S2:-0}" "$(json_escape "${WARP_I1:-}")" "$(json_escape "${WARP_I2:-}")" "$sip_active" "$warp_domains_count" "$(json_escape "$active_dns")" "${WARP_DNS_FORCE:-1}" \
+    "$(json_escape "$profile_type")" \
+    "$geo_enabled" "$geo_dev" "$geo_running" "$geo_if_up" "$(json_escape "$geo_profile_type")" "$(json_escape "$geo_endpoint")" "${geo_rx_bytes:-0}" "${geo_tx_bytes:-0}" "${geo_last_hs:-0}" "$geo_hs_age" "$geo_domains_count"
 }
 
 cmd_warp_toggle() {
@@ -547,31 +574,10 @@ cmd_warp_toggle() {
   else
     sh "$MODDIR/warp-tunnel.sh" stop
   fi
-  # Состав netfilter-правил зависит от ENABLE_WARP: от него зависят и подсети из
-  # warp_bypass_nets.list, и RETURN для UID туннельных приложений. Без пересборки
-  # цепочек переключатель менял только конфиг, но не поведение обхода.
   reload_service
   echo "{\"ok\":true,\"state\":\"$([ "$2" = 1 ] && echo starting || echo stopped)\"}"
 }
 
-cmd_warp_sip() {
-  case "$2" in
-    on|1|enable) sh "$MODDIR/warp-tunnel.sh" sip-on ;;
-    off|0|disable) sh "$MODDIR/warp-tunnel.sh" sip-off ;;
-    toggle)
-      if grep -q '^I1 =' "$MODDIR/state/warp.conf" 2>/dev/null; then
-        sh "$MODDIR/warp-tunnel.sh" sip-off
-      else
-        sh "$MODDIR/warp-tunnel.sh" sip-on
-      fi
-      ;;
-    *) return 1 ;;
-  esac
-}
-
-# Полный перезапуск туннеля. Отличается от rekey тем, что не трогает ключи и
-# профиль: сбрасывается только состояние перебора. Нужен, когда туннель завис на
-# одном шаге подбора и сам не выбирается.
 cmd_warp_restart() {
   if [ "${Z2_ASYNC:-0}" = "1" ]; then
     spawn_detached sh "$MODDIR/warp-tunnel.sh" force-restart
@@ -581,53 +587,185 @@ cmd_warp_restart() {
   sh "$MODDIR/warp-tunnel.sh" force-restart
 }
 
-cmd_warp_rekey() {
-  sh "$MODDIR/warp-tunnel.sh" rekey </dev/null >>"$LOG_FILE" 2>&1 &
-  echo '{"ok":true,"state":"rekeying"}'
+cmd_awg99_restart() {
+  if [ "${Z2_ASYNC:-0}" = "1" ]; then
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" restart-ru
+    echo '{"ok":true,"state":"restarting"}'
+    return 0
+  fi
+  sh "$MODDIR/warp-tunnel.sh" restart-ru
 }
 
-cmd_warp_save() {
-  local enabled="$2" endpoint="$3" port="$4" jc="$5" jmin="$6" jmax="$7" s1="$8" s2="$9" dns="${10}" adaptive="${11:-1}" sip_force="${12:-0}"
-  validate_switch "$enabled" || return 1
-  validate_switch "$adaptive" || { echo "Некорректный режим автоподбора" >&2; return 1; }
-  validate_switch "$sip_force" || { echo "Некорректный режим SIP" >&2; return 1; }
-  set_conf ENABLE_WARP "$enabled" || return 1
-  case "$endpoint" in ''|*[!A-Za-z0-9.:_-]*) echo "Некорректный endpoint" >&2; return 1 ;; *) set_conf WARP_ENDPOINT "$endpoint" || return 1 ;; esac
-  case "$port" in ''|*[!0-9]*) echo "Некорректный port" >&2; return 1 ;; *) [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1; set_conf WARP_PORT "$port" || return 1 ;; esac
-  for _kv in "$jc" "$jmin" "$jmax" "$s1" "$s2"; do case "$_kv" in ''|*[!0-9]*) echo "Некорректный числовой параметр WARP" >&2; return 1 ;; esac; done
-  [ "$jc" -ge 1 ] 2>/dev/null && [ "$jc" -le 128 ] 2>/dev/null || { echo "Jc должен быть 1..128 (AmneziaWG рекомендует 4..12)" >&2; return 1; }
-  [ "$jmin" -ge 1 ] 2>/dev/null && [ "$jmin" -lt "$jmax" ] 2>/dev/null || { echo "Jmin должен быть меньше Jmax" >&2; return 1; }
-  [ "$jmax" -le 4096 ] 2>/dev/null || { echo "Jmax должен быть <= 4096" >&2; return 1; }
-  [ "$s1" = 0 ] && [ "$s2" = 0 ] || { echo "Для Cloudflare WARP S1/S2 должны оставаться 0" >&2; return 1; }
-  set_conf WARP_JC "$jc" || return 1
-  set_conf WARP_JMIN "$jmin" || return 1
-  set_conf WARP_JMAX "$jmax" || return 1
-  set_conf WARP_S1 0 || return 1
-  set_conf WARP_S2 0 || return 1
-  set_conf WARP_ADAPTIVE "$adaptive" || return 1
-  set_conf WARP_SIP_FORCE "$sip_force" || return 1
-  if [ -n "$dns" ]; then
-    validate_dns_servers "$dns" || { echo "Некорректный WARP DNS" >&2; return 1; }
-    set_conf WARP_DNS "$dns" || return 1
-    local dns_target="$LISTS_DIR/dns.list"
-    mkdir -p "$LISTS_DIR" 2>/dev/null
-    printf "# dns.list — Список DNS серверов для туннеля WARP\n" > "$dns_target.tmp.$$"
-    for d in $dns; do printf "%s\n" "$d" >> "$dns_target.tmp.$$"; done
-    mv -f "$dns_target.tmp.$$" "$dns_target" 2>/dev/null
-  fi
-  rm -f "$MODDIR/state/warp-adapt.state" 2>/dev/null
-  if [ "$enabled" = "1" ]; then
-    spawn_detached sh "$MODDIR/warp-tunnel.sh" restart
+cmd_awg99_stop() {
+  sh "$MODDIR/warp-tunnel.sh" stop-ru
+  echo '{"ok":true,"state":"stopped"}'
+}
+
+cmd_awg99_start() {
+  if [ "${Z2_ASYNC:-0}" = "1" ]; then
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" start-ru
     echo '{"ok":true,"state":"starting"}'
-  else
-    sh "$MODDIR/warp-tunnel.sh" stop
-    echo '{"ok":true,"state":"stopped"}'
+    return 0
   fi
+  sh "$MODDIR/warp-tunnel.sh" start-ru
+}
+
+cmd_awg98_restart() {
+  if [ "${Z2_ASYNC:-0}" = "1" ]; then
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" restart-geo
+    echo '{"ok":true,"state":"restarting"}'
+    return 0
+  fi
+  sh "$MODDIR/warp-tunnel.sh" restart-geo
+}
+
+cmd_awg98_stop() {
+  sh "$MODDIR/warp-tunnel.sh" stop-geo
+  echo '{"ok":true,"state":"stopped"}'
+}
+
+cmd_awg98_start() {
+  if [ "${Z2_ASYNC:-0}" = "1" ]; then
+    spawn_detached sh "$MODDIR/warp-tunnel.sh" start-geo
+    echo '{"ok":true,"state":"starting"}'
+    return 0
+  fi
+  sh "$MODDIR/warp-tunnel.sh" start-geo
+}
+
+cmd_awg98_rotate() {
+  sh "$MODDIR/warp-tunnel.sh" rotate-geo
+  echo '{"ok":true,"state":"rotated"}'
+}
+
+cmd_service_start() {
+  if [ -n "$Z2_ASYNC" ]; then
+    spawn_detached sh "$MODDIR/service.sh" start
+    echo '{"ok":true,"state":"starting"}'
+    return 0
+  fi
+  sh "$MODDIR/service.sh" start
+}
+
+cmd_service_stop() {
+  sh "$MODDIR/service.sh" stop >/dev/null 2>&1 || true
+  echo '{"ok":true,"state":"stopped"}'
+}
+
+cmd_diag_apps() {
+  local list_file="$MODDIR/lists/apps_black.list"
+  [ -f "$list_file" ] || list_file="$LISTS_DIR/apps_black.list"
+  echo "============================================================"
+  echo " ТЕЛЕМЕТРИЯ И ДИАГНОСТИКА APPS BLACK (4PDA & BLACKLIST APPS)"
+  echo "============================================================"
+  echo "1. ПАКЕТЫ И РАЗРЕШЁННЫЕ UID:"
+  if [ -f "$list_file" ]; then
+    grep -vE '^[[:space:]]*(#|$)' "$list_file" 2>/dev/null | tr -d '\r' | while read -r item; do
+      [ -n "$item" ] || continue
+      case "$item" in
+        *[!0-9]*)
+          local u=""
+          if [ -f /data/system/packages.list ]; then
+            u=$(awk -v p="$item" '$1 == p { print $2; exit }' /data/system/packages.list 2>/dev/null)
+          fi
+          if [ -z "$u" ] && [ -d "/data/data/$item" ]; then
+            u=$(stat -c %u "/data/data/$item" 2>/dev/null)
+          fi
+          if [ -z "$u" ] && command -v pm >/dev/null 2>&1; then
+            u=$(pm list packages -U 2>/dev/null | awk -v p="package:$item" '$1 == p { split($2, a, ":"); print a[2]; exit }')
+          fi
+          echo "  - Пакет: $item -> UID: ${u:-НЕ НАЙДЕН}"
+          ;;
+        *)
+          echo "  - Числовой UID: $item"
+          ;;
+      esac
+    done
+  else
+    echo "  Список apps_black.list не найден!"
+  fi
+
+  echo ""
+  echo "2. ТАБЛИЦА МАРШРУТИЗАЦИИ (11887 / AWG98 IPv4):"
+  ip -4 route show table 11887 2>/dev/null || echo "  Таблица 11887 пуста"
+
+  echo ""
+  echo "3. СТАТУС ТУННЕЛЯ AWG98 (AmneziaWG):"
+  if [ -x "$MODDIR/bin/awg" ]; then
+    "$MODDIR/bin/awg" show awg98 2>/dev/null || echo "  Интерфейс awg98 не активен"
+  fi
+
+  echo ""
+  echo "4. ПРАВИЛА IP RULE (IPv4):"
+  ip -4 rule show 2>/dev/null | grep -E '11887|0x00040000' || echo "  Правила для 11887 не найдены"
+
+  echo ""
+  echo "5. ДЕМОН DNS (z2netd, AAAA-filter NODATA):"
+  local zpid=$(cat "$MODDIR/state/z2netd.pid" 2>/dev/null)
+  if [ -n "$zpid" ] && kill -0 "$zpid" 2>/dev/null; then
+    echo "  z2netd: АКТИВЕН (PID: $zpid, порт: 5353, AAAA: BLOCKED)"
+  else
+    echo "  z2netd: НЕ ЗАПУЩЕН"
+  fi
+
+  echo ""
+  echo "6. СЧЁТЧИКИ NETFILTER ДЛЯ APPS BLACK:"
+  echo "-- Filter Killswitch & DoT Block:"
+  iptables -w 5 -t filter -L ZAPRET2_APPS_KILL -nvx 2>/dev/null || echo "  Цепочка ZAPRET2_APPS_KILL отсутствует"
+  echo "-- Nat DNS (Redirect to z2netd:5353):"
+  iptables -w 5 -t nat -L ZAPRET2_APPS_DNS -nvx 2>/dev/null || echo "  Цепочка ZAPRET2_APPS_DNS отсутствует"
+
+  echo ""
+  echo "7. АКТИВНЫЕ СОКЕТЫ ЦЕЛЕВЫХ UID:"
+  local uids=$(sh "$MODDIR/warp-tunnel.sh" get-apps-uids 2>/dev/null)
+  if [ -n "$uids" ]; then
+    for u in $uids; do
+      echo "  UID $u активные подключения:"
+      if command -v ss >/dev/null 2>&1; then
+        ss -tupan 2>/dev/null | awk -v uid="$u" '$0 ~ ("uid:" uid) { print "    " $0 }'
+      else
+        netstat -tupan 2>/dev/null | grep "$u" | sed 's/^/    /' || echo "    нет соединений"
+      fi
+    done
+  fi
+  echo "============================================================"
+}
+
+cmd_json_connectivity() {
+  local curl_bin="$MODDIR/bin/curl"
+  [ -x "$curl_bin" ] || curl_bin="curl"
+
+  check_target() {
+    local url="$1"
+    local start_ts end_ts res time_total
+    start_ts=$(date +%s%3N 2>/dev/null || date +%s000 2>/dev/null)
+    if "$curl_bin" -s -k -L -m 4 --connect-timeout 3 -o /dev/null -w "%{http_code}" "$url" >/dev/null 2>&1; then
+      end_ts=$(date +%s%3N 2>/dev/null || date +%s000 2>/dev/null)
+      time_total=$((end_ts - start_ts))
+      [ "$time_total" -le 0 ] && time_total=15
+      echo "{\"status\":\"ok\",\"latency_ms\":$time_total}"
+    else
+      echo "{\"status\":\"error\",\"latency_ms\":0}"
+    fi
+  }
+
+  local yt disc fpda cf tg
+  yt=$(check_target "https://www.youtube.com/generate_204")
+  disc=$(check_target "https://discord.com/api/v9/gateway")
+  fpda=$(check_target "https://4pda.to")
+  cf=$(check_target "https://crypto.cloudflare.com")
+  tg=$(check_target "https://web.telegram.org")
+
+  printf '{"youtube":%s,"discord":%s,"fourpda":%s,"cloudflare_ech":%s,"telegram":%s}\n' \
+    "$yt" "$disc" "$fpda" "$cf" "$tg"
 }
 
 case "$1" in
   status) cmd_status ;;
   json-status) cmd_json_status ;;
+  json-connectivity|test-connectivity) cmd_json_connectivity ;;
+  service-start|start) cmd_service_start ;;
+  service-stop|stop) cmd_service_stop ;;
   json-hotspot-settings) cmd_json_hotspot_settings ;;
   json-strategies) cmd_json_strategies ;;
   json-diagnostics) cmd_json_diagnostics ;;
@@ -637,18 +775,25 @@ case "$1" in
   hostlist-clear) cmd_hostlist_clear ;;
   json-warp-status) cmd_json_warp_status ;;
   warp-toggle) cmd_warp_toggle "$@" ;;
-  warp-sip) cmd_warp_sip "$@" ;;
   warp-rekey) cmd_warp_rekey ;;
   warp-restart) cmd_warp_restart ;;
-  warp-save) cmd_warp_save "$@" ;;
+  awg99-restart|restart-ru) cmd_awg99_restart ;;
+  awg99-stop|stop-ru) cmd_awg99_stop ;;
+  awg99-start|start-ru) cmd_awg99_start ;;
+  awg98-restart|restart-geo) cmd_awg98_restart ;;
+  awg98-stop|stop-geo) cmd_awg98_stop ;;
+  awg98-start|start-geo) cmd_awg98_start ;;
+  awg98-rotate|rotate-geo) cmd_awg98_rotate ;;
   forcetcp) validate_switch "$2" || exit 1; set_conf FORCE_TCP "$2"; reload_service ;;
   quicmode) case "$2" in off|on) set_conf QUIC_MODE "$(echo "$2" | tr '[:lower:]' '[:upper:]')"; reload_service ;; *) exit 1 ;; esac ;;
   hotspot-settings) cmd_hotspot_settings "$@" ;;
   save-smart) cmd_save_smart "$@" ;;
   save-strategies) cmd_save_strategies "$@" ;;
   replace-list) cmd_replace_list "$2" "$3" ;;
+  replace-list-b64) cmd_replace_list_b64 "$2" "$3" ;;
   nfqws-debug) cmd_nfqws_debug "$@" ;;
   diag) cmd_diag ;;
+  diag-apps) cmd_diag_apps ;;
   export-logs) cmd_export_logs ;;
   module-version) cmd_module_version ;;
   auto-status) cmd_auto_status ;;
@@ -658,5 +803,5 @@ case "$1" in
   webui) cmd_webui ;;
   log) cmd_tail_log "$LOG_FILE" "$2" ;;
   nfqws-log) cmd_tail_log "$NFQWS_LOG" "$2" ;;
-  *) echo "Команды: status, json-status, json-apps, json-app-lists, json-warp-status, warp-toggle 0|1, warp-rekey, warp-save, save-smart, app-state <pkg> include|exclude|none, app-state-set, sync-apps, restart, diag, export-logs, module-version, nfqws-debug 0|1, log, nfqws-log" ;;
+  *) echo "Команды: status, json-status, json-warp-status, diag-apps, awg99-restart, awg98-restart, restart, diag, export-logs, log, nfqws-log" ;;
 esac

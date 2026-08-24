@@ -506,6 +506,8 @@ cleanup_iptables() {
     delete_jump_bounded 4 mangle OUTPUT ZAPRET2_MANGLE
     delete_jump_bounded 4 mangle INPUT ZAPRET2_MANGLE_IN
     delete_jump_bounded 4 mangle FORWARD ZAPRET2_MANGLE_FORWARD
+    delete_jump_bounded 4 mangle ZAPRET2_MANGLE ZAPRET2_APPS_BYPASS
+    ipt4_quiet -t mangle -F ZAPRET2_APPS_BYPASS; ipt4_quiet -t mangle -X ZAPRET2_APPS_BYPASS
     ipt4_quiet -t mangle -F ZAPRET2_MANGLE; ipt4_quiet -t mangle -X ZAPRET2_MANGLE
     ipt4_quiet -t mangle -F ZAPRET2_MANGLE_IN; ipt4_quiet -t mangle -X ZAPRET2_MANGLE_IN
     ipt4_quiet -t mangle -F ZAPRET2_MANGLE_FORWARD; ipt4_quiet -t mangle -X ZAPRET2_MANGLE_FORWARD
@@ -531,6 +533,9 @@ cleanup_iptables() {
     delete_jump_bounded 6 filter FORWARD ZAPRET2_FILTER_FORWARD
     ipt6_quiet -t filter -F ZAPRET2_FILTER; ipt6_quiet -t filter -X ZAPRET2_FILTER
     ipt6_quiet -t filter -F ZAPRET2_FILTER_FORWARD; ipt6_quiet -t filter -X ZAPRET2_FILTER_FORWARD
+    delete_jump_bounded 6 filter OUTPUT ZAPRET2_IPV6_BLOCK
+    delete_jump_bounded 6 filter FORWARD ZAPRET2_IPV6_BLOCK
+    ipt6_quiet -t filter -F ZAPRET2_IPV6_BLOCK; ipt6_quiet -t filter -X ZAPRET2_IPV6_BLOCK
   }
   ip -4 route flush cache 2>/dev/null || true
   ip -6 route flush cache 2>/dev/null || true
@@ -676,6 +681,31 @@ ensure_conntrack_accounting() {
   [ "$CONNTRACK_ACCT" = "1" ]
 }
 
+tune_kernel_network() {
+  log_i "Kernel network tuning: оптимизация сетевого стека ядра..."
+  # 1. Снижение таймаута conntrack с 5 дней до 2 часов (экономия RAM ядра и ускорение Netfilter)
+  for f in /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established /proc/sys/net/ipv4/netfilter/ip_conntrack_tcp_timeout_established; do
+    [ -w "$f" ] && echo 7200 > "$f" 2>/dev/null || true
+  done
+  # 2. Отключение сброса CWND после простоя (мгновенная скорость при открытии видео/страниц)
+  [ -w /proc/sys/net/ipv4/tcp_slow_start_after_idle ] && echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle 2>/dev/null || true
+  # 3. Полный TCP Fast Open (клиент + сервер)
+  [ -w /proc/sys/net/ipv4/tcp_fastopen ] && echo 3 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null || true
+  # 4. Устранение Bufferbloat в сокетах отправки
+  [ -w /proc/sys/net/ipv4/tcp_notsent_lowat ] && echo 16384 > /proc/sys/net/ipv4/tcp_notsent_lowat 2>/dev/null || true
+  # 5. Быстрое переиспользование сокетов TIME_WAIT
+  [ -w /proc/sys/net/ipv4/tcp_tw_reuse ] && echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || true
+  [ -w /proc/sys/net/ipv4/tcp_fin_timeout ] && echo 15 > /proc/sys/net/ipv4/tcp_fin_timeout 2>/dev/null || true
+  # 6. Защита от сброса сессий DPI
+  [ -w /proc/sys/net/ipv4/tcp_rfc1337 ] && echo 1 > /proc/sys/net/ipv4/tcp_rfc1337 2>/dev/null || true
+  # 7. Path MTU Discovery Blackhole detection
+  [ -w /proc/sys/net/ipv4/tcp_mtu_probing ] && echo 1 > /proc/sys/net/ipv4/tcp_mtu_probing 2>/dev/null || true
+  # 8. Оптимизация очереди пакетов qdisc (fq_codel / fq для снижения пинга и джиттера)
+  if [ -w /proc/sys/net/core/default_qdisc ]; then
+    echo fq_codel > /proc/sys/net/core/default_qdisc 2>/dev/null || echo fq > /proc/sys/net/core/default_qdisc 2>/dev/null || true
+  fi
+}
+
 is_ksu_or_apatch=0
 if [ "${KSU:-}" = "true" ] || [ -n "${KSU_VER:-}" ] || [ -d /data/adb/ksu ] || [ -n "${APATCH:-}" ] || [ -d /data/adb/ap ]; then
   is_ksu_or_apatch=1
@@ -702,6 +732,30 @@ if [ -z "$SERVICE_ACTION" ]; then
   write_start_state "STARTING" "Android загружен · подготовка службы" 10
   sleep 2
 fi
+
+if [ "$SERVICE_ACTION" = "stop" ] || [ "$SERVICE_ACTION" = "service-stop" ]; then
+  boot_trace "service stop requested"
+  log_i "Остановка службы Zapret2 по запросу пользователя..."
+  touch "$RUN_DIR/service_stopped.flag" 2>/dev/null || true
+  stop_pid "$NFQWS_PID_FILE" "nfqws2" nfqws2
+  stop_owned_nfqws
+  stop_pid "$VPN_WATCHER_PID_FILE" "сетевой watcher" vpn-watch
+  stop_pid "$HEALTH_WATCHER_PID_FILE" "health watcher" health-watch
+  stop_pid "$WATCHER_PID_FILE" "config watcher" config-watch
+  stop_pid "$RUN_DIR/auto-probe.pid" "auto-probe" auto
+  stop_pid "$RUN_DIR/httpd.pid" "webui-httpd" httpd
+  cleanup_iptables
+  "$MODDIR/vpn-routing.sh" cleanup >/dev/null 2>&1 || true
+  [ -f "$MODDIR/warp-tunnel.sh" ] && sh "$MODDIR/warp-tunnel.sh" stop >/dev/null 2>&1 || true
+  rm -f "$NFQWS_PID_FILE" "$WATCHER_PID_FILE" "$VPN_WATCHER_PID_FILE" "$HEALTH_WATCHER_PID_FILE" "$RUN_DIR/direct.flag" 2>/dev/null || true
+  HEALTH="STOPPED"
+  write_health
+  write_start_state "STOPPED" "Служба остановлена" 0
+  log_i "Служба Zapret2 полностью остановлена"
+  exit 0
+fi
+
+rm -f "$RUN_DIR/service_stopped.flag" 2>/dev/null || true
 
 if [ "$SERVICE_ACTION" != "reload" ] && [ "$SERVICE_ACTION" != "boot" ] && [ "$SERVICE_ACTION" != "reload-profile" ]; then
   write_start_state "WAITING" "Ожидание sys.boot_completed" 5
@@ -814,13 +868,13 @@ ensure_watchers() {
   fi
 
   # Сетевой watcher отвечает не только за раздачу: именно он будит автоподбор
-  # при смене Wi-Fi/соты и синхронизирует WARP.
-  if [ "${ENABLE_HOTSPOT:-0}" = "1" ] || [ "${AUTO_SELECT_ENABLED:-1}" = "1" ] || [ "${ENABLE_WARP:-0}" = "1" ]; then
+  # при смене Wi-Fi/соты и синхронизирует WARP и Geo туннели.
+  if [ "${ENABLE_HOTSPOT:-0}" = "1" ] || [ "${AUTO_SELECT_ENABLED:-1}" = "1" ] || [ "${ENABLE_WARP:-0}" = "1" ] || [ "${ENABLE_GEO_WARP:-1}" = "1" ]; then
     vpn_wpid=$(cat "$VPN_WATCHER_PID_FILE" 2>/dev/null)
     if [ -z "$vpn_wpid" ] || ! pid_is_owned "$vpn_wpid" vpn-watch; then
       sh "$MODDIR/vpn-watch.sh" >/dev/null 2>&1 &
       echo $! > "$VPN_WATCHER_PID_FILE"
-      log_i "Сетевой watcher запущен: netlink/inotify event-driven, hotspot=${ENABLE_HOTSPOT:-0} auto_select=${AUTO_SELECT_ENABLED:-1} warp=${ENABLE_WARP:-0}"
+      log_i "Сетевой watcher запущен: netlink/inotify event-driven, hotspot=${ENABLE_HOTSPOT:-0} auto_select=${AUTO_SELECT_ENABLED:-1} warp=${ENABLE_WARP:-0} geo=${ENABLE_GEO_WARP:-1}"
     fi
   else
     stop_pid "$VPN_WATCHER_PID_FILE" "VPN/tether watcher" vpn-watch
@@ -943,6 +997,7 @@ if [ "$STRATEGY_MODE" = "SMART" ] && [ "$CONNBYTES4" = "1" ] && [ "$CONNMARK4" =
 elif [ -r /proc/sys/net/netfilter/nf_conntrack_acct ] && [ "$(cat /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null)" = "1" ]; then
   CONNTRACK_ACCT=1
 fi
+tune_kernel_network || true
 
 if [ "$STRATEGY_MODE" = "CUSTOM" ]; then
   STRATEGY_EFFECTIVE="CUSTOM"
@@ -1040,13 +1095,13 @@ else
   [ "$NFQ6" = "1" ] && ipt6 -t mangle -N ZAPRET2_MANGLE || true
   [ -n "$IP6T" ] && ipt6 -t filter -N ZAPRET2_FILTER || true
 
-  # Трафик, уже ушедший в интерфейс туннеля, повторно не обрабатываем.
-  # Цепочка mangle OUTPUT выполняется после выбора маршрута, поэтому исходящий
-  # интерфейс здесь уже известен.
-  ipt4 -t mangle -A ZAPRET2_MANGLE -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
-  ipt4 -t filter -A ZAPRET2_FILTER -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
-  [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
-  [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o "${WARP_DEV:-awg99}" -j RETURN 2>/dev/null || true
+  # Трафик, уже ушедший в интерфейсы туннелей (AWG99 / AWG98), повторно не обрабатываем AntiDPI.
+  for tdev in "${WARP_DEV:-awg99}" "${GEO_DEV:-awg98}"; do
+    ipt4 -t mangle -A ZAPRET2_MANGLE -o "$tdev" -j RETURN 2>/dev/null || true
+    ipt4 -t filter -A ZAPRET2_FILTER -o "$tdev" -j RETURN 2>/dev/null || true
+    [ "$NFQ6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -o "$tdev" -j RETURN 2>/dev/null || true
+    [ -n "$IP6T" ] && ipt6 -t filter -A ZAPRET2_FILTER -o "$tdev" -j RETURN 2>/dev/null || true
+  done
 
   # ---------------------------------------------------------------------------
   # Одно правило на весь исходящий трафик указанных портов.
@@ -1058,13 +1113,27 @@ else
   if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
     ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || health_error "SMART_NATIVE IPv4 CONNMARK rule failed"
   fi
-  ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 NFQUEUE"
+  # Flow Offloading: перехватываем только первые 1..8 пакетов сессии для рукопожатия / ClientHello
+  if [ "$CONNBYTES4" = "1" ]; then
+    ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m connbytes --connbytes 1:8 --connbytes-dir original --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 NFQUEUE (connbytes)"
+    log_i "Flow Offloading IPv4: NFQUEUE ограничен 1..8 пакетами сессии (аппаратная разгрузка потоковых данных)"
+  else
+    ipt4 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS4 || health_error "Не удалось добавить IPv4 NFQUEUE"
+  fi
   if [ "$NFQ6" = "1" ]; then
     [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ] && [ "$CONNMARK6" = "1" ] && ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -j CONNMARK --set-xmark "$FLOW_CONNMARK" || true
-    ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+    if [ "$CONNBYTES6" = "1" ]; then
+      ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m connbytes --connbytes 1:8 --connbytes-dir original --connbytes-mode packets -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+    else
+      ipt6 -t mangle -A ZAPRET2_MANGLE -p tcp -m multiport --dports "$PORTS_TCP" -m mark ! --mark 0x40000000/0x40000000 -j NFQUEUE --queue-num "$QNUM" $QBYPASS6 || true
+    fi
   fi
   ipt4 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || health_error "Не удалось подключить ZAPRET2_MANGLE к OUTPUT"
   [ "$NFQ6" = "1" ] && ipt6 -t mangle -A OUTPUT -j ZAPRET2_MANGLE || true
+
+  # TCP MSS Clamping: автоматическое согласование размера MSS под реальный MTU туннелей/сотовой сети
+  ipt4_quiet -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  [ "$NFQ6" = "1" ] && ipt6_quiet -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 
   if [ "$STRATEGY_EFFECTIVE" = "SMART_NATIVE" ]; then
     ipt4 -t mangle -N ZAPRET2_MANGLE_IN || health_error "Не удалось создать IPv4 INPUT reply chain"
@@ -1090,6 +1159,20 @@ else
     [ -n "$IP6T" ] && ipt6 -t filter -A OUTPUT -j ZAPRET2_FILTER || true
     log_i "QUIC: UDP/443 блокируется для всей системы (QUIC_MODE=${QUIC_MODE:-ON})"
   fi
+fi
+
+# Глобальная блокировка внешнего IPv6 трафика (чистый IPv4-стек)
+if [ -n "$IP6T" ]; then
+  ipt6_quiet -t filter -N ZAPRET2_IPV6_BLOCK 2>/dev/null || true
+  ipt6_quiet -t filter -F ZAPRET2_IPV6_BLOCK 2>/dev/null || true
+  ipt6_quiet -t filter -A ZAPRET2_IPV6_BLOCK -o lo -j RETURN 2>/dev/null || true
+  ipt6_quiet -t filter -A ZAPRET2_IPV6_BLOCK -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null || \
+    ipt6_quiet -t filter -A ZAPRET2_IPV6_BLOCK -j DROP 2>/dev/null || true
+  delete_jump_bounded 6 filter OUTPUT ZAPRET2_IPV6_BLOCK
+  ipt6_quiet -t filter -I OUTPUT 1 -j ZAPRET2_IPV6_BLOCK 2>/dev/null || true
+  delete_jump_bounded 6 filter FORWARD ZAPRET2_IPV6_BLOCK
+  ipt6_quiet -t filter -I FORWARD 1 -j ZAPRET2_IPV6_BLOCK 2>/dev/null || true
+  log_i "IPv6: внешний трафик заблокирован (форсирование чистого IPv4 стека без задержек Happy Eyeballs)"
 fi
 
 # Настройка раздачи и VPN-маршрутизации (работает ВСЕГДА, включая режим DIRECT!)
@@ -1241,9 +1324,9 @@ write_start_state "READY" "Служба работает" 100
 boot_trace "service READY nfqws2_pid=$nfqws_pid health=$HEALTH"
 log_i "Служба запущена: nfqws2 PID=$nfqws_pid health=$HEALTH"
 
-# Запуск AmneziaWG v3 Cloudflare WARP туннеля для списка приложений
-if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
-  log_i "Запуск точечного туннеля AmneziaWG v3 (WARP)..."
+# Запуск AmneziaWG v3 туннелей (WARP AWG99 и Geo AWG98)
+if { [ "${ENABLE_WARP:-0}" = "1" ] || [ "${ENABLE_GEO_WARP:-1}" = "1" ]; } && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+  log_i "Запуск туннелей AmneziaWG v3 (WARP / GEO)..."
   sh "$MODDIR/warp-tunnel.sh" start >> "$LOG_FILE" 2>&1 &
 fi
 

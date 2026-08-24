@@ -29,7 +29,7 @@ iface_has_ipv4() { "$IP_BIN" -o -4 addr show dev "$1" 2>/dev/null | grep -q '[[:
 iface_has_ip() { "$IP_BIN" -o addr show dev "$1" 2>/dev/null | grep -Eq '[[:space:]]inet6?[[:space:]]'; }
 
 iface_is_strict_vpn_hint() {
-  [ "$1" != "${WARP_DEV:-awg99}" ] || return 1
+  [ "$1" != "${WARP_DEV:-awg99}" ] && [ "$1" != "${GEO_WARP_DEV:-awg98}" ] && [ "$1" != "${GEO_DEV:-awg98}" ] || return 1
   case "$1" in
     tun*|wg*|awg*|vpn*|warp*|tailscale*|zt*) return 0 ;;
     *) return 1 ;;
@@ -317,6 +317,7 @@ role_signature() {
 }
 
 case "$1" in
+  upstream|upstreams) default_upstream_ifaces ;;
   downstream|downstreams) detect_downstreams ;;
   vpn|vpns) detect_vpns ;;
   vpn-candidate) vpn_candidate_exists ;;
@@ -326,6 +327,7 @@ case "$1" in
   signature) signature ;;
   role-signature) role_signature ;;
   roles|'')
+    echo "upstream=$(default_upstream_ifaces | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
     echo "downstream=$(detect_downstreams | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
     echo "vpn=$(detect_vpns | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
     echo "physical=$(physical_ifaces_from_connectivity | tr '\n' ' ' | sed 's/[[:space:]]*$//')"

@@ -1,0 +1,38 @@
+# ==============================================================================
+# geo_warp.list — домены сервисов с региональной блокировкой (геоблоком)
+# ==============================================================================
+# Весь трафик к этим доменам направляется через выделенный туннель AWG98
+# (конфигурации из каталога /data/adb/zapret2/geo/).
+#
+# ФОРМАТ: одно имя домена на строку (поддомены подхватываются автоматически).
+# ==============================================================================
+
+# Искусственный интеллект и нейросети
+openai.com
+chatgpt.com
+oaistatic.com
+oaiusercontent.com
+claude.ai
+anthropic.com
+perplexity.ai
+sora.com
+gemini.google.com
+aistudio.google.com
+generativelanguage.googleapis.com
+copilot.microsoft.com
+
+# Музыка и медиа
+spotify.com
+scdn.co
+spotifycdn.com
+
+# Дизайн и продуктивность
+canva.com
+notion.so
+medium.com
+quora.com
+
+# 4PDA
+4pda.to
+
+

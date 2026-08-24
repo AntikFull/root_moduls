@@ -1,0 +1,3 @@
+# NAME=CLOUDFLARE_ECH_EXTSPLIT
+--lua-desync=fake:blob=fake_default_tls:repeats=2:badseq:tcp_ts_up
+--lua-desync=tls_ext_split:split_ext=1:seqovl=3

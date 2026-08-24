@@ -26,7 +26,8 @@ config_signature() {
     # smart_youtube.list) удалены в v4.0.0 и в подписи больше не нужны;
     # ipset.list и ipset_exclude.list, наоборот, отсутствовали в ней.
     for f in user.list exclude_domains.list ipset.list ipset_exclude.list \
-             warp_bypass_nets.list warp_domains.list \
+             warp_bypass_nets.list warp_domains.list warp_domains.user.list \
+             geo_warp.list geo_warp.user.list apps_black.list \
              dns.list dns.user.list probe_hosts.list wifi_direct_ssids.list; do
       printf 'F=%s\n' "$f"; cat "$lists/$f" 2>/dev/null
     done

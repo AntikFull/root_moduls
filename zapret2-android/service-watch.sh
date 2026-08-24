@@ -97,23 +97,34 @@ failures=0
 while :; do
   sleep "$HEALTH_WATCH_INTERVAL"
 
-  # 1. Контроль и самовосстановление WARP (работает и в режиме DIRECT).
-  if [ "${ENABLE_WARP:-0}" = "1" ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+  # Если служба остановлена пользователем — не перезапускать ничего
+  if [ -f "$RUN_DIR/service_stopped.flag" ]; then
+    failures=0
+    continue
+  fi
+
+  # 1. Контроль и самовосстановление туннелей (WARP AWG99 и Geo AWG98).
+  if { [ "${ENABLE_WARP:-0}" = "1" ] || [ "${ENABLE_GEO_WARP:-1}" = "1" ]; } && [ -f "$MODDIR/warp-tunnel.sh" ]; then
     dev="${WARP_DEV:-awg99}"
-    if ! ip link show dev "$dev" >/dev/null 2>&1; then
-      # Стартовый перебор — до 40 кандидатов по несколько секунд каждый.
-      # Синхронный вызов оставлял nfqws2 и очередь NFQUEUE без надзора на всё
-      # это время, поэтому подъём уходит в фон. Повторно не запускаем: если
-      # warp.lock занят, подъёмом уже кто-то занимается.
+    geo_dev="${GEO_DEV:-awg98}"
+    need_start=0
+    if [ "${ENABLE_WARP:-0}" = "1" ] && [ ! -f "$RUN_DIR/warp_stopped.flag" ] && ! ip link show dev "$dev" >/dev/null 2>&1; then
+      need_start=1
+    fi
+    if [ "${ENABLE_GEO_WARP:-1}" = "1" ] && [ ! -f "$RUN_DIR/geo_stopped.flag" ] && ! ip link show dev "$geo_dev" >/dev/null 2>&1; then
+      need_start=1
+    fi
+
+    if [ "$need_start" = 1 ]; then
       warp_lock_pid=$(cat "$RUN_DIR/warp.lock/pid" 2>/dev/null)
       case "$warp_lock_pid" in
         ''|0|*[!0-9]*) warp_lock_pid="" ;;
         *) kill -0 "$warp_lock_pid" 2>/dev/null || warp_lock_pid="" ;;
       esac
       if [ -n "$warp_lock_pid" ]; then
-        log INFO "WARP: подъём туннеля уже выполняется (PID $warp_lock_pid), тик пропущен"
+        log INFO "Туннели: подъём уже выполняется (PID $warp_lock_pid), тик пропущен"
       else
-        log WARN "WARP интерфейс $dev не активен; подъём туннеля запущен в фоне"
+        log WARN "Интерфейс туннеля не активен; запуск восстановления в фоне"
         sh "$MODDIR/warp-tunnel.sh" start >/dev/null 2>&1 &
       fi
     else

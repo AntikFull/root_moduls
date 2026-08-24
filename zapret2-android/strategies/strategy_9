@@ -1,0 +1,4 @@
+# NAME=DISCORD_VOICE_WEBRTC
+--lua-desync=fake:blob=0x00000000:repeats=4:tcp_seq=1000:tcp_ack=-66000:tcp_ts_up
+--lua-desync=multisplit:pos=1,midsld:seqovl=1
+--lua-desync=discord_voice_obfs:pad_rnd=24

@@ -92,8 +92,9 @@ while [ -s "$PENDING_FILE" ]; do
       exclude_domains.list|user.list|ipset.list|ipset_exclude.list|\
       warp_bypass_nets.list)
         need_service_reload=1 ;;
-      # Меняют только маршрутизацию/DNS туннеля.
-      warp_domains.list|dns.list|dns.user.list)
+      # Меняют только маршрутизацию/DNS туннелей (WARP AWG99 и Geo AWG98).
+      warp_domains.list|warp_domains.user.list|geo_warp.list|geo_warp.user.list|\
+      apps_black.list|dns.list|dns.user.list)
         need_warp_sync=1 ;;
       *) ;;
     esac
@@ -104,8 +105,8 @@ while [ -s "$PENDING_FILE" ]; do
     log INFO "полная реконсиляция службы (изменено: $seen)"
     sh "$MODDIR/service.sh" reload
   fi
-  if [ "$need_warp_sync" = 1 ] && [ -x "$MODDIR/warp-tunnel.sh" ]; then
-    log INFO "реконсиляция WARP (изменено: $seen)"
+  if [ "$need_warp_sync" = 1 ] && [ -f "$MODDIR/warp-tunnel.sh" ]; then
+    log INFO "реконсиляция туннелей WARP / GEO / Apps (изменено: $seen)"
     sh "$MODDIR/warp-tunnel.sh" sync >/dev/null 2>&1 || true
   fi
   # Изменение уже применено лёгким путём. Подпись надо освежить, иначе
