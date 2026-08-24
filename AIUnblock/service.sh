@@ -634,6 +634,7 @@ init_chains() {
   for chain in AIUNBLOCK_OUT AIUNBLOCK_SNI GEMINI_DNAT CHATGPT_DNAT CLAUDE_DNAT GROK_DNAT; do
     ensure_chain 4 nat "$chain" || return 1
   done
+  ensure_chain 4 mangle AIUNBLOCK_MANGLE 2>/dev/null || true
   ensure_chain 4 filter AIUNBLOCK_QUIC || return 1
   ensure_chain 4 filter AIUNBLOCK_FAIL || return 1
   if [ "$IPV6_SUPPORTED" -eq 1 ]; then ensure_chain 6 filter AIUNBLOCK_V6 || return 1; fi
@@ -667,6 +668,9 @@ remove_old_hook_rules() {
 }
 
 install_hooks() {
+  ipt -t mangle -C OUTPUT -p tcp --dport 443 $CMT -j AIUNBLOCK_MANGLE 2>/dev/null ||
+    ipt -t mangle -I OUTPUT 1 -p tcp --dport 443 $CMT -j AIUNBLOCK_MANGLE 2>/dev/null || true
+
   ipt -C OUTPUT -p udp --dport 443 $CMT -j AIUNBLOCK_QUIC 2>/dev/null ||
     ipt -I OUTPUT 1 -p udp --dport 443 $CMT -j AIUNBLOCK_QUIC || return 1
 
@@ -779,6 +783,18 @@ apply_uid_rules() {
       echo "COMMIT"
     } | ip6t_restore --noflush || return 1
   fi
+
+  {
+    echo "*mangle"
+    echo ":AIUNBLOCK_MANGLE - [0:0]"
+    echo "-F AIUNBLOCK_MANGLE"
+    for uid in $(all_target_uids); do
+      echo "-A AIUNBLOCK_MANGLE -m owner --uid-owner $uid -j RETURN"
+    done
+    echo "-A AIUNBLOCK_MANGLE -j RETURN"
+    echo "COMMIT"
+  } | ipt_restore --noflush >/dev/null 2>&1 || true
+
   clean_vpnhide_rules
   return 0
 }

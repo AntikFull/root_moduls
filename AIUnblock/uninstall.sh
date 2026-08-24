@@ -24,6 +24,8 @@ delete_all() {
 
 remove_firewall_rules() {
   local chain uid
+  delete_all iptables -t mangle -D OUTPUT -p tcp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_MANGLE
+  delete_all iptables -t mangle -D OUTPUT -p tcp --dport 443 -j AIUNBLOCK_MANGLE
   delete_all iptables -t nat -D OUTPUT -p tcp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_OUT
   delete_all iptables -D OUTPUT -p udp --dport 443 -m comment --comment AIUNBLOCK -j AIUNBLOCK_QUIC
   delete_all iptables -D OUTPUT -p tcp --dport 443 -m comment --comment AIUNBLOCK_FAIL -j AIUNBLOCK_FAIL
@@ -37,6 +39,8 @@ remove_firewall_rules() {
   delete_all iptables -D OUTPUT -p tcp --dport 443 -j AIUNBLOCK_GUARD
   delete_all ip6tables -D OUTPUT -j AIUNBLOCK_V6
 
+  iptables -t mangle -F AIUNBLOCK_MANGLE 2>/dev/null || true
+  iptables -t mangle -X AIUNBLOCK_MANGLE 2>/dev/null || true
   for chain in AIUNBLOCK_OUT AIUNBLOCK_SNI GEMINI_DNAT GOOGLE_APP_DNAT CHATGPT_DNAT CLAUDE_DNAT GROK_DNAT; do
     iptables -t nat -F "$chain" 2>/dev/null || true
     iptables -t nat -X "$chain" 2>/dev/null || true
