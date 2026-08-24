@@ -1,0 +1,88 @@
+AIUnblock v2.4.3 (versionCode 243): отчёт об исправлении и проверке на устройстве
+Дата: 2026-08-14
+
+Устройство
+
+- OnePlus PJA110 / OP5943L1
+- Android 16 / API 36
+- KernelSU 3.3.0
+- ARM64, native core android/arm64
+- Активная сеть во время проверки: мобильная, rmnet_data1
+
+Исправленная причина
+
+В v2.4.2 выбор gateway Gemini требовал успешной проверки www.google.com и www.gstatic.com. На целевой мобильной сети все десять gateway завершают эти SNI timeout, EOF, connection reset либо ошибкой сертификата. Из-за этого основной рабочий маршрут Gemini не включался вообще.
+
+Дополнительная проверка показала, что gateway 87.228.47.204 стабильно обслуживает четыре Gemini SNI:
+
+- gemini.google.com;
+- robinfrontend-pa.googleapis.com;
+- proactivebackend-pa.googleapis.com;
+- generativelanguage.googleapis.com.
+
+Что изменено
+
+- Google App и отдельное приложение Gemini используют выборочную SNI-маршрутизацию.
+- Полный DNAT всего HTTPS отдельного приложения Gemini удалён.
+- В gateway отправляются только четыре подтверждённых Gemini SNI.
+- Остальные Google-домены идут на исходные адреса и не ломаются неподдерживаемым gateway.
+- Selector проверяет только основные доказанно рабочие Gemini API.
+- Сквозной router health-check проверяет все четыре поддерживаемых SNI.
+- aiunblockctl status явно показывает, что сохранённые адреса являются кешем, а не доказательством активного правила.
+
+Установка
+
+- ZIP установлен штатно через `ksud module install`.
+- Установка в `/data/adb/modules_update/AIUnblock` завершилась успешно.
+- Конфигурация пользователя сохранена: hosts=1, adblock=1, locale=1, fail=0.
+- Native self-test во время установки: OK.
+- После установки телефон перезагружен, Android полностью загрузился.
+
+Фактическая проверка после перезагрузки
+
+- Установленная версия: v2.4.3 / 243.
+- SNI-router: RUNNING, 127.0.0.1:15359.
+- Router загрузил 5 exact-маршрутов: 4 Gemini + 1 NotebookLM.
+- Gateway Gemini: 87.228.47.204.
+- Сквозной TLS через router:
+  - gemini.google.com: TLS_OK;
+  - robinfrontend-pa.googleapis.com: TLS_OK;
+  - proactivebackend-pa.googleapis.com: TLS_OK;
+  - generativelanguage.googleapis.com: TLS_OK.
+- AIUNBLOCK_OUT содержит:
+  - Google App UID 10395 -> AIUNBLOCK_SNI;
+  - secondary UID 99910395 -> AIUNBLOCK_SNI;
+  - Gemini UID 10510 -> AIUNBLOCK_SNI.
+- GEMINI_DNAT намеренно пуст: полный DNAT больше не используется.
+- После принудительного перезапуска Gemini/Google App счётчик UID 10395 вырос с 9 до 11 пакетов.
+- Все новые пакеты дошли до AIUNBLOCK_SNI.
+- Router-log после запуска приложения не содержит timeout, reset или TLS-ошибок.
+
+Итоговый пользовательский отчёт на телефоне
+
+Статус: Работает
+Gemini (приложение): OK, TLS через router проверен
+Gemini в Google: OK, TLS через router проверен
+NotebookLM: OK, TLS через router проверен
+ChatGPT: OK
+Claude: OK
+Grok: OK
+
+Проверки сборки
+
+- go test ./...: успешно;
+- go vet ./...: успешно;
+- shell syntax: успешно;
+- UTF-8 без BOM и LF: успешно;
+- ZIP: 48 безопасных entries, CRC успешно;
+- SHA256 native-бинарников совпадают с SHA256SUMS.all;
+- SHA256 ZIP: F2FF83FC5DFA232E38F40ACE73F74F00FD601F7AF2550C8BBFB706268DE3EA8B.
+
+Артефакты
+
+- F:\Antigravity\MagiskModuls\module\AIUnblock_v2.4.3_243.zip
+- F:\Antigravity\MagiskModuls\TEMP\AIUnblock_device_check_20260814\v243\AIUnblock_diag_20260814_112212.tar.gz
+
+Ограничение
+
+Сетевой маршрут, firewall и TLS подтверждены на реальном устройстве. Визуальный экран приложения не удалось оценить через screencap, так как дисплей устройства был выключен/заблокирован. Пользователю остаётся проверить отправку одного запроса в интерфейсе Gemini.

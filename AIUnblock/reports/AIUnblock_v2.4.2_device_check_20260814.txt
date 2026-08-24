@@ -1,0 +1,77 @@
+Проверка AIUnblock v2.4.2 на подключённом телефоне
+Дата проверки: 2026-08-14
+
+Устройство
+
+- Производитель: OnePlus
+- Модель: PJA110
+- Device: OP5943L1
+- Android: 16 / API 36
+- Kernel: 5.15.180
+- Root: KernelSU 3.3.0, SELinux domain u:r:ksu:s0
+- Активная сеть: мобильная, rmnet_data1; Wi-Fi выключен
+- Операторы SIM: Beeline, MegaFon
+- Установленный модуль: AIUnblock v2.4.2 (versionCode 242)
+- Native: android/arm64, self-test OK
+- SNI-router: запущен на 127.0.0.1:15359
+
+Фактический результат
+
+Gemini НЕ разблокирован.
+
+В активной цепочке AIUNBLOCK_OUT отсутствуют:
+
+- Gemini внутри Google App: UID 10395 и 99910395;
+- отдельное приложение Gemini: UID 10510.
+
+Цепочка GEMINI_DNAT пустая. Поэтому трафик отдельного приложения Gemini не направляется через gateway. Google App также не направляется в AIUNBLOCK_SNI.
+
+Остальные активные правила
+
+- NotebookLM UID 10411 -> AIUNBLOCK_SNI;
+- ChatGPT UID 10373 -> CHATGPT_DNAT;
+- Claude UID 10321 -> CLAUDE_DNAT;
+- Grok UID 10328 -> GROK_DNAT.
+
+Причина
+
+Лог supervisor многократно показывает «Gateway Gemini не найден». Сравнительный тест выполнен нативным ядром прямо на телефоне:
+
+1. Исходный набор проверки:
+   gemini.google.com,
+   robinfrontend-pa.googleapis.com,
+   proactivebackend-pa.googleapis.com.
+
+   Результат: gateway 87.228.47.204 выбран, exit code 0.
+
+2. Расширенный набор v2.4.2, дополнительно включающий:
+   www.google.com,
+   www.gstatic.com,
+   accounts.google.com.
+
+   Результат: gateway не выбран, exit code 1.
+
+На устройстве основные Gemini API через 87.228.47.204 проходят:
+
+- gemini.google.com: HTTP 200;
+- robinfrontend-pa.googleapis.com: HTTP 404, TLS и HTTP работают;
+- proactivebackend-pa.googleapis.com: HTTP 404, TLS и HTTP работают;
+- accounts.google.com: HTTP 302, TLS и HTTP работают.
+
+Но www.google.com и www.gstatic.com через все десять gateway завершаются timeout, EOF, connection reset либо ошибкой сертификата. Поэтому строгая проверка вспомогательных доменов блокирует включение рабочего основного Gemini-маршрута.
+
+Дополнительное наблюдение
+
+Файл gateways/gemini.current содержит старый адрес 87.228.47.204, поэтому команда aiunblockctl status печатает Gemini=87.228.47.204. Это не означает наличие активного маршрута: реальное состояние необходимо определять по AIUNBLOCK_OUT/GEMINI_DNAT и отчёту supervisor.
+
+Вывод
+
+Сборка v2.4.2 на этом телефоне неработоспособна для Gemini. Для следующего исправления необходимо:
+
+- не включать www.google.com/www.gstatic.com в обязательный gateway selector;
+- не маршрутизировать через Gemini gateway домены, которые этот gateway не обслуживает;
+- сохранить проверку основных Gemini API;
+- исправить aiunblockctl status, чтобы он не показывал кешированный gateway как активный маршрут;
+- после исправления повторно проверить реальные iptables-цепочки и Gemini на мобильной сети.
+
+Изменений на телефоне во время проверки не выполнялось. Настройки, приложения и сетевые интерфейсы не переключались.

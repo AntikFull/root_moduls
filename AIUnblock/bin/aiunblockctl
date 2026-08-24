@@ -225,9 +225,40 @@ collect_diag() {
   echo "Примечание: диагностический архив содержит системные логи; перед публичной публикацией его лучше не выкладывать открыто."
 }
 
+test_ai_endpoints() {
+  local native="$MODDIR/bin/aiunblock-native" group ip loc domain code
+  if [ ! -x "$native" ]; then
+    echo "Ошибка: $native отсутствует или не исполняем"
+    return 1
+  fi
+  echo "=== AI Unblock RU: Проверка скорости и геолокации шлюзов ==="
+  for group in gemini notebook chatgpt claude grok; do
+    ip=$(cat "$MODDIR/gateways/$group.current" 2>/dev/null)
+    if [ -z "$ip" ]; then
+      printf '%-10s : %s\n' "[$group]" "Шлюз не выбран / оффлайн"
+      continue
+    fi
+    loc=$("$native" trace -ip "$ip" -domain gemini.google.com -timeout 4 2>/dev/null | awk -F'loc=' '{print $2}')
+    case "$group" in
+      gemini) domain="gemini.google.com" ;;
+      notebook) domain="notebooklm-pa.googleapis.com" ;;
+      chatgpt) domain="chatgpt.com" ;;
+      claude) domain="claude.ai" ;;
+      grok) domain="grok.com" ;;
+    esac
+    code=$("$native" tls-probe -ip "$ip" -domain "$domain" -timeout 4 2>/dev/null)
+    if [ -n "$code" ] && [ "$code" -ge 200 ] 2>/dev/null && [ "$code" -lt 500 ] 2>/dev/null; then
+      printf '%-10s : IP=%-15s HTTP=%-3s ГЕО=%-4s [OK]\n' "[$group]" "$ip" "$code" "${loc:-safe}"
+    else
+      printf '%-10s : IP=%-15s HTTP=%-3s ГЕО=%-4s [FAIL]\n' "[$group]" "$ip" "${code:-err}" "${loc:-?}"
+    fi
+  done
+}
+
 help_text() {
   cat <<'TXT'
 aiunblockctl status
+aiunblockctl test           # проверить доступность, HTTP статус и ГЕО активных шлюзов
 aiunblockctl refresh        # принудительно перепроверить UID/DNS/gateway
 aiunblockctl reload         # перечитать конфиги + refresh
 aiunblockctl restart        # перезапустить SNI-router
@@ -240,6 +271,7 @@ TXT
 
 case "$1" in
   ""|status) status ;;
+  test|ping) test_ai_endpoints ;;
   refresh) signal_refresh ;;
   reload) signal_reload ;;
   restart) restart_router ;;
@@ -250,3 +282,4 @@ case "$1" in
   help|-h|--help) help_text ;;
   *) help_text; exit 2 ;;
 esac
+

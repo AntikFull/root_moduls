@@ -19,9 +19,29 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
+)
+
+var (
+	rootPoolOnce   sync.Once
+	cachedRootPool *x509.CertPool
+	rootPoolErr    error
+
+	bufPool4k = sync.Pool{
+		New: func() any {
+			b := make([]byte, 4096)
+			return &b
+		},
+	}
+	bufPool32k = sync.Pool{
+		New: func() any {
+			b := make([]byte, 32768)
+			return &b
+		},
+	}
 )
 
 var version = "dev"
@@ -281,13 +301,21 @@ func handleConn(conn net.Conn, routes routeTable, gatewayDir string, helloTimeou
 
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(upstream, conn)
+		bufPtr := bufPool32k.Get().(*[]byte)
+		defer bufPool32k.Put(bufPtr)
+		_, _ = io.CopyBuffer(upstream, conn, *bufPtr)
 		if u, ok := upstream.(*net.TCPConn); ok {
 			_ = u.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
-	go func() { _, _ = io.Copy(conn, upstream); _ = tc.CloseWrite(); done <- struct{}{} }()
+	go func() {
+		bufPtr := bufPool32k.Get().(*[]byte)
+		defer bufPool32k.Put(bufPtr)
+		_, _ = io.CopyBuffer(conn, upstream, *bufPtr)
+		_ = tc.CloseWrite()
+		done <- struct{}{}
+	}()
 	<-done
 	<-done
 }
@@ -328,7 +356,9 @@ func decodeOriginalDst(raw []byte) (*net.TCPAddr, error) {
 
 func sniffClientHello(r io.Reader) ([]byte, string, error) {
 	buf := make([]byte, 0, 8192)
-	tmp := make([]byte, 4096)
+	tmpPtr := bufPool4k.Get().(*[]byte)
+	defer bufPool4k.Put(tmpPtr)
+	tmp := *tmpPtr
 	for len(buf) < maxHelloBytes {
 		n, err := r.Read(tmp)
 		if n > 0 {
@@ -476,48 +506,52 @@ func parseClientHelloBody(b []byte) (string, bool, error) {
 }
 
 func androidRootPool() (*x509.CertPool, error) {
-	pool, sysErr := x509.SystemCertPool()
-	haveSystemPool := sysErr == nil && pool != nil
-	if pool == nil {
-		pool = x509.NewCertPool()
-	}
-	dirs := []string{
-		"/apex/com.android.conscrypt/cacerts",
-		"/system/etc/security/cacerts",
-		"/data/misc/keychain/cacerts-added",
-		"/data/misc/user/0/cacerts-added",
-	}
-	added := 0
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+	rootPoolOnce.Do(func() {
+		pool, sysErr := x509.SystemCertPool()
+		haveSystemPool := sysErr == nil && pool != nil
+		if pool == nil {
+			pool = x509.NewCertPool()
 		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		dirs := []string{
+			"/apex/com.android.conscrypt/cacerts",
+			"/system/etc/security/cacerts",
+			"/data/misc/keychain/cacerts-added",
+			"/data/misc/user/0/cacerts-added",
+		}
+		added := 0
+		for _, dir := range dirs {
+			entries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
 			}
-			if pool.AppendCertsFromPEM(b) {
-				added++
-				continue
-			}
-			if cert, err := x509.ParseCertificate(b); err == nil {
-				pool.AddCert(cert)
-				added++
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+				if err != nil {
+					continue
+				}
+				if pool.AppendCertsFromPEM(b) {
+					added++
+					continue
+				}
+				if cert, err := x509.ParseCertificate(b); err == nil {
+					pool.AddCert(cert)
+					added++
+				}
 			}
 		}
-	}
-	// Subjects() is documented to return nothing for a system pool, so it cannot
-	// prove the pool is empty. Only give up when the system pool itself failed
-	// AND no on-disk certificate directory was readable.
-	if added == 0 && !haveSystemPool && len(pool.Subjects()) == 0 {
-		return nil, errors.New("no trusted CA certificates found")
-	}
-	return pool, nil
+		// Subjects() is documented to return nothing for a system pool, so it cannot
+		// prove the pool is empty. Only give up when the system pool itself failed
+		// AND no on-disk certificate directory was readable.
+		if added == 0 && !haveSystemPool && len(pool.Subjects()) == 0 {
+			rootPoolErr = errors.New("no trusted CA certificates found")
+			return
+		}
+		cachedRootPool = pool
+	})
+	return cachedRootPool, rootPoolErr
 }
 
 func tlsDialIPv4Port(ip string, port int, domain string, timeout time.Duration) (*tls.Conn, error) {
@@ -752,33 +786,53 @@ func runProbe(args []string) int {
 		return 1
 	}
 
-	ok := make([]bool, len(valid))
+	type probeResult struct {
+		ip   string
+		loc  string
+		rtt  time.Duration
+		good bool
+	}
+	res := make([]probeResult, len(valid))
 	done := make(chan int, len(valid))
 	for i, ip := range valid {
 		go func(idx int, gateway string) {
 			defer func() { done <- idx }()
+			start := time.Now()
 			for _, h := range hosts {
 				if _, err := probeGateway(gateway, h, timeout); err != nil {
 					return
 				}
 			}
-			// Фильтрация шлюзов по локации, если задан rejectLoc
+			// Для Smart DNS: если Cloudflare trace вернул явный запрещенный регион (например RU), отклоняем.
+			// Если домен не Cloudflare (например Google/Gemini), loc будет пустым — это норма.
 			if *rejectLoc != "" {
 				if loc := gatewayLoc(gateway, hosts[0], timeout); loc != "" && loc == strings.ToUpper(*rejectLoc) {
 					return
 				}
 			}
-			ok[idx] = true
+			res[idx] = probeResult{
+				ip:   gateway,
+				rtt:  time.Since(start),
+				good: true,
+			}
 		}(i, ip)
 	}
 	for range valid {
 		<-done
 	}
-	for i, good := range ok {
-		if good {
-			fmt.Println(valid[i])
-			return 0
+
+	// Выбираем шлюз с наименьшей задержкой (минимальным RTT) среди прошедших проверку ГЕО
+	var best *probeResult
+	for i := range res {
+		if res[i].good {
+			if best == nil || res[i].rtt < best.rtt {
+				best = &res[i]
+			}
 		}
+	}
+	if best != nil {
+		fmt.Println(best.ip)
+		return 0
 	}
 	return 1
 }

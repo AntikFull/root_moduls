@@ -3,6 +3,7 @@ gemini_sni com.google.android.webview
 gemini_sni com.android.chrome
 gemini_sni com.rx.geminipro
 gemini     com.google.android.apps.bard
+gemini     com.google.android.apps.barx
 notebook   com.google.android.apps.labs.language.tailwind
 chatgpt    com.openai.chatgpt
 claude     com.anthropic.claude
