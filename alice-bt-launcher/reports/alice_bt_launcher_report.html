@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Отчет о модуле Alice AI Bluetooth Auto-Launcher</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+        h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #2980b9; margin-top: 20px; display: flex; align-items: center; gap: 8px; }
+        .material-symbols-outlined { vertical-align: middle; }
+        ul { background: #f9f9f9; padding: 15px 30px; border-radius: 5px; }
+        li { margin-bottom: 8px; }
+        .badge { background: #27ae60; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+        .code { font-family: monospace; background: #eee; padding: 2px 5px; border-radius: 3px; }
+        footer { margin-top: 30px; font-size: 0.9em; color: #7f8c8d; border-top: 1px solid #eee; padding-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Модуль Alice AI Bluetooth Auto-Launcher <span class="badge">v1.1.0</span></h1>
+    <p>Модуль успешно обновлен и оптимизирован: устранен побочный эффект сброса на рабочий стол, удалено лишнее опрашивание Keep-Alive и перенесены логи.</p>
+
+    <h2><span class="material-symbols-outlined">info</span> Основная информация:</h2>
+    <ul>
+        <li><b>Автор:</b> eCubz (<a href="https://t.me/eCubz">https://t.me/eCubz</a>)</li>
+        <li><b>Поддержка:</b> <a href="https://t.me/module_ecubz">https://t.me/module_ecubz</a></li>
+        <li><b>Целевые наушники:</b> Яндекс Дропс (<span class="code">60:3D:61:B6:8B:00</span>)</li>
+        <li><b>Приложение:</b> Алиса AI (<span class="code">com.yandex.aliceapp</span>)</li>
+        <li><b>Совместимость:</b> Magisk / KernelSU / KernelSU Next / APatch</li>
+    </ul>
+
+    <h2><span class="material-symbols-outlined">tune</span> Реализованные возможности и оптимизации:</h2>
+    <ul>
+        <li><b>Бесшовный возврат в приложение:</b> При подключении наушников Алиса AI запускается и возвращает фокус в предыдущую задачу через <span class="code">KEYCODE_BACK</span> (режим <span class="code">MINIMIZE_MODE=1</span>), не выкидывая на рабочий стол.</li>
+        <li><b>Событийный режим без Keep-Alive нагрузки:</b> Исключены постоянные проверки <span class="code">pidof</span>. Модуль реагирует только на реальное изменение статуса Bluetooth.</li>
+        <li><b>5-секундный защитный буфер:</b> При отсоединении выдерживается пауза с контрольной проверкой перед выгрузкой <span class="code">am force-stop</span>.</li>
+        <li><b>Локальный лог:</b> Логи перенесены в <span class="code">$MODDIR/debug.log</span> с ротацией по 100 КБ (папка <span class="code">/sdcard</span> больше не засоряется).</li>
+        <li><b>Гибкий <span class="code">config.conf</span>:</b> Полное управление поведением запуска и сворачивания.</li>
+    </ul>
+
+    <footer>
+        Собрано с соблюдением правил POSIX-нормализации и Unix LF окончаниями строк.
+    </footer>
+</body>
+</html>
