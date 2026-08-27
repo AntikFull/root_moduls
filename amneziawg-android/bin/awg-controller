@@ -278,8 +278,11 @@ start_profile() {
 
   # 2. Настройка параметров через awg setconf
   log_i "[$prof_name] Применение параметров из $conf_file..."
-  if ! WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file"; then
-    log_e "[$prof_name] Ошибка применения конфигурации через awg setconf!"
+  local setconf_err
+  setconf_err=$(WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file" 2>&1)
+  local setconf_rc=$?
+  if [ $setconf_rc -ne 0 ]; then
+    log_e "[$prof_name] Ошибка применения конфигурации через awg setconf: $setconf_err"
     stop_profile "$prof_name"
     return 1
   fi
