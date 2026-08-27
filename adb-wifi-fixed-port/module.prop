@@ -1,0 +1,7 @@
+id=adb_wifi_fixed_port
+name=ADB WiFi On-Demand Fixed Port (5555)
+version=v1.1
+versionCode=110
+author=eCubz
+description=Синхронизирует постоянный порт 5555 со системным тумблером «Отладка по Wi-Fi». Порт 5555 открыт строго при включении отладки и наглухо закрыт при выключении.
+updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/adb-wifi-fixed-port/update.json

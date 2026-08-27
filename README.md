@@ -125,3 +125,6 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 ## 📄 Лицензия / License
 
 Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.
+
+
+| [ADB WiFi Fixed Port (5555)](adb-wifi-fixed-port/) | Фиксация постоянного порта 5555 строго при включении Wi-Fi отладки | [Скачать v1.1](releases/adb_wifi_fixed_port_v1.1_110.zip) |
