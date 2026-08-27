@@ -4,14 +4,14 @@
 
 [![Android](https://img.shields.io/badge/Android-7.0%20--%2016-brightgreen.svg?style=for-the-badge&logo=android)](https://github.com/AntikFull/root_moduls)
 [![Root Environments](https://img.shields.io/badge/Root-Magisk%20%7C%20KernelSU%20%7C%20APatch-orange.svg?style=for-the-badge&logo=rooted)](https://github.com/AntikFull/root_moduls)
-[![Telegram Channel](https://img.shields.io/badge/Telegram-@module__ecubz-blue.svg?style=for-the-badge&logo=telegram)](https://t.me/module_ecubz)
+[![Telegram Channel](https://img.shields.io/badge/Telegram-@eCubzPlugins-blue.svg?style=for-the-badge&logo=telegram)](https://t.me/eCubzPlugins)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 
 **Официальный репозиторий systemless-модулей нового поколения для Magisk, KernelSU, KernelSU Next и APatch.**
 <br>
 *Official repository of next-generation systemless modules for Magisk, KernelSU, KernelSU Next, and APatch.*
 
-[🇷🇺 Русский](#-русский-раздел) • [🇬🇧 English](#-english-section) • [📦 Скачать релизы](#-прямые-ссылки-на-загрузку--direct-downloads) • [💬 Сообщество](#-автор-и-сообщество--author--community)
+[🇷🇺 Русский](#-русский-раздел) • [🇬🇧 English](#-english-section) • [📦 Скачать релизы](#-прямые-ссылки-на-загрузку--direct-downloads) • [💬 Сообщество](#-автор-и-сообщество--author--community) • [💖 Поддержать](#-поддержать-разработчика--support--donations)
 
 </div>
 
@@ -19,18 +19,20 @@
 
 ## 🇷🇺 Русский раздел
 
-Коллекция высокопроизводительных, энергоэффективных модулей от **eCubz**, ориентированных на решение реальных задач: системный обход блокировок и замедлений (YouTube, Discord), отключение системной телеметрии и рекламы, бесплатная раздача интернета без доплат и доступ к зарубежным AI-сервисам без глобального VPN.
+Коллекция высокопроизводительных, энергоэффективных модулей от **eCubz**, ориентированных на решение реальных задач: системный обход блокировок и замедлений (YouTube, Discord), мультипрофильный AmneziaWG клиент, отключение системной телеметрии и рекламы, бесплатная раздача интернета без доплат, фиксация беспроводной отладки и доступ к зарубежным AI-сервисам без глобального VPN.
 
 ### 📦 Каталог модулей
 
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
-| **[zapret2-android](./zapret2-android)** | `v4.1.0` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
-| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v7.0.1` | Блокировка рекламы и аналитики внутри процессов приложений через Zygisk: штатное выключение SDK, сетевой перехват по стеку вызовов, схлопывание баннеров, закрытие полноэкранной рекламы. Без списков доменов в основе и без сканирования APK. | **Zygisk обязателен**: Magisk с Zygisk / KernelSU + ZygiskNext или ReZygisk / APatch (Android 8–16) |
-| **[AIUnblock](./AIUnblock)** | `v3.0.5` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch |
-| **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.1.5` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек и выделенной таблицей VPN-маршрутизации для обхода ограничений операторов на раздачу интернета. | Magisk / KernelSU / APatch |
+| **[AWG eCubz](./amneziawg-android)** | `v1.0.9` | Высокопроизводительный multi-profile клиент AmneziaWG (AWG 1.0) с раздельной маршрутизацией приложений (Per-App `uidrange` Priority 9000), умной паузой в доверенных Wi-Fi сетях (Smart Pause), сканером QR-кодов и Material 3 WebUI. | Magisk / KernelSU / APatch (Android 9–16) |
+| **[zapret2-android](./zapret2-android)** | `v4.2.9` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
 | **[tg-ws-proxy](./tg-ws-proxy)** | `v1.2.0` | Systemless MTProto WS Proxy для ускорения и стабильной работы Telegram без системного VPN. Встроенный WebUI (M3 Expressive), прямой WebSocket к ДЦ Telegram, поддержка Cloudflare Worker/доменов, пресеты батареи и Wi-Fi раздачи. | Magisk / KernelSU / APatch (Android 7–16) |
-| **[alice-bt-launcher](./alice-bt-launcher)** | `v1.1.0` | Автоматический фоновый запуск и контроль процессов голосового ассистента Алиса AI при подключении Bluetooth-наушников или гарнитуры. | Magisk / KernelSU / APatch |
+| **[analytics_ads_disabler](./analytics_ads_disabler)** | `v7.0.2` | Блокировка рекламы и аналитики внутри процессов приложений через Zygisk: штатное выключение SDK, сетевой перехват по стеку вызовов, схлопывание баннеров, закрытие полноэкранной рекламы. Без списков доменов в основе и без сканирования APK. | **Zygisk обязателен**: Magisk / KernelSU + ZygiskNext / APatch (Android 8–16) |
+| **[AIUnblock](./AIUnblock)** | `v3.1.1` | Автоматическая избирательная маршрутизация для приложений искусственного интеллекта (ChatGPT, Gemini, Claude, Grok, NotebookLM, Perplexity) без включения VPN на весь телефон. | Magisk / KernelSU / APatch (Android 8–16) |
+| **[nfqttl_ecubz](./nfqttl_ecubz)** | `v15.1.5` | Smart Multi-Engine фиксация TTL (IPv4) и Hop Limit (IPv6) с защитой от утечек и выделенной таблицей VPN-маршрутизации для обхода ограничений операторов на раздачу интернета. | Magisk / KernelSU / APatch (Android 7–16) |
+| **[adb-wifi-fixed-port](./adb-wifi-fixed-port)** | `v1.1` | Автоматическая фиксация постоянного стандартного порта `5555` для беспроводной отладки ADB при включении Wi-Fi. Больше никаких случайных портов при переподключении. | Magisk / KernelSU / APatch (Android 11–16) |
+| **[alice-bt-launcher](./alice-bt-launcher)** | `v1.1.0` | Автоматический фоновый запуск и контроль процессов голосового ассистента Алиса AI при подключении Bluetooth-наушников или гарнитуры. | Magisk / KernelSU / APatch (Android 8–16) |
 
 ---
 
@@ -43,40 +45,48 @@
 
 ## 🇬🇧 English Section
 
-High-performance, battery-friendly root modules built by **eCubz** designed for everyday Android enhancement: system-level DPI bypass (YouTube, Discord), telemetry/ad disabling, mobile hotspot carrier bypass, and seamless AI routing.
+High-performance, battery-friendly root modules built by **eCubz** designed for everyday Android enhancement: system-level DPI bypass (YouTube, Discord), multi-profile AmneziaWG tunneling, telemetry/ad disabling, mobile hotspot carrier bypass, and seamless AI routing.
 
 ### 📦 Modules Overview
 
-1. **[zapret2-android](./zapret2-android) (v4.1.0)**
-   - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight tunnel for any selected applications.
-   - Restores YouTube 4K playback, Discord voice/media, and blocked web resources directly in the kernel netfilter. Zero battery drain compared to classic VPNs. Full hotspot/tethering support.
+1. **[AWG eCubz](./amneziawg-android) (v1.0.9)**
+   - Systemless Multi-Profile AmneziaWG (AWG 1.0) client with per-app split routing (`uidrange` kernel rules), Smart Pause in trusted Wi-Fi networks, QR code import, and modern Material 3 WebUI.
 
-2. **[analytics_ads_disabler](./analytics_ads_disabler) (v7.0.1)**
-   - In-process ad & analytics blocker built on Zygisk. Ad SDKs are identified by class-name signatures instead of domain blocklists, so the rule set stays stable for years.
-   - Four layers: the SDK's own GDPR opt-out API, in-process network denial (endpoint list plus call-stack inference), ad container collapsing, and full-screen ad dismissal.
-   - No APK scanning, no DEX parsing, no periodic polling. One background process that sleeps in the kernel; zero idle load.
-   - Requires Zygisk (Magisk Zygisk / KernelSU + ZygiskNext or ReZygisk / APatch). Website ads inside standalone browsers are out of scope by design.
-3. **[AIUnblock](./AIUnblock) (v3.0.5)**
+2. **[zapret2-android](./zapret2-android) (v4.2.9)**
+   - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight tunnel for any selected applications. Restores YouTube 4K, Discord voice/media, and blocked sites directly in netfilter.
+
+3. **[tg-ws-proxy](./tg-ws-proxy) (v1.2.0)**
+   - Systemless MTProto WebSocket proxy for Telegram acceleration without full-device VPN. Direct WSS tunneling to Telegram DCs, Cloudflare Worker fallback, and Material 3 Expressive WebUI.
+
+4. **[analytics_ads_disabler](./analytics_ads_disabler) (v7.0.2)**
+   - In-process ad & analytics blocker built on Zygisk. Ad SDKs are identified by class-name signatures instead of domain blocklists. GDPR opt-out API invocation, in-process network denial, and ad container collapsing.
+
+5. **[AIUnblock](./AIUnblock) (v3.1.1)**
    - Smart transparent routing for AI apps (ChatGPT, Google Gemini, Claude, Grok, NotebookLM, Perplexity) without tunneling full device traffic.
-4. **[nfqttl_ecubz](./nfqttl_ecubz) (v15.1.5)**
-   - Advanced multi-engine IPv4 TTL & IPv6 Hop Limit locker (iptables/nftables) with Zero-Leak forwarding and dedicated VPN routing table to bypass mobile carrier tethering throttling and extra fees.
-5. **[tg-ws-proxy](./tg-ws-proxy) (v1.2.0)**
-   - Systemless MTProto WebSocket proxy for Telegram acceleration and DPI bypass without full-device VPN. Direct WSS tunneling to Telegram DCs, Cloudflare Worker fallback, battery profile (single socket), and Material 3 Expressive WebUI.
-6. **[alice-bt-launcher](./alice-bt-launcher) (v1.1.0)**
+
+6. **[nfqttl_ecubz](./nfqttl_ecubz) (v15.1.5)**
+   - Advanced multi-engine IPv4 TTL & IPv6 Hop Limit locker (iptables/nftables) with Zero-Leak forwarding and dedicated VPN routing table to bypass mobile carrier tethering throttling.
+
+7. **[adb-wifi-fixed-port](./adb-wifi-fixed-port) (v1.1)**
+   - Locks wireless ADB debugging to standard port `5555` automatically on Wi-Fi connection, eliminating random ports.
+
+8. **[alice-bt-launcher](./alice-bt-launcher) (v1.1.0)**
    - Background daemon for auto-launching and managing Alice AI Assistant when Bluetooth audio devices connect.
 
 ---
 
 ## 📦 Прямые ссылки на загрузку / Direct Downloads
 
-| Модуль / Module | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
-| :--- | :--- | :--- |
-| **zapret2-android v4.1.0** | [zapret2-android_v4.1.0_4100.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v4.1.0_4100.zip) | ~11.8 MB |
-| **tg-ws-proxy v1.2.0** | [tg-ws-proxy_v1.2.0_1200.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/tg-ws-proxy_v1.2.0_1200.zip) | ~11.4 MB |
-| **analytics_ads_disabler v7.0.1** | [analytics_ads_disabler_v7.0.1_7001.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v7.0.1_7001.zip) | ~425 KB |
-| **AIUnblock v3.0.5** | [AIUnblock_v3.0.5_305.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v3.0.5_305.zip) | ~9.6 MB |
-| **nfqttl_ecubz v15.1.5** | [nfqttl_ecubz_v15.1.5_1515.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/nfqttl_ecubz_v15.1.5_1515.zip) | ~80 KB |
-| **alice-bt-launcher v1.1.0** | [alice-bt-launcher_v1.1.0_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/alice-bt-launcher_v1.1.0_110.zip) | ~7.5 KB |
+| Модуль / Module | Актуальная версия | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
+| :--- | :--- | :--- | :--- |
+| **AWG eCubz** | `v1.0.9` | [amneziawg-android_v1.0.9_1009.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/amneziawg-android_v1.0.9_1009.zip) | ~10.9 MB |
+| **zapret2-android** | `v4.2.9` | [zapret2-android_v4.2.9_4290.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v4.2.9_4290.zip) | ~16.4 MB |
+| **tg-ws-proxy** | `v1.2.0` | [tg-ws-proxy_v1.2.0_1200.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/tg-ws-proxy_v1.2.0_1200.zip) | ~11.4 MB |
+| **AIUnblock** | `v3.1.1` | [AIUnblock_v3.1.1_311.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v3.1.1_311.zip) | ~9.6 MB |
+| **analytics_ads_disabler** | `v7.0.2` | [analytics_ads_disabler_v7.0.2_7002.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/analytics_ads_disabler_v7.0.2_7002.zip) | ~445 KB |
+| **nfqttl_ecubz** | `v15.1.5` | [nfqttl_ecubz_v15.1.5_1515.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/nfqttl_ecubz_v15.1.5_1515.zip) | ~100 KB |
+| **adb-wifi-fixed-port** | `v1.1` | [adb_wifi_fixed_port_v1.1_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/adb_wifi_fixed_port_v1.1_110.zip) | ~2.3 KB |
+| **alice-bt-launcher** | `v1.1.0` | [alice-bt-launcher_v1.1.0_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/alice-bt-launcher_v1.1.0_110.zip) | ~6.5 KB |
 
 > 📂 Все предыдущие версии доступны в каталоге [`releases/Archive/`](https://github.com/AntikFull/root_moduls/tree/main/releases/Archive).
 
@@ -94,21 +104,21 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ## 🔍 Теги и поисковая оптимизация / SEO Keywords
 
-`magisk` • `magisk-module` • `kernelsu` • `kernelsu-module` • `apatch` • `apatch-module` • `tg-ws-proxy` • `telegram-proxy` • `mtproto-proxy` • `zapret` • `zapret2` • `nfqws` • `tpws` • `dpi-bypass` • `youtube-unblock` • `discord-unblock` • `adblock` • `hyperos-debloat` • `miui-debloat` • `telemetry-blocker` • `ttl-fix` • `hop-limit` • `tethering-bypass` • `ai-unblock` • `chatgpt` • `gemini-android` • `claude` • `systemless` • `android-root` • `android-16`
+`magisk` • `magisk-module` • `kernelsu` • `kernelsu-module` • `apatch` • `apatch-module` • `amneziawg` • `amneziawg-android` • `wireguard` • `tg-ws-proxy` • `telegram-proxy` • `mtproto-proxy` • `zapret` • `zapret2` • `nfqws` • `tpws` • `dpi-bypass` • `youtube-unblock` • `discord-unblock` • `adblock` • `telemetry-blocker` • `ttl-fix` • `hop-limit` • `tethering-bypass` • `adb-wifi` • `ai-unblock` • `chatgpt` • `gemini-android` • `claude` • `systemless` • `android-root` • `android-16`
 
 ---
 
 ## 💬 Автор и Сообщество / Author & Community
 
 - **Автор / Author:** eCubz ([@eCubz](https://t.me/eCubz))
-- **Официальный Telegram-канал и поддержка:** [t.me/module_ecubz](https://t.me/module_ecubz)
+- **Официальный Telegram-канал:** [t.me/eCubzPlugins](https://t.me/eCubzPlugins)
 - **Багрепорты и предложения:** [GitHub Issues](https://github.com/AntikFull/root_moduls/issues)
 
 ---
 
 ## 💖 Поддержать разработчика / Support & Donations
 
-Ваша поддержка мотивирует развивать проекты, поддерживать базы стратегий и оперативно выпускать фиксы!  
+Ваша поддержка мотивирует развивать проекты, поддерживать базы стратегий и оперативно выпускать регулярные обновления!  
 *Your support helps maintain the projects and release regular updates!*
 
 - **Ю.Money (Яндекс) — Предпочтительно / Preferred:**
@@ -124,7 +134,4 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ## 📄 Лицензия / License
 
-Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.
-
-
-| [ADB WiFi Fixed Port (5555)](adb-wifi-fixed-port/) | Фиксация постоянного порта 5555 строго при включении Wi-Fi отладки | [Скачать v1.1](releases/adb_wifi_fixed_port_v1.1_110.zip) |
+Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/eCubzPlugins** обязательно.
