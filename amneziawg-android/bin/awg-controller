@@ -136,7 +136,7 @@ get_conf_val() {
   ' "$file" 2>/dev/null
 }
 
-# Получение опций профиля из JSON
+# Получение опций профиля из JSON (с поддержкой fallback-ключей)
 get_opt_val() {
   local json_file="$1"
   local key="$2"
@@ -144,6 +144,11 @@ get_opt_val() {
   if [ -f "$json_file" ]; then
     local v
     v="$(grep -E '"'"$key"'"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' \n\t\r')"
+    if [ -z "$v" ] && [ "$key" = "custom_dns" ]; then
+      v="$(grep -E '"dns"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' \n\t\r')"
+    elif [ -z "$v" ] && [ "$key" = "dns" ]; then
+      v="$(grep -E '"custom_dns"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' \n\t\r')"
+    fi
     if [ -n "$v" ]; then
       printf '%s' "$v"
       return 0
@@ -208,13 +213,16 @@ start_profile() {
 
   log_i "Запуск профиля: $prof_name..."
 
+  # Остановка старого экземпляра если был (освобождает слот)
+  stop_profile "$prof_name" 2>/dev/null || true
+
   # Автоматическое распределение интерфейса, таблицы, fwmark и приоритета
   local slot_idx
   slot_idx="$(find_free_slot)"
   local iface="awg$slot_idx"
   local table_id=$((201 + slot_idx))
   local fwmark="$(printf '0x%x' $((0x2010 + slot_idx * 16)))"
-  local priority=$((10201 + slot_idx))
+  local priority=$((10201 + slot_idx * 10))
 
   local routing_mode
   routing_mode="$(get_opt_val "$opts_file" "routing_mode" "include_apps")"
@@ -229,9 +237,6 @@ start_profile() {
   local mtu_val
   mtu_val="$(get_conf_val "$conf_file" "MTU")"
   [ -z "$mtu_val" ] && mtu_val="1280"
-
-  # Остановка старого экземпляра если был
-  stop_profile "$prof_name" 2>/dev/null || true
 
   # 1. Запуск amneziawg-go
   log_i "[$prof_name] Старт amneziawg-go для интерфейса $iface (Слот #$slot_idx)..."
@@ -360,17 +365,29 @@ apply_profile_rules() {
   iptables -w 2 -t filter -N "$ch_kill" 2>/dev/null || iptables -w 2 -t filter -F "$ch_kill"
   iptables -w 2 -t filter -C AWG_FILTER -j "$ch_kill" 2>/dev/null || iptables -w 2 -t filter -A AWG_FILTER -j "$ch_kill"
 
-  # Очистка старых правил ip rule для этого fwmark
+  # Проверка наличия IPv6 в конфигурации профиля
+  local has_ipv6=0
+  local conf_addrs="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "Address")"
+  local conf_aips="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "AllowedIPs")"
+  if printf '%s\n%s' "$conf_addrs" "$conf_aips" | grep -Fq ':'; then
+    has_ipv6=1
+  fi
+
+  # Полная очистка ВСЕХ старых правил маршрутизации для этой таблицы
+  while ip rule del table "$table_id" 2>/dev/null; do :; done
+  while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
   while ip rule del fwmark "$fwmark" 2>/dev/null; do :; done
   while ip -6 rule del fwmark "$fwmark" 2>/dev/null; do :; done
 
   # Добавление ip rule для fwmark
   ip rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
-  ip -6 rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
+  if [ "$has_ipv6" = "1" ]; then
+    ip -6 rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
+  fi
 
-  # Добавление ip rule от IP-адресов интерфейса
+  # Добавление ip rule от IP-адресов интерфейса (toybox-совместимый awk)
   local if_ips
-  if_ips="$(ip -4 addr show dev "$iface" 2>/dev/null | grep -o 'inet [0-9.]\+' | awk '{print $2}')"
+  if_ips="$(ip -4 addr show dev "$iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="inet") {split($(i+1),a,"/"); print a[1]}}')"
   for ip_a in $if_ips; do
     [ -n "$ip_a" ] && ip rule add from "$ip_a" table "$table_id" pref "$((priority - 1))" 2>/dev/null || true
   done
@@ -383,11 +400,12 @@ apply_profile_rules() {
   iptables -w 2 -t mangle -A "$ch_mangle" -d 224.0.0.0/4 -j RETURN
   iptables -w 2 -t mangle -A "$ch_mangle" -d 255.255.255.255/32 -j RETURN
 
-  # Исключение самого туннельного демона amneziawg-go от зацикливания
-  local d_pid
-  d_pid="$(cat "$RUN_DIR/${iface}.pid" 2>/dev/null)"
-  if [ -n "$d_pid" ]; then
-    iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner 0 -p udp -j RETURN
+  # Исключение самого туннельного демона amneziawg-go от зацикливания по порту
+  local lport="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "ListenPort")"
+  if [ -n "$lport" ]; then
+    iptables -w 2 -t mangle -A "$ch_mangle" -p udp --sport "$lport" -j RETURN
+  else
+    iptables -w 2 -t mangle -A "$ch_mangle" -m mark --mark "$fwmark" -j RETURN
   fi
 
   # Резолв списка приложений в UIDs через Go CLI
@@ -401,8 +419,20 @@ apply_profile_rules() {
       log_i "[$prof_name] Маршрутизация UIDs (Include): $uids"
       for uid in $uids; do
         [ -z "$uid" ] && continue
+        # 1. Приоритетный маршрут в туннель
         ip rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
-        ip -6 rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        if [ "$has_ipv6" = "1" ]; then
+          ip -6 rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        fi
+
+        # 2. Fallback-маршрут (pref 9001) в table main при выключенном KillSwitch
+        if [ "$killswitch" != "true" ] && [ "$killswitch" != "1" ]; then
+          ip rule add uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+          if [ "$has_ipv6" = "1" ]; then
+            ip -6 rule add uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+          fi
+        fi
+
         iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j MARK --set-mark "$fwmark"
         if [ -n "$dns_val" ]; then
           local primary_dns="$(printf '%s' "$dns_val" | awk -F',' '{print $1}' | tr -d ' ')"
@@ -411,7 +441,7 @@ apply_profile_rules() {
             iptables -w 2 -t nat -A "$ch_nat" -m owner --uid-owner "$uid" -p tcp --dport 53 -j DNAT --to-destination "${primary_dns}:53"
           fi
         fi
-        if [ "$killswitch" = "true" ]; then
+        if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 127.0.0.0/8 -j ACCEPT
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 10.0.0.0/8 -j ACCEPT
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 172.16.0.0/12 -j ACCEPT
@@ -427,14 +457,18 @@ apply_profile_rules() {
       for uid in $uids; do
         [ -z "$uid" ] && continue
         ip rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        ip -6 rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        if [ "$has_ipv6" = "1" ]; then
+          ip -6 rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        fi
         iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j RETURN
       done
     fi
     ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
-    ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    if [ "$has_ipv6" = "1" ]; then
+      ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    fi
     iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
-    if [ "$killswitch" = "true" ]; then
+    if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
@@ -445,9 +479,11 @@ apply_profile_rules() {
   elif [ "$routing_mode" = "all_traffic" ]; then
     log_i "[$prof_name] Режим полного туннеля (все приложения)..."
     ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
-    ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    if [ "$has_ipv6" = "1" ]; then
+      ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    fi
     iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
-    if [ "$killswitch" = "true" ]; then
+    if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
@@ -520,8 +556,35 @@ stop_profile() {
   log_i "[$prof_name] Профиль полностью остановлен и очищен."
 }
 
-# Синхронизация правил и умная пауза в доверенных сетях
+# Приостановка профиля (снятие правил без убийства демона amneziawg-go)
+pause_profile() {
+  local prof_name="$1"
+  local table_id="$(cat "$RUN_DIR/${prof_name}.table" 2>/dev/null)"
+  log_i "[$prof_name] Перевод в режим сна (снятие правил маршрутизации)..."
+  if [ -n "$table_id" ]; then
+    while ip rule del table "$table_id" 2>/dev/null; do :; done
+    while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
+  fi
+  iptables -w 2 -t mangle -F "AWG_M_${prof_name}" 2>/dev/null || true
+  iptables -w 2 -t nat -F "AWG_N_${prof_name}" 2>/dev/null || true
+  iptables -w 2 -t filter -F "AWG_K_${prof_name}" 2>/dev/null || true
+}
+
+# Пробуждение профиля (восстановление правил маршрутизации)
+resume_profile() {
+  local prof_name="$1"
+  log_i "[$prof_name] Пробуждение из режима сна (восстановление правил)..."
+  rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
+  apply_profile_rules "$prof_name"
+}
+# Синхронизация правил и умная пауза в доверенных сетях с файловой блокировкой
 sync_rules() {
+  local lock_dir="$RUN_DIR/.sync.lock"
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    # Если лок уже удерживается другим процессом, пропускаем параллельный запуск
+    return 0
+  fi
+
   init_iptables_root
   local cur_ssid="$(get_current_ssid)"
 
@@ -543,25 +606,29 @@ sync_rules() {
     [ -f "$RUN_DIR/${p}.paused" ] && is_paused=1
 
     if [ -n "$cur_ssid" ] && is_ssid_trusted "$cur_ssid" "$trusted"; then
-      # Должен спать
-      if [ $is_running -eq 1 ]; then
-        log_i "[$p] Обнаружена доверенная сеть '$cur_ssid'. Уход в режим сна..."
-        stop_profile "$p" 2>/dev/null || true
+      # Должен спать в доверенной сети
+      if [ $is_running -eq 1 ] && [ $is_paused -eq 0 ]; then
+        log_i "[$p] Обнаружена доверенная сеть '$cur_ssid'. Перевод в режим сна..."
         echo "$cur_ssid" > "$RUN_DIR/${p}.paused"
+        pause_profile "$p"
       elif [ $is_paused -eq 0 ]; then
         echo "$cur_ssid" > "$RUN_DIR/${p}.paused"
+        pause_profile "$p"
       fi
     else
-      # Не в доверенной сети -> должен быть активен
-      if [ $is_paused -eq 1 ] || [ $is_running -eq 0 ]; then
+      # Не в доверенной сети (LTE или другой Wi-Fi) -> должен работать
+      if [ $is_paused -eq 1 ]; then
         log_i "[$p] Сеть сменилась (актуальный SSID: '${cur_ssid:-LTE/Other}'). Пробуждение туннеля..."
-        rm -f "$RUN_DIR/${p}.paused" 2>/dev/null || true
+        resume_profile "$p"
+      elif [ $is_running -eq 0 ]; then
         start_profile "$p" 2>/dev/null || true
-      elif [ $is_running -eq 1 ]; then
+      else
         apply_profile_rules "$p"
       fi
     fi
   done
+
+  rmdir "$lock_dir" 2>/dev/null || true
 }
 
 # Полная очистка всех профилей и модульных цепочек iptables
@@ -629,8 +696,8 @@ case "$1" in
       start_profile "$2"
     fi
     ;;
-  stop)
-    if [ -z "$2" ] || [ "$2" = "all" ]; then
+  stop|stop-all)
+    if [ -z "$2" ] || [ "$2" = "all" ] || [ "$1" = "stop-all" ]; then
       cleanup_all
     else
       stop_profile "$2"

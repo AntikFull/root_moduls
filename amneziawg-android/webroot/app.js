@@ -476,7 +476,7 @@ async function restartAll() {
 
 async function stopAll() {
   showToast('Остановка всех профилей...');
-  await sh('/data/adb/modules/amneziawg-android/bin/awg-controller stop-all');
+  await sh('/data/adb/modules/amneziawg-android/bin/awg-controller stop all');
   await refreshAllData();
   showToast('Все туннели остановлены');
 }
@@ -722,6 +722,10 @@ async function saveProfile() {
     showToast('Введите имя профиля!');
     return;
   }
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    showToast('Имя профиля может содержать только латинские буквы, цифры, _ и -');
+    return;
+  }
   if (!rawConf) {
     showToast('Введите конфигурацию AWG .conf!');
     return;
@@ -746,7 +750,11 @@ async function saveProfile() {
     echo '${escConf}' > /data/adb/amneziawg/profiles/${name}.conf
     echo '${escJson}' > /data/adb/amneziawg/profiles/${name}.json
     chmod 600 /data/adb/amneziawg/profiles/${name}.conf /data/adb/amneziawg/profiles/${name}.json
-    /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
+    if [ -f "/data/adb/amneziawg/run/${name}.iface" ]; then
+      /data/adb/modules/amneziawg-android/bin/awg-controller restart "${name}"
+    else
+      /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
+    fi
   `);
 
   closeProfileModal();

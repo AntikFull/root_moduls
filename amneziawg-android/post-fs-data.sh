@@ -13,7 +13,11 @@ chmod 755 "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" 2>/dev/null
 rm -rf "$RUN_DIR"/* "$TMP_DIR"/* 2>/dev/null
 rm -f /dev/wireguard/awg*.sock 2>/dev/null
 
-if [ ! -f "$PROFILES_DIR"/*.conf ]; then
+has_conf=0
+for f in "$PROFILES_DIR"/*.conf; do
+  [ -f "$f" ] && has_conf=1 && break
+done
+if [ $has_conf -eq 0 ]; then
   if [ -d "$MODDIR/profiles" ]; then
     cp -rn "$MODDIR/profiles"/* "$PROFILES_DIR/" 2>/dev/null || true
   fi

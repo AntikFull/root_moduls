@@ -8,8 +8,8 @@ if [ -x "$BIN_DIR/awg-controller" ]; then
 fi
 
 killall -9 amneziawg-go 2>/dev/null || true
-killall -9 awg-netmon 2>/dev/null || true
-killall -9 awg-appmon 2>/dev/null || true
+pkill -f awg-netmon 2>/dev/null || true
+pkill -f awg-appmon 2>/dev/null || true
 
 # Очистка iptables
 iptables -w 2 -t mangle -D OUTPUT -j AWG_MANGLE 2>/dev/null || true

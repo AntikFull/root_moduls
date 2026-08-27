@@ -1,6 +1,6 @@
 #!/system/bin/sh
-# awg-netmon — Монитор физических сетевых интерфейсов и доверенных Wi-Fi сетей
-# Отслеживает переключение Wi-Fi <-> LTE и автоматический сон/пробуждение в доверенных сетях.
+# awg-netmon — Монитор сети, watchdog хендшейка и доверенных сетей
+# Энергоэффективный мониторинг с гистерезисом замеров и сторожевым таймером.
 
 RUN_DIR="/data/adb/amneziawg/run"
 BIN_DIR="${0%/*}"
@@ -15,22 +15,62 @@ get_default_phys_iface() {
 get_current_ssid() {
   local s
   s="$(cmd wifi status 2>/dev/null | grep -o 'Wifi is connected to "[^"]*"' | sed 's/Wifi is connected to "//;s/"//' | head -n 1)"
-  if [ -z "$s" ]; then
-    s="$(dumpsys wifi 2>/dev/null | grep -o 'SSID: "[^"]*"' | head -n 1 | sed 's/SSID: "//;s/"//')"
-  fi
   printf '%s' "$s"
+}
+
+check_handshake_watchdog() {
+  # Проверка возраста последнего хендшейка для активных туннелей
+  for iface_file in "$RUN_DIR"/*.iface; do
+    [ -f "$iface_file" ] || continue
+    local p="$(basename "$iface_file" .iface)"
+    [ -f "$RUN_DIR/${p}.paused" ] && continue
+    local ifname="$(cat "$iface_file" 2>/dev/null)"
+    [ -z "$ifname" ] && continue
+
+    # Проверка дампа UAPI
+    local dump="$("$BIN_DIR/awg" show "$ifname" dump 2>/dev/null)"
+    [ -z "$dump" ] && continue
+
+    local last_hs="$(printf '%s\n' "$dump" | awk 'NR>1 {print $5}' | head -n 1)"
+    if [ -n "$last_hs" ] && [ "$last_hs" -gt 0 ] 2>/dev/null; then
+      local now="$(date +%s)"
+      local age=$((now - last_hs))
+      if [ $age -gt 180 ]; then
+        # Хендшейк устарел (более 180 сек без ответа сервера) -> перезапуск интерфейса
+        "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+      fi
+    fi
+  done
 }
 
 last_iface="$(get_default_phys_iface)"
 last_ssid="$(get_current_ssid)"
+counter=0
 
 while true; do
-  sleep 6
+  sleep 15
+  counter=$((counter + 1))
+
   cur_iface="$(get_default_phys_iface)"
   cur_ssid="$(get_current_ssid)"
+
+  # Гистерезис: подтверждение смены сети повторным замером через 2 секунды
   if [ "$cur_iface" != "$last_iface" ] || [ "$cur_ssid" != "$last_ssid" ]; then
-    last_iface="$cur_iface"
-    last_ssid="$cur_ssid"
+    sleep 2
+    cur_iface_confirm="$(get_default_phys_iface)"
+    cur_ssid_confirm="$(get_current_ssid)"
+    if [ "$cur_iface" = "$cur_iface_confirm" ] && [ "$cur_ssid" = "$cur_ssid_confirm" ]; then
+      last_iface="$cur_iface"
+      last_ssid="$cur_ssid"
+      if [ -x "$BIN_DIR/awg-controller" ]; then
+        "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
+      fi
+    fi
+  fi
+
+  # Каждые 45 секунд — проверка хендшейка watchdog и фоновый sync
+  if [ $((counter % 3)) -eq 0 ]; then
+    check_handshake_watchdog
     if [ -x "$BIN_DIR/awg-controller" ]; then
       "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
     fi
