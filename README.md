@@ -134,4 +134,4 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ## 📄 Лицензия / License
 
-Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/eCubzPlugins** обязательно.
+Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.
