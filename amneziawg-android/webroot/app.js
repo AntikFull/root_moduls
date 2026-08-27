@@ -746,6 +746,7 @@ async function saveProfile() {
     echo '${escConf}' > /data/adb/amneziawg/profiles/${name}.conf
     echo '${escJson}' > /data/adb/amneziawg/profiles/${name}.json
     chmod 600 /data/adb/amneziawg/profiles/${name}.conf /data/adb/amneziawg/profiles/${name}.json
+    /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
   `);
 
   closeProfileModal();
