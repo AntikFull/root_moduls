@@ -372,18 +372,25 @@ function renderDashboard() {
     const isUp = !!tunnel;
     const peer = (tunnel && tunnel.peers && tunnel.peers[0]) || null;
 
+    const isPaused = !isUp && !!prof.paused_ssid;
+
+    let badgeHtml = '<span class="m3-badge m3-badge-idle">Отключен</span>';
+    if (isUp) {
+      badgeHtml = '<span class="m3-badge m3-badge-success">Подключен</span>';
+    } else if (isPaused) {
+      badgeHtml = `<span class="m3-badge" style="background:rgba(255,180,0,0.15);color:#ffb400;border:1px solid rgba(255,180,0,0.3);">Спит (${escapeHtml(prof.paused_ssid)})</span>`;
+    }
+
     const card = document.createElement('div');
-    card.className = `m3-profile-card ${isUp ? 'active' : ''}`;
+    card.className = `m3-profile-card ${isUp ? 'active' : (isPaused ? 'paused' : '')}`;
     card.innerHTML = `
       <div class="m3-profile-header">
         <div class="m3-profile-title-box">
           <span class="m3-profile-name">${escapeHtml(prof.name)}</span>
-          <span class="m3-badge ${isUp ? 'm3-badge-success' : 'm3-badge-idle'}">
-            ${isUp ? 'Подключен' : 'Отключен'}
-          </span>
+          ${badgeHtml}
         </div>
         <label class="m3-switch">
-          <input type="checkbox" ${isUp ? 'checked' : ''} onchange="toggleProfile('${prof.name}', this.checked)">
+          <input type="checkbox" ${(isUp || isPaused) ? 'checked' : ''} onchange="toggleProfile('${prof.name}', this.checked)">
           <span class="m3-slider"></span>
         </label>
       </div>
@@ -612,6 +619,31 @@ function deselectAllApps() {
   renderFilteredApps();
 }
 
+async function insertCurrentWifiSsid() {
+  try {
+    const res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller get-current-ssid');
+    const ssid = (res.stdout || '').trim();
+    if (!ssid) {
+      showToast('Wi-Fi не подключен или имя сети не определено');
+      return;
+    }
+    const input = document.getElementById('prof-trusted-wifi');
+    if (!input) return;
+    const currentVal = input.value.trim();
+    if (!currentVal) {
+      input.value = ssid;
+    } else {
+      const list = currentVal.split(',').map(s => s.trim());
+      if (!list.includes(ssid)) {
+        input.value = currentVal + ', ' + ssid;
+      }
+    }
+    showToast(`Сеть "${ssid}" добавлена`);
+  } catch (e) {
+    showToast('Ошибка определения сети');
+  }
+}
+
 // Profile Modal Actions
 async function openProfileModal(name) {
   STATE.editingProfileName = name;
@@ -622,6 +654,7 @@ async function openProfileModal(name) {
   const killswitchInput = document.getElementById('prof-killswitch');
   const modeSelect = document.getElementById('prof-mode');
   const dnsInput = document.getElementById('prof-dns');
+  const trustedInput = document.getElementById('prof-trusted-wifi');
   const rawTextarea = document.getElementById('prof-conf-raw');
 
   STATE.selectedApps.clear();
@@ -638,6 +671,7 @@ async function openProfileModal(name) {
       killswitchInput.checked = !!data.killswitch;
       modeSelect.value = data.routing_mode || 'include_apps';
       dnsInput.value = data.custom_dns || '';
+      if (trustedInput) trustedInput.value = data.trusted_wifi || '';
       if (data.apps && Array.isArray(data.apps)) {
         data.apps.forEach(p => STATE.selectedApps.add(p));
       }
@@ -653,7 +687,6 @@ async function openProfileModal(name) {
     killswitchInput.checked = false;
     modeSelect.value = 'include_apps';
     dnsInput.value = '';
-    const trustedInput = document.getElementById('prof-trusted-wifi');
     if (trustedInput) trustedInput.value = '';
     rawTextarea.value = '';
   }
