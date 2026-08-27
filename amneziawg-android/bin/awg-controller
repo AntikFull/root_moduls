@@ -238,6 +238,12 @@ start_profile() {
   mtu_val="$(get_conf_val "$conf_file" "MTU")"
   [ -z "$mtu_val" ] && mtu_val="1280"
 
+  # Гарантированная очистка слота перед запуском: закрываем зависшие процессы и удаляем старый интерфейс
+  pkill -9 -f "amneziawg-go -f $iface" 2>/dev/null || true
+  pkill -9 -f "amneziawg-go $iface" 2>/dev/null || true
+  ip link del "$iface" 2>/dev/null || true
+  rm -f "$TMP_DIR/${iface}.sock" "$RUN_DIR/${iface}.sock" "/dev/wireguard/${iface}.sock" 2>/dev/null || true
+
   # 1. Запуск amneziawg-go
   log_i "[$prof_name] Старт amneziawg-go для интерфейса $iface (Слот #$slot_idx)..."
   WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" \
