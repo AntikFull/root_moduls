@@ -319,6 +319,17 @@ async function loadProfiles() {
   } catch (e) {
     // If parse error, keep existing profiles
   }
+
+  const pausedRes = await sh('for f in /data/adb/amneziawg/run/*.paused; do [ -f "$f" ] && echo "$(basename "$f" .paused)=$(cat "$f")"; done');
+  const pausedMap = {};
+  (pausedRes.stdout || '').trim().split('\n').forEach(line => {
+    if (!line) return;
+    const parts = line.split('=');
+    if (parts[0]) pausedMap[parts[0]] = parts[1] || 'Wi-Fi';
+  });
+  STATE.profiles.forEach(p => {
+    p.paused_ssid = pausedMap[p.name] || null;
+  });
 }
 
 async function loadStatus() {
@@ -427,9 +438,9 @@ function renderProfilesList() {
         </span>
       </div>
       <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 10px;">
-        Режим: ${prof.routing_mode === 'include_apps' ? 'Выбранные приложения' : (prof.routing_mode === 'exclude_apps' ? 'Исключая выбранные' : 'Полный туннель')} &bull; 
+        Режим: ${prof.routing_mode === 'include_apps' ? 'Выбранные' : (prof.routing_mode === 'exclude_apps' ? 'Исключая' : 'Полный')} &bull; 
         Приложений: ${prof.apps ? prof.apps.length : 0} &bull; 
-        KillSwitch: ${prof.killswitch ? 'Вкл' : 'Выкл'}
+        KillSwitch: ${prof.killswitch ? 'Вкл' : 'Выкл'}${prof.trusted_wifi ? ` &bull; Доверенные Wi-Fi: <span style="color:var(--md-sys-color-primary);">${prof.trusted_wifi}</span>` : ''}
       </p>
       <div class="m3-btn-group">
         <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')">QR-код</button>
@@ -642,6 +653,8 @@ async function openProfileModal(name) {
     killswitchInput.checked = false;
     modeSelect.value = 'include_apps';
     dnsInput.value = '';
+    const trustedInput = document.getElementById('prof-trusted-wifi');
+    if (trustedInput) trustedInput.value = '';
     rawTextarea.value = '';
   }
 
@@ -669,6 +682,7 @@ async function saveProfile() {
   const killswitch = document.getElementById('prof-killswitch').checked;
   const mode = document.getElementById('prof-mode').value;
   const dns = document.getElementById('prof-dns').value.trim();
+  const trustedWifi = document.getElementById('prof-trusted-wifi') ? document.getElementById('prof-trusted-wifi').value.trim() : '';
   const rawConf = document.getElementById('prof-conf-raw').value.trim();
 
   if (!name) {
@@ -686,6 +700,7 @@ async function saveProfile() {
     killswitch: killswitch,
     routing_mode: mode,
     custom_dns: dns,
+    trusted_wifi: trustedWifi,
     apps: Array.from(STATE.selectedApps)
   };
 

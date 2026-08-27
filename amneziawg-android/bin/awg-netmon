@@ -1,6 +1,6 @@
 #!/system/bin/sh
-# awg-netmon — Монитор физических сетевых интерфейсов Android
-# Отслеживает переключение Wi-Fi <-> LTE и обновляет правила только при реальной смене основного линка.
+# awg-netmon — Монитор физических сетевых интерфейсов и доверенных Wi-Fi сетей
+# Отслеживает переключение Wi-Fi <-> LTE и автоматический сон/пробуждение в доверенных сетях.
 
 RUN_DIR="/data/adb/amneziawg/run"
 BIN_DIR="${0%/*}"
@@ -12,13 +12,25 @@ get_default_phys_iface() {
   ip route show table main default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1
 }
 
+get_current_ssid() {
+  local s
+  s="$(cmd wifi status 2>/dev/null | grep -o 'Wifi is connected to "[^"]*"' | sed 's/Wifi is connected to "//;s/"//' | head -n 1)"
+  if [ -z "$s" ]; then
+    s="$(dumpsys wifi 2>/dev/null | grep -o 'SSID: "[^"]*"' | head -n 1 | sed 's/SSID: "//;s/"//')"
+  fi
+  printf '%s' "$s"
+}
+
 last_iface="$(get_default_phys_iface)"
+last_ssid="$(get_current_ssid)"
 
 while true; do
-  sleep 10
+  sleep 6
   cur_iface="$(get_default_phys_iface)"
-  if [ -n "$cur_iface" ] && [ "$cur_iface" != "$last_iface" ]; then
+  cur_ssid="$(get_current_ssid)"
+  if [ "$cur_iface" != "$last_iface" ] || [ "$cur_ssid" != "$last_ssid" ]; then
     last_iface="$cur_iface"
+    last_ssid="$cur_ssid"
     if [ -x "$BIN_DIR/awg-controller" ]; then
       "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
     fi
