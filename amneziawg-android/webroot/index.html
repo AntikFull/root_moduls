@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AWG eCubz</title>
+<link rel="stylesheet" href="style.css">
+<script src="jsqr.min.js"></script>
+<script src="qrcode.min.js"></script>
+</head>
+<body>
+
+<!-- M3 Expressive Top App Bar -->
+<header class="m3-top-app-bar">
+  <div class="m3-avatar">AWG</div>
+  <div class="m3-app-bar-title">
+    <h1>AWG eCubz</h1>
+    <p>Systemless Multi-Profile</p>
+  </div>
+  <span class="m3-badge-pill" id="app-ver">v1.0.8</span>
+</header>
+
+<!-- Hidden inputs for QR import -->
+<input type="file" id="global-qr-file-input" accept="image/*" style="display: none;">
+
+<main>
+  <!-- TAB 1: Панель (Главная) -->
+  <div class="tab-page active" id="tab-main">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Управление службой</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-btn-group">
+          <button class="m3-btn m3-btn-tonal" id="btn-master-restart"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Перезапуск всех</button>
+          <button class="m3-btn m3-btn-outlined" id="btn-master-stop"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M6 6h12v12H6z"/></svg> Остановить все</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Profile Cards -->
+    <div class="m3-card-section-title">Активные туннели</div>
+    <div id="dashboard-cards" class="m3-cards-list">
+      <!-- Динамические карточки профилей -->
+    </div>
+
+    <!-- System Summary -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Системный статус</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-summary-grid">
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Движок ядра</span>
+            <span class="m3-summary-val" id="val-engine">amneziawg-go + UAPI</span>
+          </div>
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Активных туннелей</span>
+            <span class="m3-summary-val" id="val-active-cnt">0</span>
+          </div>
+          <div class="m3-summary-item">
+            <span class="m3-summary-label">Всего профилей</span>
+            <span class="m3-summary-val" id="val-total-cnt">0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Channel Banner -->
+    <div class="m3-banner">
+      <div>
+        <div class="m3-banner-title">Канал eCubz Plugins</div>
+        <div class="m3-banner-sub">Свежие модули, плагины и обновления</div>
+      </div>
+      <button class="m3-btn m3-btn-filled m3-btn-sm" onclick="openChannel()"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg> Открыть</button>
+    </div>
+
+    <!-- Direct Donation Requisites -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Поддержать автора eCubz</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Ваша поддержка мотивирует развивать модуль и выпускать регулярные обновления!
+        </p>
+        <div class="m3-donate-list">
+          <div class="m3-donate-card" onclick="copyText('410011494875904', 'Номер ЮMoney скопирован!')">
+            <div class="m3-donate-info">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="m3-donate-name">Ю.Money (Яндекс)</span>
+                <span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; background: rgba(255, 180, 0, 0.15); color: #ffb400; padding: 2px 6px; border-radius: 999px;">
+                  <svg class="g-icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                  Предпочтительно
+                </span>
+              </div>
+              <span class="m3-donate-val">4100 1149 4875 904</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://yoomoney.ru/to/410011494875904')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('+79236188993', 'Номер СБП скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">СБП (Россия) / Т-Банк</span>
+              <span class="m3-donate-val">+7 923 618-89-93</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="openUrl('http://t.me/send?start=IVjCT8LiszJ2')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">Crypto Bot (Telegram)</span>
+              <span class="m3-donate-val">USDT / TON / GRAM</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Открыть</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4', 'Адрес TON кошелька скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">TON Wallet</span>
+              <span class="m3-donate-val">UQCLyovMu5882XPekfUq...MqEC4</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg> Копировать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: Профили -->
+  <div class="tab-page" id="tab-profiles">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Управление профилями</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-btn-group">
+          <button class="m3-btn m3-btn-filled" id="btn-add-profile"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg> Добавить профиль</button>
+          <button class="m3-btn m3-btn-tonal" id="btn-add-profile-qr"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg> Импорт QR</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="profiles-list" class="m3-cards-list">
+      <!-- Список профилей -->
+    </div>
+  </div>
+
+  <!-- TAB 3: Журнал и диагностика -->
+  <div class="tab-page" id="tab-log">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Журнал работы</span>
+        <div style="display: flex; gap: 8px;">
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" id="btn-clear-logs">Очистить</button>
+          <button class="m3-btn m3-btn-tonal m3-btn-sm" id="btn-refresh-logs"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Обновить</button>
+        </div>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-log-view" id="log-viewer">Загрузка логов…</div>
+      </div>
+    </div>
+
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Инструменты диагностики</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <div class="m3-btn-group">
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" id="btn-ping-tunnels">Проверить связь (Ping)</button>
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" id="btn-dump-uapi">Дамп UAPI</button>
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" id="btn-dump-ip-rules">Дамп IP Rules</button>
+        </div>
+        <pre class="m3-log-view" id="tools-output" style="display: none; margin-top: 12px;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 4: О модуле -->
+  <div class="tab-page" id="tab-about">
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">О модуле AWG eCubz</span>
+      </div>
+      <div class="m3-card-body pt-0" style="font-size: 13px; line-height: 1.8;">
+        <p><b>Разработчик:</b> eCubz</p>
+        <p><b>Канал обновлений:</b> <a href="javascript:void(0)" onclick="openChannel()" style="color: var(--md-sys-color-primary); text-decoration: none; font-weight: 600;">t.me/eCubzPlugins</a></p>
+      </div>
+    </div>
+
+    <!-- Донаты eCubz (дубликат на вкладке О модуле) -->
+    <div class="m3-card">
+      <div class="m3-card-header">
+        <span class="m3-card-title">Поддержать автора eCubz</span>
+      </div>
+      <div class="m3-card-body pt-0">
+        <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px;">
+          Ваша поддержка мотивирует развивать модуль и выпускать регулярные обновления!
+        </p>
+        <div class="m3-donate-list">
+          <div class="m3-donate-card" onclick="copyText('410011494875904', 'Номер ЮMoney скопирован!')">
+            <div class="m3-donate-info">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="m3-donate-name">Ю.Money (Яндекс)</span>
+                <span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; background: rgba(255, 180, 0, 0.15); color: #ffb400; padding: 2px 6px; border-radius: 999px;">
+                  <svg class="g-icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                  Предпочтительно
+                </span>
+              </div>
+              <span class="m3-donate-val">4100 1149 4875 904</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://yoomoney.ru/to/410011494875904')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('+79236188993', 'Номер СБП скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">СБП (Россия) / Т-Банк</span>
+              <span class="m3-donate-val">+7 923 618-89-93</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="event.stopPropagation(); openUrl('https://www.tinkoff.ru/rm/r_qoRUrMgqrw.gQAquXjKzF/ca7Vm7131')"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2z"/></svg> Перевод</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="openUrl('http://t.me/send?start=IVjCT8LiszJ2')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">Crypto Bot (Telegram)</span>
+              <span class="m3-donate-val">USDT / TON / GRAM</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Открыть</button>
+          </div>
+
+          <div class="m3-donate-card" onclick="copyText('UQCLyovMu5882XPekfUqXOLFbYFHROaB9uoWMsIaifvMqEC4', 'Адрес TON кошелька скопирован!')">
+            <div class="m3-donate-info">
+              <span class="m3-donate-name">TON Wallet</span>
+              <span class="m3-donate-val">UQCLyovMu5882XPekfUq...MqEC4</span>
+              <span class="m3-donate-hint">Нажмите для копирования</span>
+            </div>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg> Копировать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- M3 Expressive Bottom Navigation Bar -->
+<nav class="m3-nav-bar">
+  <button class="m3-nav-item active" id="nav-main" onclick="switchTabByName('main')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></div>
+    <span>Панель</span>
+  </button>
+  <button class="m3-nav-item" id="nav-profiles" onclick="switchTabByName('profiles')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg></div>
+    <span>Профили</span>
+  </button>
+  <button class="m3-nav-item" id="nav-log" onclick="switchTabByName('log')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2zm-4 8H7v-2h6v2z"/></svg></div>
+    <span>Журнал</span>
+  </button>
+  <button class="m3-nav-item" id="nav-about" onclick="switchTabByName('about')">
+    <div class="m3-nav-indicator"><svg class="g-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></div>
+    <span>О модуле</span>
+  </button>
+</nav>
+
+<!-- Modal: Profile Editor -->
+<div id="modal-profile" class="modal-overlay" style="display: none;">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="modal-title">Редактирование профиля</h3>
+      <button id="btn-modal-close" class="btn-icon">x</button>
+    </div>
+    <div class="modal-body">
+      <form id="profile-form" onsubmit="return false;">
+        <div class="m3-text-field">
+          <label class="m3-label" for="prof-name">Имя профиля</label>
+          <input type="text" id="prof-name" class="m3-input" placeholder="например, warp или work_vpn">
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+          <label class="m3-checkbox-label">
+            <input type="checkbox" id="prof-autostart">
+            <span>Автозапуск</span>
+          </label>
+          <label class="m3-checkbox-label">
+            <input type="checkbox" id="prof-killswitch">
+            <span>KillSwitch</span>
+          </label>
+        </div>
+
+        <div class="m3-text-field">
+          <label class="m3-label" for="prof-mode">Режим маршрутизации</label>
+          <select id="prof-mode" class="m3-select">
+            <option value="include_apps">Только выбранные приложения (Include)</option>
+            <option value="exclude_apps">Все приложения кроме выбранных (Exclude)</option>
+            <option value="all_traffic">Весь системный трафик (Full Tunnel)</option>
+          </select>
+        </div>
+
+        <div class="m3-text-field" id="group-dns">
+          <label class="m3-label" for="prof-dns">DNS-сервер (опционально)</label>
+          <input type="text" id="prof-dns" class="m3-input" placeholder="1.1.1.1 или оставьте пустым">
+        </div>
+
+        <!-- Секция выбора приложений -->
+        <div class="m3-text-field" id="group-apps">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="m3-label">Выбор приложений (<span id="selected-apps-count">0</span>)</label>
+            <div style="display: flex; gap: 8px;">
+              <button type="button" id="btn-select-all-visible" class="m3-link-btn">Выбрать все</button>
+              <button type="button" id="btn-deselect-all" class="m3-link-btn">Снять выбор</button>
+            </div>
+          </div>
+
+          <input type="text" id="app-search" class="m3-input" placeholder="Поиск по названию или пакету..." style="margin-bottom: 8px;">
+          
+          <div class="m3-chips-row" style="margin-bottom: 8px;">
+            <button type="button" class="m3-chip active" data-filter="all">Все</button>
+            <button type="button" class="m3-chip" data-filter="user">Пользовательские</button>
+            <button type="button" class="m3-chip" data-filter="system">Системные</button>
+            <button type="button" class="m3-chip" data-filter="selected">Выбранные</button>
+          </div>
+
+          <div id="selected-chips-box" class="m3-selected-chips"></div>
+          <div id="apps-selection-container" class="m3-apps-box">
+            <div class="m3-apps-loading">Загрузка списка приложений...</div>
+          </div>
+        </div>
+
+        <!-- Секция конфигурации .conf -->
+        <div class="m3-text-field">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="m3-label" for="prof-conf-raw">Конфигурация AWG (.conf)</label>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" id="btn-scan-qr-modal" class="m3-chip m3-chip-sm">QR-код</button>
+              <label class="m3-chip m3-chip-sm" style="cursor: pointer;">
+                <span>Файл .conf</span>
+                <input type="file" id="file-conf-upload" accept=".conf,.txt" style="display: none;">
+              </label>
+            </div>
+          </div>
+          <textarea id="prof-conf-raw" class="m3-input" rows="7" style="font-family: var(--md-ref-typeface-mono); font-size: 11px; line-height: 1.4;" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;Jc = 4&#10;Jmin = 50&#10;Jmax = 1000&#10;S1 = 0&#10;S2 = 0&#10;H1 = 1&#10;H2 = 2&#10;H3 = 3&#10;H4 = 4&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ...&#10;AllowedIPs = 0.0.0.0/0"></textarea>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-save-profile" class="m3-btn m3-btn-filled">Сохранить</button>
+      <button id="btn-cancel-profile" class="m3-btn m3-btn-tonal">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: QR Code Viewer -->
+<div id="modal-qr-view" class="modal-overlay" style="display: none;">
+  <div class="modal-card" style="text-align: center;">
+    <div class="modal-header">
+      <h3 id="qr-view-title">QR-код профиля</h3>
+      <button id="btn-qr-view-close" class="btn-icon">x</button>
+    </div>
+    <div class="modal-body" style="display: flex; flex-direction: column; align-items: center; gap: 14px;">
+      <div id="qr-view-container" style="background: #fff; padding: 12px; border-radius: 12px; display: inline-block;"></div>
+      <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant);">Отсканируйте клиентом AmneziaVPN или WireGuard</p>
+    </div>
+    <div class="modal-footer" style="justify-content: center;">
+      <button id="btn-copy-conf" class="m3-btn m3-btn-tonal">Копировать конфиг</button>
+      <button id="btn-qr-view-done" class="m3-btn m3-btn-filled">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Snackbar Toast -->
+<div id="m3-snackbar"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

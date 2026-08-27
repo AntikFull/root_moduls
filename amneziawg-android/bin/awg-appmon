@@ -1,0 +1,23 @@
+#!/system/bin/sh
+# awg-appmon — Монитор жизненного цикла пакетов Android
+# При установке/обновлении приложений обновляет правила UIDs.
+
+BIN_DIR="${0%/*}"
+PKG_XML="/data/system/packages.xml"
+
+if [ ! -f "$PKG_XML" ]; then
+  exit 0
+fi
+
+last_mod="$(stat -c %Y "$PKG_XML" 2>/dev/null || stat -f %m "$PKG_XML" 2>/dev/null)"
+
+while true; do
+  sleep 15
+  cur_mod="$(stat -c %Y "$PKG_XML" 2>/dev/null || stat -f %m "$PKG_XML" 2>/dev/null)"
+  if [ -n "$cur_mod" ] && [ "$cur_mod" != "$last_mod" ]; then
+    last_mod="$cur_mod"
+    if [ -x "$BIN_DIR/awg-controller" ]; then
+      "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
+    fi
+  fi
+done

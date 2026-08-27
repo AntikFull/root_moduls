@@ -1,0 +1,26 @@
+#!/system/bin/sh
+# awg-netmon — Монитор физических сетевых интерфейсов Android
+# Отслеживает переключение Wi-Fi <-> LTE и обновляет правила только при реальной смене основного линка.
+
+RUN_DIR="/data/adb/amneziawg/run"
+BIN_DIR="${0%/*}"
+export PATH="$BIN_DIR:$PATH"
+export WG_UAPI_DIR="$RUN_DIR"
+export AMNEZIAWG_UAPI_DIR="$RUN_DIR"
+
+get_default_phys_iface() {
+  ip route show table main default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1
+}
+
+last_iface="$(get_default_phys_iface)"
+
+while true; do
+  sleep 10
+  cur_iface="$(get_default_phys_iface)"
+  if [ -n "$cur_iface" ] && [ "$cur_iface" != "$last_iface" ]; then
+    last_iface="$cur_iface"
+    if [ -x "$BIN_DIR/awg-controller" ]; then
+      "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
+    fi
+  fi
+done

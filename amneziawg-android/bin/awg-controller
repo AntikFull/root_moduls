@@ -1,0 +1,611 @@
+#!/system/bin/sh
+# awg-controller — Диспетчер и оркестратор AmneziaWG Multi-Profile для Android
+# Разработка: eCubz (https://t.me/eCubz)
+# Автоматическое распределение таблиц, fwmark, приоритетов и интерфейсов.
+# 0 эмодзи, строгое соблюдение правил изоляции маршрутов и жизненного цикла.
+
+MODDIR="${0%/*}/.."
+[ -d "$MODDIR/bin" ] || MODDIR="/data/adb/modules/amneziawg-android"
+BIN_DIR="$MODDIR/bin"
+RUN_DIR="/data/adb/amneziawg/run"
+TMP_DIR="/data/local/tmp/wireguard"
+PROFILES_DIR="/data/adb/amneziawg/profiles"
+LOG_DIR="/data/adb/amneziawg/logs"
+LOG_FILE="$LOG_DIR/awg-controller.log"
+
+export WG_UAPI_DIR="$TMP_DIR"
+export AMNEZIAWG_UAPI_DIR="$TMP_DIR"
+export PATH="$BIN_DIR:$PATH"
+
+mkdir -p "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" "/dev/wireguard" 2>/dev/null
+chmod 755 "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" 2>/dev/null
+
+log_msg() {
+  local level="$1"
+  shift
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf '%s [%s] %s\n' "$ts" "$level" "$*" >> "$LOG_FILE"
+  [ -t 1 ] && printf '[%s] %s\n' "$level" "$*"
+}
+
+log_i() { log_msg "INFO" "$*"; }
+log_w() { log_msg "WARN" "$*"; }
+log_e() { log_msg "ERROR" "$*"; }
+
+# Инициализация корневых цепочек iptables (только OUTPUT для сокетов локальных процессов)
+init_iptables_root() {
+  # Системные настройки rp_filter для корректного приема трафика от VPN
+  sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+
+  # Mangle (только OUTPUT для локального трафика приложений с -m owner)
+  iptables -w 2 -t mangle -N AWG_MANGLE 2>/dev/null || true
+  iptables -w 2 -t mangle -C OUTPUT -j AWG_MANGLE 2>/dev/null || iptables -w 2 -t mangle -I OUTPUT 1 -j AWG_MANGLE
+
+  # NAT (только OUTPUT для DNS redirection)
+  iptables -w 2 -t nat -N AWG_NAT 2>/dev/null || true
+  iptables -w 2 -t nat -C OUTPUT -j AWG_NAT 2>/dev/null || iptables -w 2 -t nat -I OUTPUT 1 -j AWG_NAT
+
+  # Filter / Killswitch
+  iptables -w 2 -t filter -N AWG_FILTER 2>/dev/null || true
+  iptables -w 2 -t filter -C OUTPUT -j AWG_FILTER 2>/dev/null || iptables -w 2 -t filter -I OUTPUT 1 -j AWG_FILTER
+
+  # Автоматический обход цепочек Zapret/NFQWS, если они активны в системе (IPv4 и IPv6)
+  if iptables -w 2 -t mangle -L NFQWS2_POST >/dev/null 2>&1; then
+    iptables -w 2 -t mangle -C NFQWS2_POST -o awg+ -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS2_POST 1 -o awg+ -j RETURN
+    iptables -w 2 -t mangle -C NFQWS2_POST -m mark --mark 0x2000/0xf000 -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS2_POST 1 -m mark --mark 0x2000/0xf000 -j RETURN
+  fi
+  if iptables -w 2 -t mangle -L NFQWS2_PRE >/dev/null 2>&1; then
+    iptables -w 2 -t mangle -C NFQWS2_PRE -i awg+ -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS2_PRE 1 -i awg+ -j RETURN
+  fi
+  if ip6tables -w 2 -t mangle -L NFQWS2_POST >/dev/null 2>&1; then
+    ip6tables -w 2 -t mangle -C NFQWS2_POST -o awg+ -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS2_POST 1 -o awg+ -j RETURN
+    ip6tables -w 2 -t mangle -C NFQWS2_POST -m mark --mark 0x2000/0xf000 -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS2_POST 1 -m mark --mark 0x2000/0xf000 -j RETURN
+  fi
+  if ip6tables -w 2 -t mangle -L NFQWS2_PRE >/dev/null 2>&1; then
+    ip6tables -w 2 -t mangle -C NFQWS2_PRE -i awg+ -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS2_PRE 1 -i awg+ -j RETURN
+  fi
+  if iptables -w 2 -t mangle -L NFQWS_POST >/dev/null 2>&1; then
+    iptables -w 2 -t mangle -C NFQWS_POST -o awg+ -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS_POST 1 -o awg+ -j RETURN
+  fi
+  if ip6tables -w 2 -t mangle -L NFQWS_POST >/dev/null 2>&1; then
+    ip6tables -w 2 -t mangle -C NFQWS_POST -o awg+ -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS_POST 1 -o awg+ -j RETURN
+  fi
+
+  # MSS Clamping (IPv4 и IPv6)
+  iptables -w 2 -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    iptables -w 2 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables -w 2 -t mangle -C OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    iptables -w 2 -t mangle -A OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  ip6tables -w 2 -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    ip6tables -w 2 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  ip6tables -w 2 -t mangle -C OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    ip6tables -w 2 -t mangle -A OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+
+  # NAT Masquerade для tun-интерфейсов
+  iptables -w 2 -t nat -C POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || \
+    iptables -w 2 -t nat -A POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
+}
+
+# Извлечение параметра из секции Peer конфигурации .conf
+get_peer_val() {
+  local file="$1"
+  local key="$2"
+  awk -v k="$key" '
+    BEGIN { in_peer=0 }
+    /^\[[pP][eE][eE][rR]\]/ { in_peer=1; next }
+    /^\[/ { in_peer=0 }
+    in_peer {
+      idx = index($0, "=")
+      if (idx > 0) {
+        name = substr($0, 1, idx - 1)
+        val = substr($0, idx + 1)
+        gsub(/^[ \t]+|[ \t]+$/, "", name)
+        gsub(/^[ \t]+|[ \t]+$/, "", val)
+        if (tolower(name) == tolower(k)) {
+          print val
+          exit
+        }
+      }
+    }
+  ' "$file" 2>/dev/null
+}
+
+# Извлечение параметра из секции Interface конфигурации .conf
+get_conf_val() {
+  local file="$1"
+  local key="$2"
+  awk -v k="$key" '
+    BEGIN { in_iface=0 }
+    /^\[[iI][nN][tT][eE][rR][fF][aA][cC][eE]\]/ { in_iface=1; next }
+    /^\[/ { in_iface=0 }
+    in_iface {
+      idx = index($0, "=")
+      if (idx > 0) {
+        name = substr($0, 1, idx - 1)
+        val = substr($0, idx + 1)
+        gsub(/^[ \t]+|[ \t]+$/, "", name)
+        gsub(/^[ \t]+|[ \t]+$/, "", val)
+        if (tolower(name) == tolower(k)) {
+          print val
+          exit
+        }
+      }
+    }
+  ' "$file" 2>/dev/null
+}
+
+# Получение опций профиля из JSON
+get_opt_val() {
+  local json_file="$1"
+  local key="$2"
+  local def="$3"
+  if [ -f "$json_file" ]; then
+    local v
+    v="$(grep -E '"'"$key"'"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' 
+	')"
+    if [ -n "$v" ]; then
+      printf '%s' "$v"
+      return 0
+    fi
+  fi
+  printf '%s' "$def"
+}
+
+# Автоматический поиск свободного слота интерфейса (0..31)
+find_free_slot() {
+  local idx=0
+  while [ $idx -lt 32 ]; do
+    local ifname="awg$idx"
+    if ! ip link show "$ifname" >/dev/null 2>&1 && [ ! -f "$RUN_DIR/${ifname}.pid" ]; then
+      printf '%d' "$idx"
+      return 0
+    fi
+    idx=$((idx + 1))
+  done
+  printf '0'
+}
+
+# Запуск одного профиля
+start_profile() {
+  local prof_name="$1"
+  local conf_file="$PROFILES_DIR/${prof_name}.conf"
+  local opts_file="$PROFILES_DIR/${prof_name}.json"
+  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
+
+  if [ ! -f "$conf_file" ]; then
+    log_e "Конфигурационный файл $conf_file не найден!"
+    return 1
+  fi
+
+  log_i "Запуск профиля: $prof_name..."
+
+  # Автоматическое распределение интерфейса, таблицы, fwmark и приоритета
+  local slot_idx
+  slot_idx="$(find_free_slot)"
+  local iface="awg$slot_idx"
+  local table_id=$((201 + slot_idx))
+  local fwmark="$(printf '0x%x' $((0x2010 + slot_idx * 16)))"
+  local priority=$((10201 + slot_idx))
+
+  local routing_mode
+  routing_mode="$(get_opt_val "$opts_file" "routing_mode" "include_apps")"
+
+  local dns_val
+  dns_val="$(get_opt_val "$opts_file" "dns" "")"
+  [ -z "$dns_val" ] && dns_val="$(get_conf_val "$conf_file" "DNS")"
+
+  local address_val
+  address_val="$(get_conf_val "$conf_file" "Address")"
+
+  local mtu_val
+  mtu_val="$(get_conf_val "$conf_file" "MTU")"
+  [ -z "$mtu_val" ] && mtu_val="1280"
+
+  # Остановка старого экземпляра если был
+  stop_profile "$prof_name" 2>/dev/null || true
+
+  # 1. Запуск amneziawg-go
+  log_i "[$prof_name] Старт amneziawg-go для интерфейса $iface (Слот #$slot_idx)..."
+  WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" \
+    "$BIN_DIR/amneziawg-go" -f "$iface" >> "$LOG_DIR/${iface}.log" 2>&1 &
+  local daemon_pid=$!
+  echo "$daemon_pid" > "$RUN_DIR/${iface}.pid"
+  echo "$prof_name" > "$RUN_DIR/${iface}.profile"
+  echo "$iface" > "$RUN_DIR/${prof_name}.iface"
+  echo "$table_id" > "$RUN_DIR/${prof_name}.table"
+  echo "$fwmark" > "$RUN_DIR/${prof_name}.mark"
+  echo "$priority" > "$RUN_DIR/${prof_name}.prio"
+
+  # Ожидание сокета в TMP_DIR или RUN_DIR
+  local waited=0
+  local found_sock=""
+  while [ $waited -lt 30 ]; do
+    if [ -S "$TMP_DIR/${iface}.sock" ]; then
+      found_sock="$TMP_DIR/${iface}.sock"
+      break
+    elif [ -S "$RUN_DIR/${iface}.sock" ]; then
+      found_sock="$RUN_DIR/${iface}.sock"
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+
+  if [ -z "$found_sock" ]; then
+    log_e "[$prof_name] amneziawg-go не создал сокет для $iface!"
+    kill -9 "$daemon_pid" 2>/dev/null || true
+    rm -f "$RUN_DIR/${iface}.pid"
+    return 1
+  fi
+
+  # Создание симлинков во все стандартные пути
+  ln -sf "$found_sock" "$RUN_DIR/${iface}.sock" 2>/dev/null || true
+  ln -sf "$found_sock" "/dev/wireguard/${iface}.sock" 2>/dev/null || true
+
+  # 2. Настройка параметров через awg setconf
+  log_i "[$prof_name] Применение параметров из $conf_file..."
+  if ! WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file"; then
+    log_e "[$prof_name] Ошибка применения конфигурации через awg setconf!"
+    stop_profile "$prof_name"
+    return 1
+  fi
+
+  # 3. Настройка сетевого интерфейса и адресов
+  log_i "[$prof_name] Настройка IP адресов и MTU ($mtu_val)..."
+  sysctl -w net.ipv4.conf.${iface}.rp_filter=0 >/dev/null 2>&1 || true
+  ip link set dev "$iface" mtu "$mtu_val" up 2>/dev/null || true
+
+  if [ -n "$address_val" ]; then
+    local OLD_IFS="$IFS"
+    IFS=','
+    for addr in $address_val; do
+      addr="$(printf '%s' "$addr" | tr -d ' ')"
+      if [ -n "$addr" ]; then
+        if printf '%s' "$addr" | grep -Fq ':'; then
+          printf '%s' "$addr" | grep -Fq '/' || addr="${addr}/128"
+          ip -6 addr add "$addr" dev "$iface" 2>/dev/null || true
+        else
+          printf '%s' "$addr" | grep -Fq '/' || addr="${addr}/32"
+          ip addr add "$addr" dev "$iface" 2>/dev/null || true
+        fi
+      fi
+    done
+    IFS="$OLD_IFS"
+  fi
+
+  # 4. Настройка таблицы маршрутизации $table_id
+  log_i "[$prof_name] Настройка таблицы маршрутизации $table_id..."
+  ip route flush table "$table_id" 2>/dev/null || true
+  ip route add default dev "$iface" table "$table_id" 2>/dev/null || true
+  ip -6 route flush table "$table_id" 2>/dev/null || true
+  ip -6 route add default dev "$iface" table "$table_id" 2>/dev/null || true
+
+  # 5. Применение правил Policy Routing и iptables
+  apply_profile_rules "$prof_name"
+
+  # Инициализация хендшейка отправкой пробного ICMP пакета через интерфейс
+  ping -c 1 -W 1 -I "$iface" 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 -I "$iface" 8.8.8.8 >/dev/null 2>&1 || true
+
+  log_i "[$prof_name] Профиль успешно запущен! Интерфейс: $iface, Таблица: $table_id, Марка: $fwmark"
+  return 0
+}
+
+# Применение правил маршрутизации и фильтрации для профиля
+apply_profile_rules() {
+  local prof_name="$1"
+  local opts_file="$PROFILES_DIR/${prof_name}.json"
+  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
+  local iface
+  iface="$(cat "$RUN_DIR/${prof_name}.iface" 2>/dev/null)"
+  local table_id
+  table_id="$(cat "$RUN_DIR/${prof_name}.table" 2>/dev/null)"
+  local fwmark
+  fwmark="$(cat "$RUN_DIR/${prof_name}.mark" 2>/dev/null)"
+  local priority
+  priority="$(cat "$RUN_DIR/${prof_name}.prio" 2>/dev/null)"
+  [ -z "$priority" ] && priority="10201"
+
+  [ -z "$iface" ] || [ -z "$table_id" ] || [ -z "$fwmark" ] && return 1
+
+  local routing_mode
+  routing_mode="$(get_opt_val "$opts_file" "routing_mode" "include_apps")"
+  local dns_val
+  dns_val="$(get_opt_val "$opts_file" "dns" "")"
+  [ -z "$dns_val" ] && dns_val="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "DNS")"
+  local killswitch
+  killswitch="$(get_opt_val "$opts_file" "killswitch" "false")"
+
+  init_iptables_root
+
+  # Создание персональных цепочек профиля
+  local ch_mangle="AWG_M_${prof_name}"
+  local ch_nat="AWG_N_${prof_name}"
+  local ch_kill="AWG_K_${prof_name}"
+
+  iptables -w 2 -t mangle -N "$ch_mangle" 2>/dev/null || iptables -w 2 -t mangle -F "$ch_mangle"
+  iptables -w 2 -t mangle -C AWG_MANGLE -j "$ch_mangle" 2>/dev/null || iptables -w 2 -t mangle -A AWG_MANGLE -j "$ch_mangle"
+
+  iptables -w 2 -t nat -N "$ch_nat" 2>/dev/null || iptables -w 2 -t nat -F "$ch_nat"
+  iptables -w 2 -t nat -C AWG_NAT -j "$ch_nat" 2>/dev/null || iptables -w 2 -t nat -A AWG_NAT -j "$ch_nat"
+
+  iptables -w 2 -t filter -N "$ch_kill" 2>/dev/null || iptables -w 2 -t filter -F "$ch_kill"
+  iptables -w 2 -t filter -C AWG_FILTER -j "$ch_kill" 2>/dev/null || iptables -w 2 -t filter -A AWG_FILTER -j "$ch_kill"
+
+  # Очистка старых правил ip rule для этого fwmark
+  while ip rule del fwmark "$fwmark" 2>/dev/null; do :; done
+  while ip -6 rule del fwmark "$fwmark" 2>/dev/null; do :; done
+
+  # Добавление ip rule для fwmark
+  ip rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
+  ip -6 rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
+
+  # Добавление ip rule от IP-адресов интерфейса
+  local if_ips
+  if_ips="$(ip -4 addr show dev "$iface" 2>/dev/null | grep -o 'inet [0-9.]\+' | awk '{print $2}')"
+  for ip_a in $if_ips; do
+    [ -n "$ip_a" ] && ip rule add from "$ip_a" table "$table_id" pref "$((priority - 1))" 2>/dev/null || true
+  done
+
+  # Исключение локальных сетей от маркировки
+  iptables -w 2 -t mangle -A "$ch_mangle" -d 127.0.0.0/8 -j RETURN
+  iptables -w 2 -t mangle -A "$ch_mangle" -d 10.0.0.0/8 -j RETURN
+  iptables -w 2 -t mangle -A "$ch_mangle" -d 172.16.0.0/12 -j RETURN
+  iptables -w 2 -t mangle -A "$ch_mangle" -d 192.168.0.0/16 -j RETURN
+  iptables -w 2 -t mangle -A "$ch_mangle" -d 224.0.0.0/4 -j RETURN
+  iptables -w 2 -t mangle -A "$ch_mangle" -d 255.255.255.255/32 -j RETURN
+
+  # Исключение самого туннельного демона amneziawg-go от зацикливания
+  local d_pid
+  d_pid="$(cat "$RUN_DIR/${iface}.pid" 2>/dev/null)"
+  if [ -n "$d_pid" ]; then
+    iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner 0 -p udp -j RETURN
+  fi
+
+  # Резолв списка приложений в UIDs через Go CLI
+  local uids=""
+  if [ -f "$opts_file" ]; then
+    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)"
+  fi
+
+  if [ "$routing_mode" = "include_apps" ]; then
+    if [ -n "$uids" ]; then
+      log_i "[$prof_name] Маршрутизация UIDs (Include): $uids"
+      for uid in $uids; do
+        [ -z "$uid" ] && continue
+        ip rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        ip -6 rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j MARK --set-mark "$fwmark"
+        if [ -n "$dns_val" ]; then
+          local primary_dns="$(printf '%s' "$dns_val" | awk -F',' '{print $1}' | tr -d ' ')"
+          if [ -n "$primary_dns" ]; then
+            iptables -w 2 -t nat -A "$ch_nat" -m owner --uid-owner "$uid" -p udp --dport 53 -j DNAT --to-destination "${primary_dns}:53"
+            iptables -w 2 -t nat -A "$ch_nat" -m owner --uid-owner "$uid" -p tcp --dport 53 -j DNAT --to-destination "${primary_dns}:53"
+          fi
+        fi
+        if [ "$killswitch" = "true" ]; then
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 127.0.0.0/8 -j ACCEPT
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 10.0.0.0/8 -j ACCEPT
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 172.16.0.0/12 -j ACCEPT
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 192.168.0.0/16 -j ACCEPT
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -o "$iface" -j ACCEPT
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -j REJECT --reject-with icmp-port-unreachable
+        fi
+      done
+    fi
+  elif [ "$routing_mode" = "exclude_apps" ]; then
+    if [ -n "$uids" ]; then
+      log_i "[$prof_name] Исключение UIDs (Exclude): $uids"
+      for uid in $uids; do
+        [ -z "$uid" ] && continue
+        ip rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        ip -6 rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j RETURN
+      done
+    fi
+    ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
+    if [ "$killswitch" = "true" ]; then
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -o "$iface" -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -j REJECT --reject-with icmp-port-unreachable
+    fi
+  elif [ "$routing_mode" = "all_traffic" ]; then
+    log_i "[$prof_name] Режим полного туннеля (все приложения)..."
+    ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
+    iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
+    if [ "$killswitch" = "true" ]; then
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -o "$iface" -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -j REJECT --reject-with icmp-port-unreachable
+    fi
+  fi
+}
+
+# Остановка профиля и безопасная очистка правил
+stop_profile() {
+  local prof_name="$1"
+  log_i "Остановка профиля: $prof_name..."
+
+  local iface
+  iface="$(cat "$RUN_DIR/${prof_name}.iface" 2>/dev/null)"
+  local table_id
+  table_id="$(cat "$RUN_DIR/${prof_name}.table" 2>/dev/null)"
+  local fwmark
+  fwmark="$(cat "$RUN_DIR/${prof_name}.mark" 2>/dev/null)"
+
+  if [ -z "$iface" ] && [ -f "$RUN_DIR/${prof_name}.pid" ]; then
+    iface="$prof_name"
+  fi
+
+  # 1. Очистка правил iptables для этого профиля
+  local ch_mangle="AWG_M_${prof_name}"
+  local ch_nat="AWG_N_${prof_name}"
+  local ch_kill="AWG_K_${prof_name}"
+
+  iptables -w 2 -t mangle -D AWG_MANGLE -j "$ch_mangle" 2>/dev/null || true
+  iptables -w 2 -t mangle -F "$ch_mangle" 2>/dev/null || true
+  iptables -w 2 -t mangle -X "$ch_mangle" 2>/dev/null || true
+
+  iptables -w 2 -t nat -D AWG_NAT -j "$ch_nat" 2>/dev/null || true
+  iptables -w 2 -t nat -F "$ch_nat" 2>/dev/null || true
+  iptables -w 2 -t nat -X "$ch_nat" 2>/dev/null || true
+
+  iptables -w 2 -t filter -D AWG_FILTER -j "$ch_kill" 2>/dev/null || true
+  iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || true
+  iptables -w 2 -t filter -X "$ch_kill" 2>/dev/null || true
+
+  # 2. Очистка ip rule и ip route
+  if [ -n "$fwmark" ]; then
+    while ip rule del fwmark "$fwmark" 2>/dev/null; do :; done
+    while ip -6 rule del fwmark "$fwmark" 2>/dev/null; do :; done
+  fi
+  if [ -n "$table_id" ]; then
+    while ip rule del table "$table_id" 2>/dev/null; do :; done
+    while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
+    ip route flush table "$table_id" 2>/dev/null || true
+    ip -6 route flush table "$table_id" 2>/dev/null || true
+  fi
+
+  # 3. Остановка процесса amneziawg-go
+  if [ -n "$iface" ]; then
+    local pid
+    pid="$(cat "$RUN_DIR/${iface}.pid" 2>/dev/null)"
+    if [ -n "$pid" ]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    ip link del dev "$iface" 2>/dev/null || true
+    rm -f "$RUN_DIR/${iface}.pid" "$RUN_DIR/${iface}.profile" "$RUN_DIR/${iface}.sock" "$TMP_DIR/${iface}.sock" "/dev/wireguard/${iface}.sock" 2>/dev/null || true
+  fi
+
+  rm -f "$RUN_DIR/${prof_name}.iface" "$RUN_DIR/${prof_name}.table" "$RUN_DIR/${prof_name}.mark" "$RUN_DIR/${prof_name}.prio" "$RUN_DIR/${prof_name}.pid" 2>/dev/null || true
+  log_i "[$prof_name] Профиль полностью остановлен и очищен."
+}
+
+# Полная очистка всех профилей и модульных цепочек iptables
+cleanup_all() {
+  log_i "Полная очистка всех профилей и правил AmneziaWG..."
+
+  for f in "$RUN_DIR"/*.profile; do
+    [ -f "$f" ] || continue
+    local p
+    p="$(cat "$f" 2>/dev/null)"
+    [ -n "$p" ] && stop_profile "$p"
+  done
+
+  killall -9 amneziawg-go 2>/dev/null || true
+
+  iptables -w 2 -t mangle -D OUTPUT -j AWG_MANGLE 2>/dev/null || true
+  iptables -w 2 -t mangle -D PREROUTING -j AWG_MANGLE 2>/dev/null || true
+  iptables -w 2 -t mangle -F AWG_MANGLE 2>/dev/null || true
+  iptables -w 2 -t mangle -X AWG_MANGLE 2>/dev/null || true
+
+  iptables -w 2 -t nat -D OUTPUT -j AWG_NAT 2>/dev/null || true
+  iptables -w 2 -t nat -D PREROUTING -j AWG_NAT 2>/dev/null || true
+  iptables -w 2 -t nat -F AWG_NAT 2>/dev/null || true
+  iptables -w 2 -t nat -X AWG_NAT 2>/dev/null || true
+
+  iptables -w 2 -t filter -D OUTPUT -j AWG_FILTER 2>/dev/null || true
+  iptables -w 2 -t filter -F AWG_FILTER 2>/dev/null || true
+  iptables -w 2 -t filter -X AWG_FILTER 2>/dev/null || true
+
+  iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
+
+  local t=201
+  while [ $t -le 232 ]; do
+    ip route flush table "$t" 2>/dev/null || true
+    ip -6 route flush table "$t" 2>/dev/null || true
+    t=$((t + 1))
+  done
+
+  rm -rf "$RUN_DIR"/* "$TMP_DIR"/* "/dev/wireguard"/awg*.sock 2>/dev/null || true
+  log_i "Полная очистка завершена."
+}
+
+# Синхронизация правил для всех активных профилей
+sync_rules() {
+  log_i "Синхронизация правил для всех активных профилей..."
+  for f in "$RUN_DIR"/*.profile; do
+    [ -f "$f" ] || continue
+    local p
+    p="$(cat "$f" 2>/dev/null)"
+    if [ -n "$p" ]; then
+      log_i "Синхронизация правил профиля: $p"
+      apply_profile_rules "$p"
+    fi
+  done
+}
+
+show_status() {
+  local format="$1"
+  WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" status "$format"
+}
+
+case "$1" in
+  start)
+    if [ -z "$2" ] || [ "$2" = "all" ]; then
+      # Обработка только канонических .conf файлов
+
+      for c in "$PROFILES_DIR"/*.conf; do
+        [ -f "$c" ] || continue
+        p="$(basename "$c" .conf)"
+        opts="$PROFILES_DIR/${p}.json"
+        [ -f "$opts" ] || opts="$PROFILES_DIR/${p}.opts"
+        en="$(get_opt_val "$opts" "enabled" "false")"
+        if [ "$en" = "true" ] || [ "$en" = "1" ]; then
+          start_profile "$p"
+        fi
+      done
+    else
+      start_profile "$2"
+    fi
+    ;;
+  stop)
+    if [ -z "$2" ] || [ "$2" = "all" ]; then
+      cleanup_all
+    else
+      stop_profile "$2"
+    fi
+    ;;
+  restart)
+    if [ -z "$2" ] || [ "$2" = "all" ]; then
+      cleanup_all
+      sleep 0.5
+      "$0" start all
+    else
+      stop_profile "$2"
+      sleep 0.5
+      start_profile "$2"
+    fi
+    ;;
+  sync-rules)
+    sync_rules
+    ;;
+  status)
+    show_status "$2"
+    ;;
+  list-apps)
+    "$BIN_DIR/awg" list-apps "$2"
+    ;;
+  check-conflicts)
+    "$BIN_DIR/awg" audit-conflicts "$PROFILES_DIR"
+    ;;
+  cleanup)
+    cleanup_all
+    ;;
+  *)
+    echo "Использование: awg-controller {start [prof|all]|stop [prof|all]|restart [prof|all]|sync-rules|status [json]|list-apps|check-conflicts|cleanup}"
+    exit 1
+    ;;
+esac
