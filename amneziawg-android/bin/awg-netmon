@@ -1,11 +1,27 @@
 #!/system/bin/sh
-# awg-netmon — Монитор сети, watchdog хендшейка и доверенных сетей (v1.1.1)
+# awg-netmon — Монитор сети и watchdog состояния туннелей (v1.1.2)
+# Отслеживает смену сети, деградацию туннеля и восстанавливает сессию
+# с ограничением числа попыток и экспоненциальной задержкой.
 
 RUN_DIR="/data/adb/amneziawg/run"
 BIN_DIR="${0%/*}"
 export PATH="$BIN_DIR:$PATH"
 export WG_UAPI_DIR="$RUN_DIR"
 export AMNEZIAWG_UAPI_DIR="$RUN_DIR"
+
+# Максимум последовательных неудачных восстановлений до отключения профиля
+MAX_FAILS=10
+# Возраст хендшейка, после которого сессия считается мертвой
+HS_DEAD_AGE=180
+# Минимальный исходящий трафик за интервал, при котором отсутствие входящего
+# трактуется как односторонний туннель, а не как простой
+TX_PROBE_MIN=1024
+# Верхняя граница экспоненциальной задержки между попытками
+BACKOFF_MAX=600
+
+log_wd() {
+  "$BIN_DIR/awg-controller" log-watchdog "$*" >/dev/null 2>&1
+}
 
 get_default_phys_iface() {
   ip route show table main default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1
@@ -15,45 +31,132 @@ get_current_ssid() {
   "$BIN_DIR/awg-controller" get-current-ssid 2>/dev/null
 }
 
-check_handshake_watchdog() {
-  local now="$(date +%s)"
-  for iface_file in "$RUN_DIR"/*.iface; do
-    [ -f "$iface_file" ] || continue
-    local p="$(basename "$iface_file" .iface)"
-    [ -f "$RUN_DIR/${p}.paused" ] && continue
-    local ifname="$(cat "$iface_file" 2>/dev/null)"
-    [ -z "$ifname" ] && continue
+read_state() {
+  cat "$RUN_DIR/$1" 2>/dev/null
+}
 
-    # 1. Проверка существования сетевого интерфейса в системе
-    if ! ip link show "$ifname" >/dev/null 2>&1; then
-      "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+# Сброс счетчиков после подтвержденного восстановления обмена
+mark_healthy() {
+  local p="$1"
+  rm -f "$RUN_DIR/${p}.fails" "$RUN_DIR/${p}.nextchk" 2>/dev/null || true
+}
+
+# Регистрация неудачи: перезапуск с backoff либо отключение профиля
+register_failure() {
+  local p="$1"
+  local reason="$2"
+  local now="$3"
+
+  local nextchk="$(read_state "${p}.nextchk")"
+  if [ -n "$nextchk" ] && [ "$now" -lt "$nextchk" ] 2>/dev/null; then
+    return 0
+  fi
+
+  local fails="$(read_state "${p}.fails")"
+  [ -n "$fails" ] || fails=0
+  fails=$((fails + 1))
+  printf '%s' "$fails" > "$RUN_DIR/${p}.fails"
+
+  if [ $fails -gt $MAX_FAILS ]; then
+    log_wd "[$p] Туннель не восстановлен за $MAX_FAILS попыток ($reason). Профиль остановлен, приложения переведены на прямой канал."
+    "$BIN_DIR/awg-controller" stop "$p" >/dev/null 2>&1
+    : > "$RUN_DIR/${p}.failed"
+    rm -f "$RUN_DIR/${p}.fails" "$RUN_DIR/${p}.nextchk" \
+          "$RUN_DIR/${p}.rxmark" "$RUN_DIR/${p}.txmark" 2>/dev/null || true
+    return 0
+  fi
+
+  # Экспоненциальная задержка: 15, 30, 60, 120, 240, 480, далее 600 c
+  local backoff=15
+  local i=1
+  while [ $i -lt $fails ] && [ $backoff -lt $BACKOFF_MAX ]; do
+    backoff=$((backoff * 2))
+    i=$((i + 1))
+  done
+  [ $backoff -gt $BACKOFF_MAX ] && backoff=$BACKOFF_MAX
+  printf '%s' "$((now + backoff))" > "$RUN_DIR/${p}.nextchk"
+
+  log_wd "[$p] Туннель не отвечает ($reason). Попытка восстановления $fails из $MAX_FAILS, следующая проверка через $backoff c."
+  rm -f "$RUN_DIR/${p}.rxmark" "$RUN_DIR/${p}.txmark" 2>/dev/null || true
+  "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+}
+
+check_tunnel_health() {
+  local now="$(date +%s)"
+  # Перебор идет по списку включенных профилей, а не по файлам *.iface:
+  # профиль, который не смог подняться, не имеет .iface и иначе навсегда
+  # выпал бы из наблюдения вместо того, чтобы быть восстановленным.
+  for p in $("$BIN_DIR/awg-controller" list-enabled 2>/dev/null); do
+    [ -n "$p" ] || continue
+    [ -f "$RUN_DIR/${p}.paused" ] && continue
+    [ -f "$RUN_DIR/${p}.failed" ] && continue
+    local ifname="$(cat "$RUN_DIR/${p}.iface" 2>/dev/null)"
+
+    # 1. Профиль не запущен: нет записи об интерфейсе
+    if [ -z "$ifname" ]; then
+      register_failure "$p" "профиль не запущен" "$now"
       continue
     fi
 
-    # 2. Парсинг UAPI дампа WireGuard/AmneziaWG
+    # 2. Интерфейс исчез из ядра
+    if ! ip link show "$ifname" >/dev/null 2>&1; then
+      register_failure "$p" "интерфейс $ifname отсутствует" "$now"
+      continue
+    fi
+
     local dump="$("$BIN_DIR/awg" show "$ifname" dump 2>/dev/null)"
-    [ -z "$dump" ] && continue
+    if [ -z "$dump" ]; then
+      register_failure "$p" "нет ответа UAPI" "$now"
+      continue
+    fi
 
-    # Извлечение last_handshake_time_sec из формата key=value
-    local last_hs
-    last_hs="$(printf '%s\n' "$dump" | sed -n 's/^last_handshake_time_sec=//p' | sort -n | tail -n 1)"
+    local rx="$(printf '%s\n' "$dump" | sed -n 's/^rx_bytes=//p' | sort -n | tail -n 1)"
+    local tx="$(printf '%s\n' "$dump" | sed -n 's/^tx_bytes=//p' | sort -n | tail -n 1)"
+    local hs="$(printf '%s\n' "$dump" | sed -n 's/^last_handshake_time_sec=//p' | sort -n | tail -n 1)"
+    [ -n "$rx" ] || rx=0
+    [ -n "$tx" ] || tx=0
+    [ -n "$hs" ] || hs=0
 
-    if [ -n "$last_hs" ] && [ "$last_hs" -gt 0 ] 2>/dev/null; then
-      local age=$((now - last_hs))
-      if [ $age -gt 180 ]; then
-        # Хендшейк устарел (> 180 сек) -> перезапуск туннеля
-        "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+    local prev_rx="$(read_state "${p}.rxmark")"
+    local prev_tx="$(read_state "${p}.txmark")"
+    printf '%s' "$rx" > "$RUN_DIR/${p}.rxmark"
+    printf '%s' "$tx" > "$RUN_DIR/${p}.txmark"
+
+    # 3. Хендшейк не обновлялся дольше допустимого
+    if [ "$hs" -gt 0 ] 2>/dev/null; then
+      if [ $((now - hs)) -gt $HS_DEAD_AGE ]; then
+        register_failure "$p" "хендшейку $((now - hs)) c" "$now"
+        continue
       fi
     else
-      # Хендшейк равен 0 (ни разу не завершился успешно). Если процесс запущен > 60 сек назад -> рестарт
+      # Первый хендшейк так и не состоялся
       local pid_file="$RUN_DIR/${ifname}.pid"
       if [ -f "$pid_file" ]; then
         local pid_mtime="$(stat -c %Y "$pid_file" 2>/dev/null || echo "$now")"
         if [ $((now - pid_mtime)) -gt 60 ]; then
-          "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+          register_failure "$p" "хендшейк ни разу не прошел" "$now"
+          continue
         fi
       fi
+      continue
     fi
+
+    # 4. Односторонний туннель: исходящий трафик идет, входящего нет.
+    # Именно так выглядит подавление сессии на пути: хендшейк свежий,
+    # awg сообщает "Подключен", но данные в обратную сторону не проходят.
+    if [ -n "$prev_rx" ] && [ -n "$prev_tx" ]; then
+      local d_rx=$((rx - prev_rx))
+      local d_tx=$((tx - prev_tx))
+      if [ $d_tx -ge $TX_PROBE_MIN ] && [ $d_rx -le 0 ]; then
+        register_failure "$p" "TX +${d_tx} B, RX 0 B" "$now"
+        continue
+      fi
+    fi
+
+    # Все проверки пройдены: интерфейс поднят, хендшейк свежий, признаков
+    # односторонней передачи нет. Счетчик сбрасывается и на простаивающем
+    # туннеле, иначе неудачи разных инцидентов накапливались бы годами.
+    mark_healthy "$p"
   done
 }
 
@@ -76,15 +179,17 @@ while true; do
     if [ "$cur_iface" = "$cur_iface_confirm" ] && [ "$cur_ssid" = "$cur_ssid_confirm" ]; then
       last_iface="$cur_iface"
       last_ssid="$cur_ssid"
+      # Условия сети изменились: отключенные профили получают новый шанс
+      "$BIN_DIR/awg-controller" reset-failures all >/dev/null 2>&1
       if [ -x "$BIN_DIR/awg-controller" ]; then
         "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
       fi
     fi
   fi
 
-  # Каждые 30-45 секунд: проверка watchdog хендшейка и синхронизация
+  # Каждые 45 секунд: проверка здоровья туннелей и синхронизация правил
   if [ $((counter % 3)) -eq 0 ]; then
-    check_handshake_watchdog
+    check_tunnel_health
     if [ -x "$BIN_DIR/awg-controller" ]; then
       "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
     fi

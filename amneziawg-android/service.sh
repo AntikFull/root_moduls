@@ -32,16 +32,12 @@ if [ -x "$BIN_DIR/awg-controller" ]; then
   "$BIN_DIR/awg-controller" start all >> "$LOG_FILE" 2>&1 &
 fi
 
-# 3. Запуск фонового сетевого монитора (awg-netmon)
-if [ -x "$BIN_DIR/awg-netmon" ]; then
-  log_s "Запуск фонового сетевого монитора awg-netmon..."
-  "$BIN_DIR/awg-netmon" >> "$LOG_DIR/netmon.log" 2>&1 &
-fi
-
-# 4. Запуск монитора пакетов приложений (awg-appmon)
-if [ -x "$BIN_DIR/awg-appmon" ]; then
-  log_s "Запуск монитора приложений awg-appmon..."
-  "$BIN_DIR/awg-appmon" >> "$LOG_DIR/appmon.log" 2>&1 &
+# 3. Запуск фоновых мониторов через единую точку (setsid, ppid=1)
+if [ -f "$BIN_DIR/awg-daemons.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$BIN_DIR/awg-daemons.sh"
+  log_s "Запуск мониторов awg-netmon и awg-appmon..."
+  restart_monitors
 fi
 
 log_s "Сервис AmneziaWG успешно инициализирован."

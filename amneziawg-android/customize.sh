@@ -57,5 +57,22 @@ chmod 755 "$DATA_DIR" "$DATA_DIR/profiles" "$DATA_DIR/run" "$DATA_DIR/logs" 2>/d
 # Создание директории профилей (поставляется чистым без демо-профилей)
 mkdir -p "$DATA_DIR/profiles" 2>/dev/null
 
+# Горячий перезапуск мониторов: обновление подменяет файлы скриптов под
+# работающим shell, из-за чего awg-netmon умирает и watchdog перестает работать.
+if [ -f "$MODPATH/bin/awg-daemons.sh" ]; then
+  ui_print "- Перезапуск фоновых мониторов..."
+  # shellcheck disable=SC1090
+  . "$MODPATH/bin/awg-daemons.sh"
+  if restart_monitors; then
+    ui_print "- Мониторы awg-netmon и awg-appmon запущены."
+  else
+    ui_print "! Мониторы не стартовали, watchdog заработает после перезагрузки."
+  fi
+  # Остановка монитора могла прервать перезапуск профиля на середине:
+  # синхронизация поднимает все, что осталось выключенным.
+  LIVE_BIN="/data/adb/modules/amneziawg-android/bin/awg-controller"
+  [ -x "$LIVE_BIN" ] && "$LIVE_BIN" sync-rules >/dev/null 2>&1
+fi
+
 ui_print "- Установка успешно завершена!"
 ui_print "- WebUI доступен в менеджере KernelSU / APatch / Magisk."

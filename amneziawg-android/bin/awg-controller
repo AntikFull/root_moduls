@@ -625,6 +625,12 @@ sync_rules() {
       continue
     fi
 
+    # Профиль отключен watchdog-ом после исчерпания попыток восстановления.
+    # Приложения работают напрямую до смены сети или ручного запуска.
+    if [ -f "$RUN_DIR/${p}.failed" ]; then
+      continue
+    fi
+
     # Проверка живого состояния интерфейса и демона в ядре
     local is_running=0
     local cur_ifname="$(cat "$RUN_DIR/${p}.iface" 2>/dev/null)"
@@ -714,6 +720,8 @@ show_status() {
 
 case "$1" in
   start)
+    # Явный запуск снимает блокировку watchdog: пользователь решил попробовать снова
+    "$0" reset-failures "${2:-all}" >/dev/null 2>&1
     if [ -z "$2" ] || [ "$2" = "all" ]; then
       # Обработка только канонических .conf файлов
 
@@ -767,8 +775,35 @@ case "$1" in
   cleanup)
     cleanup_all
     ;;
+  list-enabled)
+    for c in "$PROFILES_DIR"/*.conf; do
+      [ -f "$c" ] || continue
+      p="$(basename "$c" .conf)"
+      opts="$PROFILES_DIR/${p}.json"
+      [ -f "$opts" ] || opts="$PROFILES_DIR/${p}.opts"
+      en="$(get_opt_val "$opts" "enabled" "false")"
+      if [ "$en" = "true" ] || [ "$en" = "1" ]; then
+        printf '%s\n' "$p"
+      fi
+    done
+    ;;
+  log-watchdog)
+    shift
+    log_msg "WATCHDOG" "$*"
+    ;;
+  reset-failures)
+    if [ -z "$2" ] || [ "$2" = "all" ]; then
+      rm -f "$RUN_DIR"/*.failed "$RUN_DIR"/*.fails "$RUN_DIR"/*.nextchk \
+            "$RUN_DIR"/*.rxmark "$RUN_DIR"/*.txmark 2>/dev/null || true
+      log_i "Счетчики неудачных попыток сброшены для всех профилей."
+    else
+      rm -f "$RUN_DIR/${2}.failed" "$RUN_DIR/${2}.fails" "$RUN_DIR/${2}.nextchk" \
+            "$RUN_DIR/${2}.rxmark" "$RUN_DIR/${2}.txmark" 2>/dev/null || true
+      log_i "[$2] Счетчики неудачных попыток сброшены."
+    fi
+    ;;
   *)
-    echo "Использование: awg-controller {start [prof|all]|stop [prof|all]|restart [prof|all]|sync-rules|status [json]|list-apps|check-conflicts|cleanup}"
+    echo "Использование: awg-controller {start [prof|all]|stop [prof|all]|restart [prof|all]|sync-rules|status [json]|list-apps|check-conflicts|cleanup|reset-failures [prof|all]}"
     exit 1
     ;;
 esac
