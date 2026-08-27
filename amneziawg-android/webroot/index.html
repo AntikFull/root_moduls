@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>AWG eCubz</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=1009">
 <script src="jsqr.min.js"></script>
 <script src="qrcode.min.js"></script>
 </head>
@@ -307,6 +307,15 @@
           <input type="text" id="prof-dns" class="m3-input" placeholder="1.1.1.1 или оставьте пустым">
         </div>
 
+        <div class="m3-text-field" id="group-trusted-wifi">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="m3-label" for="prof-trusted-wifi" style="margin-bottom: 0;">Доверенные Wi-Fi сети (SSID)</label>
+            <button type="button" class="m3-chip m3-chip-sm" style="cursor: pointer;" onclick="insertCurrentWifiSsid()">+ Текущая сеть</button>
+          </div>
+          <input type="text" id="prof-trusted-wifi" class="m3-input" placeholder="Например: x2, Home_5G">
+          <span style="font-size: 11px; color: var(--md-sys-color-on-surface-variant); display: block; margin-top: 4px;">Туннель автоматически уходит в сон при подключении к этим сетям</span>
+        </div>
+
         <!-- Секция выбора приложений -->
         <div class="m3-text-field" id="group-apps">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -376,6 +385,6 @@
 <!-- Snackbar Toast -->
 <div id="m3-snackbar"></div>
 
-<script src="app.js"></script>
+<script src="app.js?v=1009"></script>
 </body>
 </html>
