@@ -230,13 +230,16 @@ function initEventHandlers() {
   on('btn-master-stop', 'click', stopAll);
   on('btn-add-profile', 'click', () => openProfileModal(null));
 
-  const triggerQr = () => {
-    const inp = document.getElementById('global-qr-file-input');
+  const triggerQrImport = () => {
+    const inp = document.getElementById('qr-file-input');
     if (inp) inp.click();
   };
-  on('btn-add-profile-qr', 'click', triggerQr);
-  on('btn-scan-qr-modal', 'click', triggerQr);
-  on('global-qr-file-input', 'change', handleQrImageFile);
+
+  on('btn-add-profile-qr', 'click', triggerQrImport);
+  on('btn-scan-qr-modal', 'click', triggerQrImport);
+  on('qr-file-input', 'change', handleQrImageFile);
+  on('qr-file-picker', 'change', handleQrImageFile);
+  on('btn-qr-scanner-close', 'click', stopLiveQrScanner);
 
   // Profile Editor Modal
   on('btn-modal-close', 'click', closeProfileModal);
@@ -282,13 +285,20 @@ function initEventHandlers() {
     if (file) {
       const reader = new FileReader();
       reader.onload = (evt) => {
+        const rawText = evt.target.result || '';
         const rawEl = document.getElementById('prof-conf-raw');
-        if (rawEl) rawEl.value = evt.target.result;
+        if (rawEl) rawEl.value = rawText;
         autoFillProfileName(file.name.replace(/\.[^/.]+$/, ""));
+        parseConfigDirectives(rawText);
         showToast('Конфигурация загружена');
       };
       reader.readAsText(file);
     }
+  });
+
+  // Автоматический парсинг директив при вставке конфига в текстовое поле
+  on('prof-conf-raw', 'input', (e) => {
+    parseConfigDirectives(e.target.value);
   });
 
   // Routing Mode Change
@@ -327,8 +337,13 @@ async function loadProfiles() {
     const parts = line.split('=');
     if (parts[0]) pausedMap[parts[0]] = parts[1] || 'Wi-Fi';
   });
+
+  const failedRes = await sh('for f in /data/adb/amneziawg/run/*.failed; do [ -f "$f" ] && basename "$f" .failed; done');
+  const failedSet = new Set((failedRes.stdout || '').trim().split('\n').filter(Boolean));
+
   STATE.profiles.forEach(p => {
     p.paused_ssid = pausedMap[p.name] || null;
+    p.is_failed = failedSet.has(p.name);
   });
 }
 
@@ -373,16 +388,19 @@ function renderDashboard() {
     const peer = (tunnel && tunnel.peers && tunnel.peers[0]) || null;
 
     const isPaused = !isUp && !!prof.paused_ssid;
+    const isFailed = !isUp && !!prof.is_failed;
 
     let badgeHtml = '<span class="m3-badge m3-badge-idle">Отключен</span>';
     if (isUp) {
       badgeHtml = '<span class="m3-badge m3-badge-success">Подключен</span>';
+    } else if (isFailed) {
+      badgeHtml = '<span class="m3-badge" style="background:rgba(255,82,82,0.15);color:#ff5252;border:1px solid rgba(255,82,82,0.3);">Сбой Watchdog</span>';
     } else if (isPaused) {
       badgeHtml = `<span class="m3-badge" style="background:rgba(255,180,0,0.15);color:#ffb400;border:1px solid rgba(255,180,0,0.3);">Спит (${escapeHtml(prof.paused_ssid)})</span>`;
     }
 
     const card = document.createElement('div');
-    card.className = `m3-profile-card ${isUp ? 'active' : (isPaused ? 'paused' : '')}`;
+    card.className = `m3-profile-card ${isUp ? 'active' : (isPaused ? 'paused' : (isFailed ? 'failed' : ''))}`;
     card.innerHTML = `
       <div class="m3-profile-header">
         <div class="m3-profile-title-box">
@@ -415,6 +433,7 @@ function renderDashboard() {
       </div>
 
       <div class="m3-btn-group">
+        ${isFailed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${prof.name}')">Сбросить сбой</button>` : ''}
         <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg> QR-код</button>
         <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg> Настроить</button>
       </div>
@@ -447,9 +466,10 @@ function renderProfilesList() {
       <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 10px;">
         Режим: ${prof.routing_mode === 'include_apps' ? 'Выбранные' : (prof.routing_mode === 'exclude_apps' ? 'Исключая' : 'Полный')} &bull; 
         Приложений: ${prof.apps ? prof.apps.length : 0} &bull; 
-        KillSwitch: ${prof.killswitch ? 'Вкл' : 'Выкл'}${prof.trusted_wifi ? ` &bull; Доверенные Wi-Fi: <span style="color:var(--md-sys-color-primary);">${prof.trusted_wifi}</span>` : ''}
+        KillSwitch: ${prof.killswitch ? 'Вкл' : 'Выкл'}${prof.lan_bypass === false ? ' &bull; LAN: Маршрутизировать' : ''}${prof.trusted_wifi ? ` &bull; Доверенные Wi-Fi: <span style="color:var(--md-sys-color-primary);">${prof.trusted_wifi}</span>` : ''}
       </p>
       <div class="m3-btn-group">
+        ${prof.is_failed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${prof.name}')">Сбросить сбой</button>` : ''}
         <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')">QR-код</button>
         <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${prof.name}')">Настроить</button>
         <button class="m3-btn m3-btn-danger-outlined m3-btn-sm" onclick="deleteProfile('${prof.name}')">Удалить</button>
@@ -457,6 +477,14 @@ function renderProfilesList() {
     `;
     container.appendChild(item);
   });
+}
+
+async function resetProfileFailure(name) {
+  showToast(`Сброс сбоя watchdog для ${name}...`);
+  await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller reset-failures "${name}"`);
+  await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller start "${name}"`);
+  await refreshAllData();
+  showToast(`Профиль "${name}" перезапущен`);
 }
 
 // Toggle Profile
@@ -481,24 +509,122 @@ async function stopAll() {
   showToast('Все туннели остановлены');
 }
 
-// Apps Loading via Native Package Manager
+const KNOWN_APPS = {
+  'org.telegram.messenger': 'Telegram',
+  'org.telegram.plus': 'Telegram Plus',
+  'org.thunderdog.challegram': 'Telegram X',
+  'com.exteragram.messenger': 'exteraGram',
+  'org.telegram.messenger.web': 'Telegram Web',
+  'com.vkontakte.android': 'ВКонтакте (VK)',
+  'com.google.android.youtube': 'YouTube',
+  'com.google.android.apps.youtube.music': 'YouTube Music',
+  'com.openai.chatgpt': 'ChatGPT',
+  'com.anthropic.claude': 'Claude',
+  'com.spotify.music': 'Spotify',
+  'ru.yandex.music': 'Яндекс Музыка',
+  'ru.sberbankmobile': 'СберБанк',
+  'ru.tinkoff.mobile.bank': 'Т-Банк (Тинькофф)',
+  'com.idamob.tinkoff.android': 'Т-Банк',
+  'com.vtb24.mobilebanking.android': 'ВТБ',
+  'ru.alfabank.mobile.android': 'Альфа-Банк',
+  'ru.ozon.app.android': 'OZON',
+  'com.wildberries.work': 'Wildberries WB',
+  'com.wildberries.wbclient': 'Wildberries',
+  'ru.yandex.searchplugin': 'Яндекс Старт',
+  'com.yandex.browser': 'Яндекс Браузер',
+  'com.android.chrome': 'Google Chrome',
+  'org.mozilla.firefox': 'Firefox',
+  'com.brave.browser': 'Brave Browser',
+  'com.opera.browser': 'Opera',
+  'com.opera.gx': 'Opera GX',
+  'com.microsoft.emmx': 'Microsoft Edge',
+  'com.whatsapp': 'WhatsApp',
+  'com.whatsapp.w4b': 'WhatsApp Business',
+  'com.viber.voip': 'Viber',
+  'com.instagram.android': 'Instagram',
+  'com.facebook.katana': 'Facebook',
+  'com.twitter.android': 'Twitter / X',
+  'com.zhiliaoapp.musically': 'TikTok',
+  'com.discord': 'Discord',
+  'com.valvesoftware.android.steam.community': 'Steam',
+  'com.kinopoisk': 'Кинопоиск',
+  'ru.rutube.app': 'Rutube',
+  'ru.yandex.disk': 'Яндекс Диск',
+  'ru.yandex.market': 'Яндекс Маркет',
+  'ru.yandex.taxi': 'Яндекс Go',
+  'ru.yandex.yandexnavi': 'Яндекс Навигатор',
+  'ru.yandex.yandexmaps': 'Яндекс Карты',
+  'com.hsv.freeviewer': 'MX Player',
+  'org.videolan.vlc': 'VLC',
+  'ru.gosuslugi.gostech': 'Госуслуги',
+  'ru.rostel.gosuslugi': 'Госуслуги',
+  'com.cbr.investor': 'ЦБ РФ',
+  'com.avito.android': 'Авито',
+  'com.duolingo': 'Duolingo',
+  'com.reddit.frontpage': 'Reddit',
+  'com.speedtest.android': 'Speedtest',
+  'com.github.android': 'GitHub',
+  'org.torproject.torbrowser': 'Tor Browser'
+};
+
+function formatAppLabel(pkg) {
+  if (KNOWN_APPS[pkg]) return KNOWN_APPS[pkg];
+  const parts = pkg.split('.');
+  if (parts.length === 0) return pkg;
+  let namePart = parts[parts.length - 1];
+  const junk = new Set(['android', 'app', 'client', 'mobile', 'messenger', 'lite', 'beta', 'main', 'phone']);
+  if (junk.has(namePart.toLowerCase()) && parts.length > 1) {
+    namePart = parts[parts.length - 2];
+  }
+  if (junk.has(namePart.toLowerCase()) && parts.length > 2) {
+    namePart = parts[parts.length - 3];
+  }
+  if (!namePart) namePart = pkg;
+  return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+}
+
+// Apps Loading via Native Package Manager & CLI
 async function loadInstalledApps() {
   try {
-    const res = await sh('pm list packages -U -3');
+    const cliRes = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller list-apps');
+    if (cliRes.stdout && cliRes.stdout.trim().startsWith('[')) {
+      const parsed = JSON.parse(cliRes.stdout.trim());
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        STATE.installedApps = parsed.map(it => ({
+          package: it.package,
+          name: KNOWN_APPS[it.package] || it.name || formatAppLabel(it.package),
+          uid: it.uid,
+          system: !!it.system
+        }));
+        return;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const res = await sh('pm list packages -U -3; pm list packages -U -s');
     if (res.stdout && res.stdout.includes('package:')) {
       const apps = [];
+      const seen = new Set();
       const lines = res.stdout.trim().split('\n');
       for (const line of lines) {
         const match = line.match(/^package:([a-zA-Z0-9._]+)\s+uid:(\d+)/);
         if (match) {
           const pkg = match[1];
+          if (seen.has(pkg)) continue;
+          seen.add(pkg);
           const uid = parseInt(match[2], 10);
-          const simpleName = pkg.split('.').pop();
-          const capName = simpleName.charAt(0).toUpperCase() + simpleName.slice(1);
-          apps.push({ package: pkg, name: capName, uid: uid, system: false });
+          const isSys = uid < 10000 || pkg.startsWith('com.android.') || pkg.startsWith('com.google.android.gms');
+          apps.push({
+            package: pkg,
+            name: formatAppLabel(pkg),
+            uid: uid,
+            system: isSys
+          });
         }
       }
       if (apps.length > 0) {
+        apps.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
         STATE.installedApps = apps;
         return;
       }
@@ -512,7 +638,7 @@ async function loadInstalledApps() {
       { package: 'com.openai.chatgpt', name: 'ChatGPT', uid: 10471, system: false },
       { package: 'com.anthropic.claude', name: 'Claude', uid: 10472, system: false },
       { package: 'com.spotify.music', name: 'Spotify', uid: 10473, system: false },
-      { package: 'com.vkontakte.android', name: 'VK (ВКонтакте)', uid: 10474, system: false },
+      { package: 'com.vkontakte.android', name: 'ВКонтакте (VK)', uid: 10474, system: false },
       { package: 'ru.yandex.music', name: 'Яндекс Музыка', uid: 10475, system: false },
       { package: 'ru.sberbankmobile', name: 'СберБанк', uid: 10476, system: false },
       { package: 'ru.ozon.app.android', name: 'OZON', uid: 10477, system: false },
@@ -652,6 +778,7 @@ async function openProfileModal(name) {
   const nameInput = document.getElementById('prof-name');
   const autostartInput = document.getElementById('prof-autostart');
   const killswitchInput = document.getElementById('prof-killswitch');
+  const lanBypassInput = document.getElementById('prof-lan-bypass');
   const modeSelect = document.getElementById('prof-mode');
   const dnsInput = document.getElementById('prof-dns');
   const trustedInput = document.getElementById('prof-trusted-wifi');
@@ -669,6 +796,7 @@ async function openProfileModal(name) {
       const data = JSON.parse(resJson.stdout || '{}');
       autostartInput.checked = data.enabled !== false;
       killswitchInput.checked = !!data.killswitch;
+      if (lanBypassInput) lanBypassInput.checked = data.lan_bypass !== false;
       modeSelect.value = data.routing_mode || 'include_apps';
       dnsInput.value = data.custom_dns || '';
       if (trustedInput) trustedInput.value = data.trusted_wifi || '';
@@ -685,6 +813,7 @@ async function openProfileModal(name) {
     nameInput.disabled = false;
     autostartInput.checked = true;
     killswitchInput.checked = false;
+    if (lanBypassInput) lanBypassInput.checked = true;
     modeSelect.value = 'include_apps';
     dnsInput.value = '';
     if (trustedInput) trustedInput.value = '';
@@ -713,6 +842,7 @@ async function saveProfile() {
   const name = document.getElementById('prof-name').value.trim();
   const autostart = document.getElementById('prof-autostart').checked;
   const killswitch = document.getElementById('prof-killswitch').checked;
+  const lanBypass = document.getElementById('prof-lan-bypass') ? document.getElementById('prof-lan-bypass').checked : true;
   const mode = document.getElementById('prof-mode').value;
   const dns = document.getElementById('prof-dns').value.trim();
   const trustedWifi = document.getElementById('prof-trusted-wifi') ? document.getElementById('prof-trusted-wifi').value.trim() : '';
@@ -735,6 +865,7 @@ async function saveProfile() {
     name: name,
     enabled: autostart,
     killswitch: killswitch,
+    lan_bypass: lanBypass,
     routing_mode: mode,
     custom_dns: dns,
     trusted_wifi: trustedWifi,
@@ -780,35 +911,337 @@ async function deleteProfile(name) {
 }
 
 // QR Image Decoder
-function handleQrImageFile(e) {
-  const file = e.target.files[0];
-  if (!file) return;
+// Журнал WebUI на устройстве: без него шаги импорта не видны снаружи
+function qrLog(msg) {
+  try {
+    const line = String(msg).replace(/'/g, "");
+    sh(`echo "$(date '+%Y-%m-%d %H:%M:%S') [WEBUI] ${line}" >> /data/adb/amneziawg/logs/webui.log`);
+  } catch (e) { /* журнал не критичен */ }
+}
 
-  const reader = new FileReader();
-  reader.onload = (evt) => {
-    const img = new Image();
-    img.onload = () => {
+// Многопроходное распознавание QR.
+// Снимок с камеры имеет полное разрешение матрицы, и getImageData на таком
+// холсте в WebView часто отдает пустые данные, поэтому кадр масштабируется.
+function decodeQrFromImage(img) {
+  const W = img.naturalWidth || img.width;
+  const H = img.naturalHeight || img.height;
+  if (!W || !H) return { text: null, info: 'изображение не загрузилось' };
+
+  const trace = [];
+  const attempt = (dw, dh, sx, sy, sw, sh, tag) => {
+    let data;
+    try {
       const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, img.width, img.height);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      canvas.width = dw;
+      canvas.height = dh;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) { trace.push(`${tag}:нет-контекста`); return null; }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+      data = ctx.getImageData(0, 0, dw, dh);
+    } catch (err) {
+      trace.push(`${tag}:исключение`);
+      return null;
+    }
+    if (!data || !data.data || !data.data.length) { trace.push(`${tag}:пусто`); return null; }
+    // Средняя яркость по выборке: нули означают, что холст не отрисовался,
+    // а не отсутствие кода на снимке. Это разные причины отказа.
+    let sum = 0, n = 0;
+    for (let i = 0; i < data.data.length; i += 4 * 997) { sum += data.data[i]; n++; }
+    const lum = n ? Math.round(sum / n) : -1;
+    for (const inv of ['dontInvert', 'attemptBoth']) {
+      const code = jsQR(data.data, data.width, data.height, { inversionAttempts: inv });
+      if (code && code.data) { trace.push(`${tag}:НАЙДЕН`); return code.data; }
+    }
+    trace.push(`${tag}:нет(яркость ${lum})`);
+    return null;
+  };
 
-      if (typeof jsQR !== 'undefined') {
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-        if (code && code.data) {
-          handleQrDecodedText(code.data);
-        } else {
-          showToast('QR-код на изображении не найден!');
-        }
-      } else {
-        showToast('Библиотека jsQR не загружена.');
+  const fit = (sx, sy, sw, sh, target, tag) => {
+    const scale = Math.min(1, target / Math.max(sw, sh));
+    return attempt(Math.max(1, Math.round(sw * scale)), Math.max(1, Math.round(sh * scale)), sx, sy, sw, sh, tag);
+  };
+
+  // 1. Кадр целиком в нескольких масштабах
+  for (const target of [1024, 1600, 2048]) {
+    const text = fit(0, 0, W, H, target, String(target));
+    if (text) return { text: text, info: `кадр целиком, масштаб ${target}` };
+  }
+
+  // 2. Центральная область: QR чаще всего наводят в середину
+  const cw = Math.round(W * 0.6);
+  const ch = Math.round(H * 0.6);
+  const centerText = fit(Math.round((W - cw) / 2), Math.round((H - ch) / 2), cw, ch, 1400, 'центр');
+  if (centerText) return { text: centerText, info: 'центральная область кадра' };
+
+  // 3. Разбор по перекрывающимся плиткам.
+  // На снимке 3072x4096 код занимает малую часть кадра, и при сжатии всего
+  // кадра до 1024 px его модули становятся меньше пикселя. Плитки сохраняют
+  // исходную детализацию участка.
+  for (const grid of [2, 3]) {
+    const tw = Math.round(W / grid);
+    const th = Math.round(H / grid);
+    const stepX = Math.round(tw / 2);
+    const stepY = Math.round(th / 2);
+    for (let gy = 0; gy + th <= H + stepY; gy += stepY) {
+      for (let gx = 0; gx + tw <= W + stepX; gx += stepX) {
+        const sx = Math.min(gx, Math.max(0, W - tw));
+        const sy = Math.min(gy, Math.max(0, H - th));
+        const text = fit(sx, sy, tw, th, 1000, `п${grid}`);
+        if (text) return { text: text, info: `плитка ${grid}x${grid}` };
       }
+    }
+  }
+
+  // Трасса длинная: в журнал идет сводка, а не каждая плитка
+  const found = {};
+  for (const t of trace) {
+    const k = t.split(':')[0];
+    found[k] = (found[k] || 0) + 1;
+  }
+  const summary = Object.keys(found).map(k => `${k}x${found[k]}`).join(' ');
+  const lum = trace.filter(t => t.indexOf('яркость') >= 0).slice(0, 3).join(' ');
+  return { text: null, info: `${W}x${H}; проходов ${trace.length} (${summary}); ${lum}` };
+}
+
+function decodeQrFromSource(src, onDone) {
+  if (typeof jsQR === 'undefined') {
+    showToast('Библиотека jsQR не загружена.');
+    if (onDone) onDone();
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    const res = decodeQrFromImage(img);
+    qrLog(`decode ${img.naturalWidth}x${img.naturalHeight} -> ${res.text ? 'найден, ' + res.text.length + ' символов' : 'НЕ найден: ' + res.info}`);
+    if (res.text) {
+      handleQrDecodedText(res.text);
+    } else {
+      showToast(`QR-код не распознан (${res.info})`);
+    }
+    if (onDone) onDone(!!res.text);
+  };
+  img.onerror = () => {
+    qrLog('decode: изображение не загрузилось в WebView');
+    showToast('Не удалось открыть изображение.');
+    if (onDone) onDone(false);
+  };
+  img.src = src;
+}
+
+// ==========================================
+// QR Scanner Engine (BarcodeDetector + jsQR)
+// ==========================================
+let qrMediaStream = null;
+let qrScanAnimFrame = null;
+let barcodeDetectorInstance = null;
+
+if ('BarcodeDetector' in window) {
+  try {
+    barcodeDetectorInstance = new BarcodeDetector({ formats: ['qr_code'] });
+    qrLog('BarcodeDetector API доступен');
+  } catch (e) {
+    barcodeDetectorInstance = null;
+  }
+}
+
+// Открытие сканера камеры
+async function openLiveQrScanner() {
+  const modal = document.getElementById('modal-qr-scanner');
+  const video = document.getElementById('qr-video');
+  const errBox = document.getElementById('qr-camera-error');
+  const targetBox = document.getElementById('qr-target-box');
+
+  if (modal) modal.style.display = 'flex';
+  if (errBox) errBox.style.display = 'none';
+  if (targetBox) targetBox.style.display = 'block';
+
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      qrMediaStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+      if (video) {
+        video.srcObject = qrMediaStream;
+        await video.play();
+        startLiveScanningLoop();
+      }
+    } else {
+      throw new Error('getUserMedia not supported in WebView');
+    }
+  } catch (err) {
+    qrLog('camera error: ' + err.message);
+    if (errBox) errBox.style.display = 'block';
+    if (targetBox) targetBox.style.display = 'none';
+  }
+}
+
+function stopLiveQrScanner() {
+  if (qrScanAnimFrame) {
+    cancelAnimationFrame(qrScanAnimFrame);
+    qrScanAnimFrame = null;
+  }
+  if (qrMediaStream) {
+    try {
+      qrMediaStream.getTracks().forEach(t => t.stop());
+    } catch (e) {}
+    qrMediaStream = null;
+  }
+  const video = document.getElementById('qr-video');
+  if (video) {
+    video.srcObject = null;
+  }
+  const modal = document.getElementById('modal-qr-scanner');
+  if (modal) modal.style.display = 'none';
+}
+
+function startLiveScanningLoop() {
+  const video = document.getElementById('qr-video');
+  if (!video || !qrMediaStream) return;
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  const scanFrame = async () => {
+    if (!qrMediaStream || video.readyState < 2) {
+      qrScanAnimFrame = requestAnimationFrame(scanFrame);
+      return;
+    }
+
+    try {
+      let codeText = null;
+
+      // 1. Нативный аппаратный BarcodeDetector
+      if (barcodeDetectorInstance) {
+        const barcodes = await barcodeDetectorInstance.detect(video);
+        if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+          codeText = barcodes[0].rawValue;
+        }
+      }
+
+      // 2. jsQR через canvas
+      if (!codeText && typeof jsQR !== 'undefined') {
+        canvas.width = Math.min(640, video.videoWidth || 640);
+        canvas.height = Math.min(480, video.videoHeight || 480);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imgData.data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data) {
+          codeText = code.data;
+        }
+      }
+
+      if (codeText) {
+        if (navigator.vibrate) navigator.vibrate(50);
+        stopLiveQrScanner();
+        handleQrDecodedText(codeText);
+        return;
+      }
+    } catch (e) {}
+
+    qrScanAnimFrame = requestAnimationFrame(scanFrame);
+  };
+
+  qrScanAnimFrame = requestAnimationFrame(scanFrame);
+}
+
+// Загрузка фото из галереи или проводника
+async function handleQrImageFile(e) {
+  const input = e.target;
+  const file = input.files && input.files[0];
+  const reset = () => { try { input.value = ''; } catch (err) {} };
+  if (!file) { reset(); return; }
+
+  showToast('Анализ изображения...');
+  const reader = new FileReader();
+  reader.onload = async (evt) => {
+    const img = new Image();
+    img.onload = async () => {
+      let text = null;
+      if (barcodeDetectorInstance) {
+        try {
+          const barcodes = await barcodeDetectorInstance.detect(img);
+          if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+            text = barcodes[0].rawValue;
+          }
+        } catch (e) {}
+      }
+
+      if (!text) {
+        const res = decodeQrFromImage(img);
+        if (res && res.text) text = res.text;
+      }
+
+      reset();
+      stopLiveQrScanner();
+
+      if (text) {
+        handleQrDecodedText(text);
+      } else {
+        showToast('QR-код на фото не распознан. Попробуйте другой ракурс.');
+      }
+    };
+    img.onerror = () => {
+      reset();
+      showToast('Не удалось открыть фото');
     };
     img.src = evt.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function parseConfigDirectives(rawText) {
+  if (!rawText) return;
+  const lines = rawText.split('\n');
+  let included = null;
+  let excluded = null;
+  let dns = null;
+
+  for (let line of lines) {
+    line = line.trim();
+    if (line.startsWith('#') || line.startsWith(';')) continue;
+    const parts = line.split('=');
+    if (parts.length >= 2) {
+      const key = parts[0].trim().toLowerCase();
+      const val = parts.slice(1).join('=').trim();
+      if (key === 'includedapplications') {
+        included = val.split(',').map(s => s.trim()).filter(Boolean);
+      } else if (key === 'excludedapplications') {
+        excluded = val.split(',').map(s => s.trim()).filter(Boolean);
+      } else if (key === 'dns') {
+        dns = val.split(',').map(s => s.trim()).filter(Boolean).join(', ');
+      }
+    }
+  }
+
+  if (included && included.length > 0) {
+    const modeEl = document.getElementById('prof-mode');
+    if (modeEl) modeEl.value = 'include_apps';
+    STATE.selectedApps = new Set(included);
+    updateSelectedCount();
+    renderFilteredApps();
+    const groupApps = document.getElementById('group-apps');
+    if (groupApps) groupApps.style.display = 'block';
+  } else if (excluded && excluded.length > 0) {
+    const modeEl = document.getElementById('prof-mode');
+    if (modeEl) modeEl.value = 'exclude_apps';
+    STATE.selectedApps = new Set(excluded);
+    updateSelectedCount();
+    renderFilteredApps();
+    const groupApps = document.getElementById('group-apps');
+    if (groupApps) groupApps.style.display = 'block';
+  }
+
+  if (dns) {
+    const dnsEl = document.getElementById('prof-dns');
+    if (dnsEl && !dnsEl.value) {
+      dnsEl.value = dns;
+    }
+  }
 }
 
 function handleQrDecodedText(text) {
@@ -822,6 +1255,7 @@ function handleQrDecodedText(text) {
 
   document.getElementById('prof-conf-raw').value = text;
   autoFillProfileName('qr_imported');
+  parseConfigDirectives(text);
   showToast('Конфигурация импортирована из QR-кода!');
 }
 

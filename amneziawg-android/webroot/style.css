@@ -674,3 +674,15 @@ nav.m3-nav-bar {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* QR Live Scanner Animation */
+@keyframes scanLine {
+  0% { top: 0; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+.qr-scanner-overlay {
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+}

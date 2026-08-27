@@ -348,6 +348,8 @@ apply_profile_rules() {
   [ -z "$dns_val" ] && dns_val="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "DNS")"
   local killswitch
   killswitch="$(get_opt_val "$opts_file" "killswitch" "false")"
+  local lan_bypass
+  lan_bypass="$(get_opt_val "$opts_file" "lan_bypass" "true")"
 
   init_iptables_root
 
@@ -392,11 +394,13 @@ apply_profile_rules() {
     [ -n "$ip_a" ] && ip rule add from "$ip_a" table "$table_id" pref "$((priority - 1))" 2>/dev/null || true
   done
 
-  # Исключение локальных сетей от маркировки
+  # Исключение локальных сетей от маркировки (только при lan_bypass=true)
   iptables -w 2 -t mangle -A "$ch_mangle" -d 127.0.0.0/8 -j RETURN
-  iptables -w 2 -t mangle -A "$ch_mangle" -d 10.0.0.0/8 -j RETURN
-  iptables -w 2 -t mangle -A "$ch_mangle" -d 172.16.0.0/12 -j RETURN
-  iptables -w 2 -t mangle -A "$ch_mangle" -d 192.168.0.0/16 -j RETURN
+  if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+    iptables -w 2 -t mangle -A "$ch_mangle" -d 10.0.0.0/8 -j RETURN
+    iptables -w 2 -t mangle -A "$ch_mangle" -d 172.16.0.0/12 -j RETURN
+    iptables -w 2 -t mangle -A "$ch_mangle" -d 192.168.0.0/16 -j RETURN
+  fi
   iptables -w 2 -t mangle -A "$ch_mangle" -d 224.0.0.0/4 -j RETURN
   iptables -w 2 -t mangle -A "$ch_mangle" -d 255.255.255.255/32 -j RETURN
 
@@ -416,7 +420,7 @@ apply_profile_rules() {
 
   if [ "$routing_mode" = "include_apps" ]; then
     if [ -n "$uids" ]; then
-      log_i "[$prof_name] Маршрутизация UIDs (Include): $uids"
+      log_i "[$prof_name] Маршрутизация UIDs (Include): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
         # 1. Приоритетный маршрут в туннель
@@ -443,9 +447,11 @@ apply_profile_rules() {
         fi
         if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 127.0.0.0/8 -j ACCEPT
-          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 10.0.0.0/8 -j ACCEPT
-          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 172.16.0.0/12 -j ACCEPT
-          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 192.168.0.0/16 -j ACCEPT
+          if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+            iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 10.0.0.0/8 -j ACCEPT
+            iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 172.16.0.0/12 -j ACCEPT
+            iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 192.168.0.0/16 -j ACCEPT
+          fi
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -o "$iface" -j ACCEPT
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -j REJECT --reject-with icmp-port-unreachable
         fi
@@ -453,7 +459,7 @@ apply_profile_rules() {
     fi
   elif [ "$routing_mode" = "exclude_apps" ]; then
     if [ -n "$uids" ]; then
-      log_i "[$prof_name] Исключение UIDs (Exclude): $uids"
+      log_i "[$prof_name] Исключение UIDs (Exclude): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
         ip rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
@@ -470,14 +476,16 @@ apply_profile_rules() {
     iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
     if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+      if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+      fi
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -o "$iface" -j ACCEPT
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -j REJECT --reject-with icmp-port-unreachable
     fi
   elif [ "$routing_mode" = "all_traffic" ]; then
-    log_i "[$prof_name] Режим полного туннеля (все приложения)..."
+    log_i "[$prof_name] Режим полного туннеля (все приложения, LAN Bypass: $lan_bypass)..."
     ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
     if [ "$has_ipv6" = "1" ]; then
       ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
@@ -485,9 +493,11 @@ apply_profile_rules() {
     iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
     if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+      if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+      fi
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -o "$iface" -j ACCEPT
       iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -j REJECT --reject-with icmp-port-unreachable
     fi

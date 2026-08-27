@@ -25,7 +25,7 @@
 
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
-| **[AWG eCubz](./amneziawg-android)** | `v1.0.9` | Высокопроизводительный multi-profile клиент AmneziaWG (AWG 1.0) с раздельной маршрутизацией приложений (Per-App `uidrange` Priority 9000), умной паузой в доверенных Wi-Fi сетях (Smart Pause), сканером QR-кодов и Material 3 WebUI. | Magisk / KernelSU / APatch (Android 9–16) |
+| **[AWG eCubz](./amneziawg-android)** | `v1.1.3` | Высокопроизводительный multi-profile клиент AmneziaWG (AWG 1.0) с раздельной маршрутизацией приложений (Per-App `uidrange` Priority 9000), умной паузой в доверенных Wi-Fi сетях (Smart Pause), поддержкой диапазонов H1-H4, автоимпортом IncludedApplications, LAN Bypass для домашних сетей, сканером QR-кодов и Material 3 WebUI. | Magisk / KernelSU / APatch (Android 9–16) |
 | **[zapret2-android](./zapret2-android)** | `v4.2.9` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
 | **[tg-ws-proxy](./tg-ws-proxy)** | `v1.2.0` | Systemless MTProto WS Proxy для ускорения и стабильной работы Telegram без системного VPN. Встроенный WebUI (M3 Expressive), прямой WebSocket к ДЦ Telegram, поддержка Cloudflare Worker/доменов, пресеты батареи и Wi-Fi раздачи. | Magisk / KernelSU / APatch (Android 7–16) |
 | **[analytics_ads_disabler](./analytics_ads_disabler)** | `v7.0.2` | Блокировка рекламы и аналитики внутри процессов приложений через Zygisk: штатное выключение SDK, сетевой перехват по стеку вызовов, схлопывание баннеров, закрытие полноэкранной рекламы. Без списков доменов в основе и без сканирования APK. | **Zygisk обязателен**: Magisk / KernelSU + ZygiskNext / APatch (Android 8–16) |
@@ -49,8 +49,8 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ### 📦 Modules Overview
 
-1. **[AWG eCubz](./amneziawg-android) (v1.0.9)**
-   - Systemless Multi-Profile AmneziaWG (AWG 1.0) client with per-app split routing (`uidrange` kernel rules), Smart Pause in trusted Wi-Fi networks, QR code import, and modern Material 3 WebUI.
+1. **[AWG eCubz](./amneziawg-android) (v1.1.3)**
+   - Systemless Multi-Profile AmneziaWG (AWG 1.0) client with per-app split routing (`uidrange` kernel rules), Smart Pause in trusted Wi-Fi networks, H1-H4 ranges support, auto-import of IncludedApplications, LAN Bypass for home subnets, QR code import, and modern Material 3 WebUI.
 
 2. **[zapret2-android](./zapret2-android) (v4.2.9)**
    - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight tunnel for any selected applications. Restores YouTube 4K, Discord voice/media, and blocked sites directly in netfilter.
@@ -79,7 +79,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 | Модуль / Module | Актуальная версия | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- | :--- |
-| **AWG eCubz** | `v1.0.9` | [amneziawg-android_v1.0.9_1009.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/amneziawg-android_v1.0.9_1009.zip) | ~10.9 MB |
+| **AWG eCubz** | `v1.1.3` | [amneziawg-android_v1.1.3_1013.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/amneziawg-android_v1.1.3_1013.zip) | ~12.8 MB |
 | **zapret2-android** | `v4.2.9` | [zapret2-android_v4.2.9_4290.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v4.2.9_4290.zip) | ~16.4 MB |
 | **tg-ws-proxy** | `v1.2.0` | [tg-ws-proxy_v1.2.0_1200.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/tg-ws-proxy_v1.2.0_1200.zip) | ~11.4 MB |
 | **AIUnblock** | `v3.1.1` | [AIUnblock_v3.1.1_311.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v3.1.1_311.zip) | ~9.6 MB |
