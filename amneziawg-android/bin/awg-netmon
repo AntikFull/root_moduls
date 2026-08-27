@@ -1,6 +1,5 @@
 #!/system/bin/sh
-# awg-netmon — Монитор сети, watchdog хендшейка и доверенных сетей
-# Энергоэффективный мониторинг с гистерезисом замеров и сторожевым таймером.
+# awg-netmon — Монитор сети, watchdog хендшейка и доверенных сетей (v1.1.1)
 
 RUN_DIR="/data/adb/amneziawg/run"
 BIN_DIR="${0%/*}"
@@ -13,13 +12,11 @@ get_default_phys_iface() {
 }
 
 get_current_ssid() {
-  local s
-  s="$(cmd wifi status 2>/dev/null | grep -o 'Wifi is connected to "[^"]*"' | sed 's/Wifi is connected to "//;s/"//' | head -n 1)"
-  printf '%s' "$s"
+  "$BIN_DIR/awg-controller" get-current-ssid 2>/dev/null
 }
 
 check_handshake_watchdog() {
-  # Проверка возраста последнего хендшейка для активных туннелей
+  local now="$(date +%s)"
   for iface_file in "$RUN_DIR"/*.iface; do
     [ -f "$iface_file" ] || continue
     local p="$(basename "$iface_file" .iface)"
@@ -27,17 +24,34 @@ check_handshake_watchdog() {
     local ifname="$(cat "$iface_file" 2>/dev/null)"
     [ -z "$ifname" ] && continue
 
-    # Проверка дампа UAPI
+    # 1. Проверка существования сетевого интерфейса в системе
+    if ! ip link show "$ifname" >/dev/null 2>&1; then
+      "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+      continue
+    fi
+
+    # 2. Парсинг UAPI дампа WireGuard/AmneziaWG
     local dump="$("$BIN_DIR/awg" show "$ifname" dump 2>/dev/null)"
     [ -z "$dump" ] && continue
 
-    local last_hs="$(printf '%s\n' "$dump" | awk 'NR>1 {print $5}' | head -n 1)"
+    # Извлечение last_handshake_time_sec из формата key=value
+    local last_hs
+    last_hs="$(printf '%s\n' "$dump" | sed -n 's/^last_handshake_time_sec=//p' | sort -n | tail -n 1)"
+
     if [ -n "$last_hs" ] && [ "$last_hs" -gt 0 ] 2>/dev/null; then
-      local now="$(date +%s)"
       local age=$((now - last_hs))
       if [ $age -gt 180 ]; then
-        # Хендшейк устарел (более 180 сек без ответа сервера) -> перезапуск интерфейса
+        # Хендшейк устарел (> 180 сек) -> перезапуск туннеля
         "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+      fi
+    else
+      # Хендшейк равен 0 (ни разу не завершился успешно). Если процесс запущен > 60 сек назад -> рестарт
+      local pid_file="$RUN_DIR/${ifname}.pid"
+      if [ -f "$pid_file" ]; then
+        local pid_mtime="$(stat -c %Y "$pid_file" 2>/dev/null || echo "$now")"
+        if [ $((now - pid_mtime)) -gt 60 ]; then
+          "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+        fi
       fi
     fi
   done
@@ -68,7 +82,7 @@ while true; do
     fi
   fi
 
-  # Каждые 45 секунд — проверка хендшейка watchdog и фоновый sync
+  # Каждые 30-45 секунд: проверка watchdog хендшейка и синхронизация
   if [ $((counter % 3)) -eq 0 ]; then
     check_handshake_watchdog
     if [ -x "$BIN_DIR/awg-controller" ]; then

@@ -527,6 +527,13 @@ stop_profile() {
   iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || true
   iptables -w 2 -t filter -X "$ch_kill" 2>/dev/null || true
 
+  local uids="$("$BIN_DIR/awg" resolve-profile "$PROFILES_DIR/${prof_name}.json" 2>/dev/null)"
+  for uid in $uids; do
+    [ -z "$uid" ] && continue
+    ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+    ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+  done
+
   # 2. Очистка ip rule и ip route
   if [ -n "$fwmark" ]; then
     while ip rule del fwmark "$fwmark" 2>/dev/null; do :; done
@@ -565,6 +572,12 @@ pause_profile() {
     while ip rule del table "$table_id" 2>/dev/null; do :; done
     while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
   fi
+  local uids="$("$BIN_DIR/awg" resolve-profile "$PROFILES_DIR/${prof_name}.json" 2>/dev/null)"
+  for uid in $uids; do
+    [ -z "$uid" ] && continue
+    ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+    ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+  done
   iptables -w 2 -t mangle -F "AWG_M_${prof_name}" 2>/dev/null || true
   iptables -w 2 -t nat -F "AWG_N_${prof_name}" 2>/dev/null || true
   iptables -w 2 -t filter -F "AWG_K_${prof_name}" 2>/dev/null || true
@@ -577,13 +590,25 @@ resume_profile() {
   rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
   apply_profile_rules "$prof_name"
 }
-# Синхронизация правил и умная пауза в доверенных сетях с файловой блокировкой
+# Синхронизация правил и умная пауза в доверенных сетях с защищенным файловым локом
 sync_rules() {
   local lock_dir="$RUN_DIR/.sync.lock"
   if ! mkdir "$lock_dir" 2>/dev/null; then
-    # Если лок уже удерживается другим процессом, пропускаем параллельный запуск
-    return 0
+    # Проверка на зависший лок старше 15 секунд
+    if [ -d "$lock_dir" ]; then
+      local now="$(date +%s)"
+      local mtime="$(stat -c %Y "$lock_dir" 2>/dev/null || echo "$now")"
+      if [ $((now - mtime)) -gt 15 ]; then
+        rmdir "$lock_dir" 2>/dev/null || rm -rf "$lock_dir" 2>/dev/null
+        mkdir "$lock_dir" 2>/dev/null || return 0
+      else
+        return 0
+      fi
+    else
+      return 0
+    fi
   fi
+  trap 'rmdir "$RUN_DIR/.sync.lock" 2>/dev/null' EXIT INT TERM
 
   init_iptables_root
   local cur_ssid="$(get_current_ssid)"
@@ -600,8 +625,15 @@ sync_rules() {
       continue
     fi
 
+    # Проверка живого состояния интерфейса и демона в ядре
     local is_running=0
-    [ -f "$RUN_DIR/${p}.iface" ] && is_running=1
+    local cur_ifname="$(cat "$RUN_DIR/${p}.iface" 2>/dev/null)"
+    if [ -n "$cur_ifname" ] && ip link show "$cur_ifname" >/dev/null 2>&1; then
+      local d_pid="$(cat "$RUN_DIR/${cur_ifname}.pid" 2>/dev/null)"
+      if [ -n "$d_pid" ] && kill -0 "$d_pid" 2>/dev/null; then
+        is_running=1
+      fi
+    fi
     local is_paused=0
     [ -f "$RUN_DIR/${p}.paused" ] && is_paused=1
 
@@ -659,6 +691,9 @@ cleanup_all() {
   iptables -w 2 -t filter -X AWG_FILTER 2>/dev/null || true
 
   iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
+
+  while ip rule del table main pref 9001 2>/dev/null; do :; done
+  while ip -6 rule del table main pref 9001 2>/dev/null; do :; done
 
   local t=201
   while [ $t -le 232 ]; do
