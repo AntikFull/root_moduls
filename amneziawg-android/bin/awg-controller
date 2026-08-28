@@ -643,7 +643,22 @@ resume_profile() {
   local prof_name="$1"
   log_i "[$prof_name] Пробуждение из режима сна (восстановление правил)..."
   rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
+
+  # Восстановление оригинального Endpoint из .conf (защита от WireGuard roaming на 192.168.x.x при переходе с домашней Wi-Fi)
+  local iface="$(cat "$RUN_DIR/${prof_name}.iface" 2>/dev/null)"
+  local conf_file="$PROFILES_DIR/${prof_name}.conf"
+  if [ -n "$iface" ] && [ -f "$conf_file" ]; then
+    log_i "[$prof_name] Сброс эндпоинта к исходному значению из $conf_file..."
+    WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file" >/dev/null 2>&1 || \
+    WG_UAPI_DIR="$RUN_DIR" AMNEZIAWG_UAPI_DIR="$RUN_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file" >/dev/null 2>&1 || true
+  fi
+
   apply_profile_rules "$prof_name"
+
+  # Мгновенная инициализация хендшейка по новому маршруту
+  if [ -n "$iface" ]; then
+    ping -c 1 -W 1 -I "$iface" 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 -I "$iface" 8.8.8.8 >/dev/null 2>&1 || true
+  fi
 }
 # Синхронизация правил и умная пауза в доверенных сетях с защищенным файловым локом
 sync_rules() {
@@ -716,6 +731,16 @@ sync_rules() {
       elif [ $is_running -eq 0 ]; then
         start_profile "$p" 2>/dev/null || true
       else
+        # Профиль активен: сброс роуминга, если эндпоинт остался локальным IP роутера
+        if [ -n "$cur_ifname" ] && [ -f "$c" ]; then
+          local cur_ep="$("$BIN_DIR/awg" show "$cur_ifname" endpoints 2>/dev/null | awk '{print $2}')"
+          case "$cur_ep" in
+            192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
+              log_w "[$p] Обнаружен локальный эндпоинт ($cur_ep) вне доверенной сети! Сброс к $c..."
+              WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$cur_ifname" "$c" >/dev/null 2>&1 || true
+              ;;
+          esac
+        fi
         apply_profile_rules "$p"
       fi
     fi

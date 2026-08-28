@@ -30,3 +30,7 @@ fi
 echo ""
 "$BIN_DIR/awg" status
 echo "================="
+
+# Открытие WebUI для пользователей Magisk через ksuwebui / MMRL
+am start -n "io.github.a13e300.ksuwebui/.WebUIActivity" -e id "amneziawg-android" >/dev/null 2>&1 || \
+am start -n "com.dergoogler.mmrl/.ui.activity.webui.WebUIActivity" -e id "amneziawg-android" >/dev/null 2>&1 || true

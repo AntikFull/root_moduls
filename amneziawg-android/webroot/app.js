@@ -365,7 +365,10 @@ async function loadProfiles() {
 }
 
 async function loadStatus() {
-  const res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller status json');
+  let res = await sh('/data/adb/modules/amneziawg-android/bin/awg status json');
+  if (!res.stdout || !res.stdout.trim().startsWith('[')) {
+    res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller status json');
+  }
   try {
     let raw = (res.stdout || '').trim();
     const match = raw.match(/\[[\s\S]*\]/);
@@ -423,7 +426,7 @@ function renderDashboard() {
     } else if (isUp && peer) {
       const rxBytes = peer.rx_bytes || 0;
       const txBytes = peer.tx_bytes || 0;
-      const hsAge = peer.last_handshake_time_sec || 0;
+      const hsAge = (peer.last_handshake_ago_sec !== undefined ? peer.last_handshake_ago_sec : (peer.last_handshake_time_sec || 0));
 
       if (rxBytes > 500) {
         badgeHtml = '<span class="m3-badge m3-badge-success">Связь подтверждена</span>';
@@ -830,7 +833,7 @@ async function openProfileModal(name) {
   if (name) {
     title.innerText = `Редактирование: ${name}`;
     nameInput.value = name;
-    nameInput.disabled = true;
+    nameInput.disabled = false;
 
     const resJson = await sh(`cat /data/adb/amneziawg/profiles/${name}.json 2>/dev/null`);
     try {
@@ -917,18 +920,27 @@ async function saveProfile() {
   const escJson = jsonStr.replace(/'/g, "'\\''");
   const escConf = rawConf.replace(/'/g, "'\\''");
 
+  const oldName = STATE.editingProfileName;
+  const isRename = !!(oldName && oldName !== name);
+
+  if (isRename) {
+    showToast(`Переименование ${oldName} -> ${name}...`);
+    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller stop "${oldName}" 2>/dev/null; rm -f /data/adb/amneziawg/profiles/${oldName}.*`);
+  }
+
   await sh(`
     mkdir -p /data/adb/amneziawg/profiles
     echo '${escConf}' > /data/adb/amneziawg/profiles/${name}.conf
     echo '${escJson}' > /data/adb/amneziawg/profiles/${name}.json
     chmod 600 /data/adb/amneziawg/profiles/${name}.conf /data/adb/amneziawg/profiles/${name}.json
-    if [ -f "/data/adb/amneziawg/run/${name}.iface" ]; then
-      /data/adb/modules/amneziawg-android/bin/awg-controller restart "${name}"
+    if [ -f "/data/adb/amneziawg/run/${name}.iface" ] || [ "${isRename ? '1' : '0'}" = "1" ]; then
+      /data/adb/modules/amneziawg-android/bin/awg-controller restart "${name}" 2>/dev/null || /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
     else
       /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
     fi
   `);
 
+  STATE.editingProfileName = null;
   closeProfileModal();
   showToast(`Профиль "${name}" сохранен!`);
   await refreshAllData();
