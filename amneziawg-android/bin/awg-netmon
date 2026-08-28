@@ -146,15 +146,15 @@ last_ssid="$(get_current_ssid)"
 counter=0
 
 while true; do
-  sleep 15
+  sleep 3
   counter=$((counter + 1))
 
   cur_iface="$(get_default_phys_iface)"
   cur_ssid="$(get_current_ssid)"
 
-  # Гистерезис: подтверждение смены сети повторным замером через 2 секунды
+  # Быстрое подтверждение смены сети (1 сек)
   if [ "$cur_iface" != "$last_iface" ] || [ "$cur_ssid" != "$last_ssid" ]; then
-    sleep 2
+    sleep 1
     cur_iface_confirm="$(get_default_phys_iface)"
     cur_ssid_confirm="$(get_current_ssid)"
     if [ "$cur_iface" = "$cur_iface_confirm" ] && [ "$cur_ssid" = "$cur_ssid_confirm" ]; then
@@ -168,8 +168,8 @@ while true; do
     fi
   fi
 
-  # Каждые 45 секунд: проверка здоровья туннелей и синхронизация правил
-  if [ $((counter % 3)) -eq 0 ]; then
+  # Каждые 36 секунд: проверка здоровья туннелей и синхронизация правил
+  if [ $((counter % 12)) -eq 0 ]; then
     check_tunnel_health
     if [ -x "$BIN_DIR/awg-controller" ]; then
       "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1

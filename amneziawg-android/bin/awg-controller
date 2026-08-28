@@ -593,7 +593,10 @@ stop_profile() {
   fi
 
   # 3. Остановка процесса amneziawg-go
+  iptables -w 2 -D INPUT -m comment --comment "AWG_SLEEP_${prof_name}" -j DROP 2>/dev/null || true
   if [ -n "$iface" ]; then
+    local lport="$(WG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" show "$iface" listen-port 2>/dev/null)"
+    [ -n "$lport" ] && iptables -w 2 -D INPUT -p udp --dport "$lport" -j DROP -m comment --comment "AWG_SLEEP_${prof_name}" 2>/dev/null || true
     local pid
     pid="$(cat "$RUN_DIR/${iface}.pid" 2>/dev/null)"
     if [ -n "$pid" ]; then
@@ -609,56 +612,24 @@ stop_profile() {
   log_i "[$prof_name] Профиль полностью остановлен и очищен."
 }
 
-# Приостановка профиля (снятие правил без убийства демона amneziawg-go)
+# Приостановка профиля (полная остановка туннеля на время сна в доверенной сети)
 pause_profile() {
   local prof_name="$1"
-  local table_id="$(cat "$RUN_DIR/${prof_name}.table" 2>/dev/null)"
-  log_i "[$prof_name] Перевод в режим сна (снятие правил маршрутизации)..."
-  if [ -n "$table_id" ]; then
-    while ip rule del table "$table_id" 2>/dev/null; do :; done
-    while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
-  fi
-  local opts_file="$PROFILES_DIR/${prof_name}.json"
-  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
-  local uids=""
-  if [ -f "$opts_file" ]; then
-    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)"
-  fi
-  for uid in $uids; do
-    [ -z "$uid" ] && continue
-    while ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
-    while ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
-    while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-    while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
-    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
-  done
-  iptables -w 2 -t mangle -F "AWG_M_${prof_name}" 2>/dev/null || true
-  iptables -w 2 -t nat -F "AWG_N_${prof_name}" 2>/dev/null || true
-  iptables -w 2 -t filter -F "AWG_K_${prof_name}" 2>/dev/null || true
+  local cur_ssid="$2"
+  [ -z "$cur_ssid" ] && cur_ssid="$(get_current_ssid)"
+  [ -z "$cur_ssid" ] && cur_ssid="Wi-Fi"
+
+  log_i "[$prof_name] Перевод в режим сна (остановка туннеля для сети '$cur_ssid')..."
+  stop_profile "$prof_name"
+  echo "$cur_ssid" > "$RUN_DIR/${prof_name}.paused"
 }
 
-# Пробуждение профиля (восстановление правил маршрутизации)
+# Пробуждение профиля (полный запуск туннеля при выходе из доверенной сети)
 resume_profile() {
   local prof_name="$1"
-  log_i "[$prof_name] Пробуждение из режима сна (восстановление правил)..."
+  log_i "[$prof_name] Пробуждение из режима сна (запуск туннеля)..."
   rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
-
-  # Восстановление оригинального Endpoint из .conf (защита от WireGuard roaming на 192.168.x.x при переходе с домашней Wi-Fi)
-  local iface="$(cat "$RUN_DIR/${prof_name}.iface" 2>/dev/null)"
-  local conf_file="$PROFILES_DIR/${prof_name}.conf"
-  if [ -n "$iface" ] && [ -f "$conf_file" ]; then
-    log_i "[$prof_name] Сброс эндпоинта к исходному значению из $conf_file..."
-    WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file" >/dev/null 2>&1 || \
-    WG_UAPI_DIR="$RUN_DIR" AMNEZIAWG_UAPI_DIR="$RUN_DIR" "$BIN_DIR/awg" setconf "$iface" "$conf_file" >/dev/null 2>&1 || true
-  fi
-
-  apply_profile_rules "$prof_name"
-
-  # Мгновенная инициализация хендшейка по новому маршруту
-  if [ -n "$iface" ]; then
-    ping -c 1 -W 1 -I "$iface" 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 -I "$iface" 8.8.8.8 >/dev/null 2>&1 || true
-  fi
+  start_profile "$prof_name"
 }
 # Синхронизация правил и умная пауза в доверенных сетях с защищенным файловым локом
 sync_rules() {
@@ -715,13 +686,8 @@ sync_rules() {
 
     if [ -n "$cur_ssid" ] && is_ssid_trusted "$cur_ssid" "$trusted"; then
       # Должен спать в доверенной сети
-      if [ $is_running -eq 1 ] && [ $is_paused -eq 0 ]; then
-        log_i "[$p] Обнаружена доверенная сеть '$cur_ssid'. Перевод в режим сна..."
-        echo "$cur_ssid" > "$RUN_DIR/${p}.paused"
-        pause_profile "$p"
-      elif [ $is_paused -eq 0 ]; then
-        echo "$cur_ssid" > "$RUN_DIR/${p}.paused"
-        pause_profile "$p"
+      if [ $is_paused -eq 0 ]; then
+        pause_profile "$p" "$cur_ssid"
       fi
     else
       # Не в доверенной сети (LTE или другой Wi-Fi) -> должен работать
@@ -864,6 +830,16 @@ case "$1" in
     ;;
   sync-rules)
     sync_rules
+    ;;
+  pause)
+    if [ -n "$2" ]; then
+      pause_profile "$2"
+    fi
+    ;;
+  resume)
+    if [ -n "$2" ]; then
+      resume_profile "$2"
+    fi
     ;;
   status)
     show_status "$2"
