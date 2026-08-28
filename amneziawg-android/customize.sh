@@ -7,8 +7,6 @@ ui_print "*   AmneziaWG Multi-Profile (Root and App)   *"
 ui_print "*      Разработка: eCubz (t.me/eCubz)        *"
 ui_print "**********************************************"
 
-ARCH32="arm"
-[ "$ARCH" = "arm64" ] && ARCH32="arm"
 [ "$ARCH" = "x64" ] && ARCH="x86_64"
 
 ui_print "- Архитектура процессора: $ARCH"
@@ -54,8 +52,6 @@ DATA_DIR="/data/adb/amneziawg"
 mkdir -p "$DATA_DIR/profiles" "$DATA_DIR/run" "$DATA_DIR/logs" 2>/dev/null
 chmod 755 "$DATA_DIR" "$DATA_DIR/profiles" "$DATA_DIR/run" "$DATA_DIR/logs" 2>/dev/null
 
-# Создание директории профилей (поставляется чистым без демо-профилей)
-mkdir -p "$DATA_DIR/profiles" 2>/dev/null
 
 # Горячий перезапуск мониторов: обновление подменяет файлы скриптов под
 # работающим shell, из-за чего awg-netmon умирает и watchdog перестает работать.

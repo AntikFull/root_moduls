@@ -3,6 +3,7 @@
 # При установке/обновлении приложений обновляет правила UIDs.
 
 BIN_DIR="${0%/*}"
+export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
 PKG_XML="/data/system/packages.xml"
 
 if [ ! -f "$PKG_XML" ]; then

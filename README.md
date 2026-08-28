@@ -79,7 +79,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 | Модуль / Module | Актуальная версия | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- | :--- |
-| **AWG eCubz** | `v1.1.3` | [amneziawg-android_v1.1.3_1013.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/amneziawg-android_v1.1.3_1013.zip) | ~12.8 MB |
+| **AWG eCubz** | `v1.1.4` | [amneziawg-android_v1.1.4_1014.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/amneziawg-android_v1.1.4_1014.zip) | ~10.8 MB |
 | **zapret2-android** | `v4.2.9` | [zapret2-android_v4.2.9_4290.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/zapret2-android_v4.2.9_4290.zip) | ~16.4 MB |
 | **tg-ws-proxy** | `v1.2.0` | [tg-ws-proxy_v1.2.0_1200.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/tg-ws-proxy_v1.2.0_1200.zip) | ~11.4 MB |
 | **AIUnblock** | `v3.1.1` | [AIUnblock_v3.1.1_311.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/AIUnblock_v3.1.1_311.zip) | ~9.6 MB |

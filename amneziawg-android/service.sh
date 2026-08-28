@@ -6,7 +6,7 @@ PROFILES_DIR="/data/adb/amneziawg/profiles"
 LOG_DIR="/data/adb/amneziawg/logs"
 LOG_FILE="$LOG_DIR/service.log"
 
-export PATH="$BIN_DIR:$PATH"
+export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
 export WG_UAPI_DIR="/data/adb/amneziawg/run"
 export AMNEZIAWG_UAPI_DIR="/data/adb/amneziawg/run"
 

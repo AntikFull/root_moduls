@@ -8,11 +8,16 @@
 
 AWG_LIVE_DIR="/data/adb/modules/amneziawg-android"
 AWG_LOG_DIR="/data/adb/amneziawg/logs"
+BIN_DIR="${MODPATH:-$AWG_LIVE_DIR}/bin"
 
-# Каталог с исполняемыми файлами: приоритет у установленного модуля,
-# запасной вариант — каталог установки MODPATH.
+export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
+
+# Каталог с исполняемыми файлами: приоритет у каталога установки MODPATH,
+# запасной вариант — рабочий каталог модуля AWG_LIVE_DIR.
 awg_daemon_bin_dir() {
-  if [ -x "$AWG_LIVE_DIR/bin/awg-netmon" ]; then
+  if [ -n "$MODPATH" ] && [ -x "$MODPATH/bin/awg-netmon" ]; then
+    printf '%s' "$MODPATH/bin"
+  elif [ -x "$AWG_LIVE_DIR/bin/awg-netmon" ]; then
     printf '%s' "$AWG_LIVE_DIR/bin"
   else
     printf '%s' "${MODPATH:-$AWG_LIVE_DIR}/bin"

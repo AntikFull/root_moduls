@@ -348,7 +348,7 @@ async function loadProfiles() {
 }
 
 async function loadStatus() {
-  const res = await sh('/data/adb/modules/amneziawg-android/bin/awg status json');
+  const res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller status json');
   try {
     let raw = (res.stdout || '').trim();
     const match = raw.match(/\[[\s\S]*\]/);
@@ -360,7 +360,11 @@ async function loadStatus() {
 }
 
 function updateSystemSummary() {
-  const activeCount = STATE.activeTunnels.length;
+  const activeCount = STATE.profiles.filter(p => !p.paused_ssid && STATE.activeTunnels.some(t => 
+    (t.profile_name && t.profile_name === p.name) || 
+    (p.interface && t.interface === p.interface) ||
+    (t.interface && t.interface === (p.interface || ''))
+  )).length;
   const activeEl = document.getElementById('val-active-cnt');
   if (activeEl) activeEl.innerText = activeCount;
   const totalEl = document.getElementById('val-total-cnt');
@@ -387,20 +391,34 @@ function renderDashboard() {
     const isUp = !!tunnel;
     const peer = (tunnel && tunnel.peers && tunnel.peers[0]) || null;
 
-    const isPaused = !isUp && !!prof.paused_ssid;
-    const isFailed = !isUp && !!prof.is_failed;
+    const isPaused = !!prof.paused_ssid;
+    const isFailed = !isUp && !isPaused && !!prof.is_failed;
 
     let badgeHtml = '<span class="m3-badge m3-badge-idle">Отключен</span>';
-    if (isUp) {
+    if (isPaused) {
+      badgeHtml = `<span class="m3-badge" style="background:rgba(255,180,0,0.15);color:#ffb400;border:1px solid rgba(255,180,0,0.3);">Спит (${escapeHtml(prof.paused_ssid)})</span>`;
+    } else if (isUp && peer) {
+      const rxBytes = peer.rx_bytes || 0;
+      const txBytes = peer.tx_bytes || 0;
+      const hsAge = peer.last_handshake_time_sec || 0;
+
+      if (rxBytes > 500) {
+        badgeHtml = '<span class="m3-badge m3-badge-success">Связь подтверждена</span>';
+      } else if (txBytes > 2048 && rxBytes <= 150) {
+        badgeHtml = '<span class="m3-badge" style="background:rgba(255,82,82,0.15);color:#ff5252;border:1px solid rgba(255,82,82,0.3);">Блок данных (DPI)</span>';
+      } else if (hsAge > 0 && rxBytes > 0) {
+        badgeHtml = '<span class="m3-badge" style="background:rgba(0,180,216,0.15);color:#00b4d8;border:1px solid rgba(0,180,216,0.3);">Хендшейк OK (Ожидание)</span>';
+      } else {
+        badgeHtml = '<span class="m3-badge m3-badge-idle">Ожидание хендшейка</span>';
+      }
+    } else if (isUp) {
       badgeHtml = '<span class="m3-badge m3-badge-success">Подключен</span>';
     } else if (isFailed) {
       badgeHtml = '<span class="m3-badge" style="background:rgba(255,82,82,0.15);color:#ff5252;border:1px solid rgba(255,82,82,0.3);">Сбой Watchdog</span>';
-    } else if (isPaused) {
-      badgeHtml = `<span class="m3-badge" style="background:rgba(255,180,0,0.15);color:#ffb400;border:1px solid rgba(255,180,0,0.3);">Спит (${escapeHtml(prof.paused_ssid)})</span>`;
     }
 
     const card = document.createElement('div');
-    card.className = `m3-profile-card ${isUp ? 'active' : (isPaused ? 'paused' : (isFailed ? 'failed' : ''))}`;
+    card.className = `m3-profile-card ${isPaused ? 'paused' : (isUp ? 'active' : (isFailed ? 'failed' : ''))}`;
     card.innerHTML = `
       <div class="m3-profile-header">
         <div class="m3-profile-title-box">
@@ -489,8 +507,8 @@ async function resetProfileFailure(name) {
 
 // Toggle Profile
 async function toggleProfile(name, enable) {
-  showToast(enable ? `Запуск ${name}...` : `Остановка ${name}...`);
-  const action = enable ? 'start' : 'stop';
+  showToast(enable ? `Включение ${name}...` : `Отключение ${name}...`);
+  const action = enable ? 'enable' : 'disable';
   await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller ${action} "${name}"`);
   await refreshAllData();
 }
@@ -1222,7 +1240,7 @@ function parseConfigDirectives(rawText) {
     const modeEl = document.getElementById('prof-mode');
     if (modeEl) modeEl.value = 'include_apps';
     STATE.selectedApps = new Set(included);
-    updateSelectedCount();
+    renderSelectedChips();
     renderFilteredApps();
     const groupApps = document.getElementById('group-apps');
     if (groupApps) groupApps.style.display = 'block';
@@ -1230,7 +1248,7 @@ function parseConfigDirectives(rawText) {
     const modeEl = document.getElementById('prof-mode');
     if (modeEl) modeEl.value = 'exclude_apps';
     STATE.selectedApps = new Set(excluded);
-    updateSelectedCount();
+    renderSelectedChips();
     renderFilteredApps();
     const groupApps = document.getElementById('group-apps');
     if (groupApps) groupApps.style.display = 'block';

@@ -5,7 +5,7 @@
 
 RUN_DIR="/data/adb/amneziawg/run"
 BIN_DIR="${0%/*}"
-export PATH="$BIN_DIR:$PATH"
+export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
 export WG_UAPI_DIR="$RUN_DIR"
 export AMNEZIAWG_UAPI_DIR="$RUN_DIR"
 
@@ -122,40 +122,21 @@ check_tunnel_health() {
     printf '%s' "$rx" > "$RUN_DIR/${p}.rxmark"
     printf '%s' "$tx" > "$RUN_DIR/${p}.txmark"
 
-    # 3. Хендшейк не обновлялся дольше допустимого
-    if [ "$hs" -gt 0 ] 2>/dev/null; then
-      if [ $((now - hs)) -gt $HS_DEAD_AGE ]; then
-        register_failure "$p" "хендшейку $((now - hs)) c" "$now"
-        continue
-      fi
-    else
-      # Первый хендшейк так и не состоялся
-      local pid_file="$RUN_DIR/${ifname}.pid"
-      if [ -f "$pid_file" ]; then
-        local pid_mtime="$(stat -c %Y "$pid_file" 2>/dev/null || echo "$now")"
-        if [ $((now - pid_mtime)) -gt 60 ]; then
-          register_failure "$p" "хендшейк ни разу не прошел" "$now"
-          continue
-        fi
-      fi
-      continue
-    fi
+    # 3. Активная проверка доступности интернета через интерфейс туннеля
+    local probe_ip="1.1.1.1"
+    local dns_target
+    dns_target="$("$BIN_DIR/awg-controller" get-opt-val "$PROFILES_DIR/${p}.json" "custom_dns" "1.1.1.1" 2>/dev/null | awk -F',' '{print $1}' | tr -d ' ')"
+    [ -n "$dns_target" ] && [ "$dns_target" != "127.0.0.1" ] && [ "$dns_target" != "192.168.1.1" ] && probe_ip="$dns_target"
 
-    # 4. Односторонний туннель: исходящий трафик идет, входящего нет.
-    # Именно так выглядит подавление сессии на пути: хендшейк свежий,
-    # awg сообщает "Подключен", но данные в обратную сторону не проходят.
-    if [ -n "$prev_rx" ] && [ -n "$prev_tx" ]; then
-      local d_rx=$((rx - prev_rx))
-      local d_tx=$((tx - prev_tx))
-      if [ $d_tx -ge $TX_PROBE_MIN ] && [ $d_rx -le 0 ]; then
-        register_failure "$p" "TX +${d_tx} B, RX 0 B" "$now"
+    if ! ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then
+      sleep 1
+      if ! ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then
+        register_failure "$p" "нет ответа сети (100% loss)" "$now"
         continue
       fi
     fi
 
-    # Все проверки пройдены: интерфейс поднят, хендшейк свежий, признаков
-    # односторонней передачи нет. Счетчик сбрасывается и на простаивающем
-    # туннеле, иначе неудачи разных инцидентов накапливались бы годами.
+    # Все проверки пройдены: интерфейс поднят, пинг прошел успешно
     mark_healthy "$p"
   done
 }

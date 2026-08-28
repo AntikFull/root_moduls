@@ -13,9 +13,9 @@ PROFILES_DIR="/data/adb/amneziawg/profiles"
 LOG_DIR="/data/adb/amneziawg/logs"
 LOG_FILE="$LOG_DIR/awg-controller.log"
 
-export WG_UAPI_DIR="$TMP_DIR"
-export AMNEZIAWG_UAPI_DIR="$TMP_DIR"
-export PATH="$BIN_DIR:$PATH"
+export WG_UAPI_DIR="$RUN_DIR"
+export AMNEZIAWG_UAPI_DIR="$RUN_DIR"
+export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
 
 mkdir -p "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" "/dev/wireguard" 2>/dev/null
 chmod 755 "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" 2>/dev/null
@@ -101,6 +101,8 @@ get_peer_val() {
       if (idx > 0) {
         name = substr($0, 1, idx - 1)
         val = substr($0, idx + 1)
+        gsub(/\r/, "", name)
+        gsub(/\r/, "", val)
         gsub(/^[ \t]+|[ \t]+$/, "", name)
         gsub(/^[ \t]+|[ \t]+$/, "", val)
         if (tolower(name) == tolower(k)) {
@@ -125,6 +127,8 @@ get_conf_val() {
       if (idx > 0) {
         name = substr($0, 1, idx - 1)
         val = substr($0, idx + 1)
+        gsub(/\r/, "", name)
+        gsub(/\r/, "", val)
         gsub(/^[ \t]+|[ \t]+$/, "", name)
         gsub(/^[ \t]+|[ \t]+$/, "", val)
         if (tolower(name) == tolower(k)) {
@@ -143,11 +147,11 @@ get_opt_val() {
   local def="$3"
   if [ -f "$json_file" ]; then
     local v
-    v="$(grep -E '"'"$key"'"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' \n\t\r')"
+    v="$(sed -n -E 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"?([^",}]+)"?.*/\1/p' "$json_file" 2>/dev/null | head -n 1 | tr -d ' \n\t\r')"
     if [ -z "$v" ] && [ "$key" = "custom_dns" ]; then
-      v="$(grep -E '"dns"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' \n\t\r')"
+      v="$(sed -n -E 's/.*"dns"[[:space:]]*:[[:space:]]*"?([^",}]+)"?.*/\1/p' "$json_file" 2>/dev/null | head -n 1 | tr -d ' \n\t\r')"
     elif [ -z "$v" ] && [ "$key" = "dns" ]; then
-      v="$(grep -E '"custom_dns"[[:space:]]*:' "$json_file" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*//; s/[",]//g' | tr -d ' \n\t\r')"
+      v="$(sed -n -E 's/.*"custom_dns"[[:space:]]*:[[:space:]]*"?([^",}]+)"?.*/\1/p' "$json_file" 2>/dev/null | head -n 1 | tr -d ' \n\t\r')"
     fi
     if [ -n "$v" ]; then
       printf '%s' "$v"
@@ -173,10 +177,14 @@ find_free_slot() {
 
 # Получение текущего Wi-Fi SSID
 get_current_ssid() {
+  if ! ip -4 addr show dev wlan0 2>/dev/null | grep -Fq 'inet '; then
+    printf ''
+    return 0
+  fi
   local s
   s="$(cmd wifi status 2>/dev/null | grep -o 'Wifi is connected to "[^"]*"' | sed 's/Wifi is connected to "//;s/"//' | head -n 1)"
   if [ -z "$s" ]; then
-    s="$(dumpsys wifi 2>/dev/null | grep -o 'SSID: "[^"]*"' | head -n 1 | sed 's/SSID: "//;s/"//')"
+    s="$(dumpsys wifi 2>/dev/null | grep -m 1 'mWifiInfo' | grep -o 'SSID: "[^"]*"' | sed 's/SSID: "//;s/"//')"
   fi
   printf '%s' "$s"
 }
@@ -295,14 +303,14 @@ start_profile() {
 
   # 3. Настройка сетевого интерфейса и адресов
   log_i "[$prof_name] Настройка IP адресов и MTU ($mtu_val)..."
-  sysctl -w net.ipv4.conf.${iface}.rp_filter=0 >/dev/null 2>&1 || true
   ip link set dev "$iface" mtu "$mtu_val" up 2>/dev/null || true
+  ip addr flush dev "$iface" 2>/dev/null || true
 
   if [ -n "$address_val" ]; then
     local OLD_IFS="$IFS"
     IFS=','
     for addr in $address_val; do
-      addr="$(printf '%s' "$addr" | tr -d ' ')"
+      addr="$(printf '%s' "$addr" | tr -d ' \r\t')"
       if [ -n "$addr" ]; then
         if printf '%s' "$addr" | grep -Fq ':'; then
           printf '%s' "$addr" | grep -Fq '/' || addr="${addr}/128"
@@ -432,6 +440,12 @@ apply_profile_rules() {
       log_i "[$prof_name] Маршрутизация UIDs (Include): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
+        while ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
+        while ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
+        while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+        while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
         # 1. Приоритетный маршрут в туннель
         ip rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
         if [ "$has_ipv6" = "1" ]; then
@@ -471,6 +485,10 @@ apply_profile_rules() {
       log_i "[$prof_name] Исключение UIDs (Exclude): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
+        while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+        while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
         ip rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
         if [ "$has_ipv6" = "1" ]; then
           ip -6 rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
@@ -546,11 +564,20 @@ stop_profile() {
   iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || true
   iptables -w 2 -t filter -X "$ch_kill" 2>/dev/null || true
 
-  local uids="$("$BIN_DIR/awg" resolve-profile "$PROFILES_DIR/${prof_name}.json" 2>/dev/null)"
+  local opts_file="$PROFILES_DIR/${prof_name}.json"
+  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
+  local uids=""
+  if [ -f "$opts_file" ]; then
+    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)"
+  fi
   for uid in $uids; do
     [ -z "$uid" ] && continue
-    ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-    ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+    while ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
+    while ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
+    while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+    while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
   done
 
   # 2. Очистка ip rule и ip route
@@ -591,11 +618,20 @@ pause_profile() {
     while ip rule del table "$table_id" 2>/dev/null; do :; done
     while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
   fi
-  local uids="$("$BIN_DIR/awg" resolve-profile "$PROFILES_DIR/${prof_name}.json" 2>/dev/null)"
+  local opts_file="$PROFILES_DIR/${prof_name}.json"
+  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
+  local uids=""
+  if [ -f "$opts_file" ]; then
+    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)"
+  fi
   for uid in $uids; do
     [ -z "$uid" ] && continue
-    ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-    ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+    while ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
+    while ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
+    while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
+    while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
   done
   iptables -w 2 -t mangle -F "AWG_M_${prof_name}" 2>/dev/null || true
   iptables -w 2 -t nat -F "AWG_N_${prof_name}" 2>/dev/null || true
@@ -717,8 +753,14 @@ cleanup_all() {
 
   iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
 
+  while ip rule del table main pref 8990 2>/dev/null; do :; done
+  while ip -6 rule del table main pref 8990 2>/dev/null; do :; done
+  while ip rule del pref 9000 2>/dev/null; do :; done
+  while ip -6 rule del pref 9000 2>/dev/null; do :; done
   while ip rule del table main pref 9001 2>/dev/null; do :; done
   while ip -6 rule del table main pref 9001 2>/dev/null; do :; done
+  while ip rule del pref 9010 2>/dev/null; do :; done
+  while ip -6 rule del pref 9010 2>/dev/null; do :; done
 
   local t=201
   while [ $t -le 232 ]; do
@@ -734,7 +776,7 @@ cleanup_all() {
 
 show_status() {
   local format="$1"
-  WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" status "$format"
+  WG_UAPI_DIR="$RUN_DIR" AMNEZIAWG_UAPI_DIR="$RUN_DIR" "$BIN_DIR/awg" status "$format"
 }
 
 case "$1" in
@@ -743,7 +785,6 @@ case "$1" in
     "$0" reset-failures "${2:-all}" >/dev/null 2>&1
     if [ -z "$2" ] || [ "$2" = "all" ]; then
       # Обработка только канонических .conf файлов
-
       for c in "$PROFILES_DIR"/*.conf; do
         [ -f "$c" ] || continue
         p="$(basename "$c" .conf)"
@@ -755,13 +796,33 @@ case "$1" in
         fi
       done
     else
+      local json="$PROFILES_DIR/${2}.json"
+      if [ -f "$json" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*false/"enabled": true/g' "$json"
+      fi
       start_profile "$2"
     fi
     ;;
-  stop|stop-all)
+  enable)
+    "$0" reset-failures "${2:-all}" >/dev/null 2>&1
+    if [ -n "$2" ] && [ "$2" != "all" ]; then
+      local json="$PROFILES_DIR/${2}.json"
+      if [ -f "$json" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*false/"enabled": true/g' "$json"
+      fi
+      start_profile "$2"
+    else
+      "$0" start all
+    fi
+    ;;
+  stop|disable|stop-all)
     if [ -z "$2" ] || [ "$2" = "all" ] || [ "$1" = "stop-all" ]; then
       cleanup_all
     else
+      local json="$PROFILES_DIR/${2}.json"
+      if [ -f "$json" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*true/"enabled": false/g' "$json"
+      fi
       stop_profile "$2"
     fi
     ;;
@@ -805,6 +866,9 @@ case "$1" in
         printf '%s\n' "$p"
       fi
     done
+    ;;
+  get-opt-val)
+    get_opt_val "$2" "$3" "$4"
     ;;
   log-watchdog)
     shift

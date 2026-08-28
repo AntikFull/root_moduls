@@ -28,13 +28,21 @@ iptables -w 2 -t filter -X AWG_FILTER 2>/dev/null || true
 
 iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
 
+# Очистка правил маршрутизации
+while ip rule del table main pref 8990 2>/dev/null; do :; done
+while ip -6 rule del table main pref 8990 2>/dev/null; do :; done
+while ip rule del table main pref 9001 2>/dev/null; do :; done
+while ip -6 rule del table main pref 9001 2>/dev/null; do :; done
+
 # Очистка таблиц 201..232
 t=201
 while [ $t -le 232 ]; do
+  while ip rule del table "$t" 2>/dev/null; do :; done
+  while ip -6 rule del table "$t" 2>/dev/null; do :; done
   ip route flush table "$t" 2>/dev/null || true
   ip -6 route flush table "$t" 2>/dev/null || true
   t=$((t + 1))
 done
 
-rm -rf /data/adb/amneziawg/run 2>/dev/null || true
+rm -rf /data/adb/amneziawg/run /data/local/tmp/wireguard 2>/dev/null || true
 rm -f /dev/wireguard/awg*.sock 2>/dev/null || true
