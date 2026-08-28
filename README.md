@@ -1,31 +1,31 @@
-# 🚀 Android Root Modules Collection by eCubz
+# Android Root Modules Collection by eCubz
 
 <div align="center">
 
 [![Android](https://img.shields.io/badge/Android-7.0%20--%2016-brightgreen.svg?style=for-the-badge&logo=android)](https://github.com/AntikFull/root_moduls)
 [![Root Environments](https://img.shields.io/badge/Root-Magisk%20%7C%20KernelSU%20%7C%20APatch-orange.svg?style=for-the-badge&logo=rooted)](https://github.com/AntikFull/root_moduls)
-[![Telegram Channel](https://img.shields.io/badge/Telegram-@eCubzPlugins-blue.svg?style=for-the-badge&logo=telegram)](https://t.me/eCubzPlugins)
+[![Telegram Channel](https://img.shields.io/badge/Telegram-@module__ecubz-blue.svg?style=for-the-badge&logo=telegram)](https://t.me/module_ecubz)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 
 **Официальный репозиторий systemless-модулей нового поколения для Magisk, KernelSU, KernelSU Next и APatch.**
 <br>
 *Official repository of next-generation systemless modules for Magisk, KernelSU, KernelSU Next, and APatch.*
 
-[🇷🇺 Русский](#-русский-раздел) • [🇬🇧 English](#-english-section) • [📦 Скачать релизы](#-прямые-ссылки-на-загрузку--direct-downloads) • [💬 Сообщество](#-автор-и-сообщество--author--community) • [💖 Поддержать](#-поддержать-разработчика--support--donations)
+[Русский](#русский-раздел) • [English](#english-section) • [Скачать релизы](#прямые-ссылки-на-загрузку--direct-downloads) • [Сообщество](#автор-и-сообщество--author--community) • [Поддержать](#поддержать-разработчика--support--donations)
 
 </div>
 
 ---
 
-## 🇷🇺 Русский раздел
+## Русский раздел
 
 Коллекция высокопроизводительных, энергоэффективных модулей от **eCubz**, ориентированных на решение реальных задач: системный обход блокировок и замедлений (YouTube, Discord), мультипрофильный AmneziaWG клиент, отключение системной телеметрии и рекламы, бесплатная раздача интернета без доплат, фиксация беспроводной отладки и доступ к зарубежным AI-сервисам без глобального VPN.
 
-### 📦 Каталог модулей
+### Каталог модулей
 
 | Модуль | Актуальная версия | Описание | Поддерживаемые среды |
 | :--- | :--- | :--- | :--- |
-| **[AWG eCubz](./amneziawg-android)** | `v1.1.3` | Высокопроизводительный multi-profile клиент AmneziaWG (AWG 1.0) с раздельной маршрутизацией приложений (Per-App `uidrange` Priority 9000), умной паузой в доверенных Wi-Fi сетях (Smart Pause), поддержкой диапазонов H1-H4, автоимпортом IncludedApplications, LAN Bypass для домашних сетей, сканером QR-кодов и Material 3 WebUI. | Magisk / KernelSU / APatch (Android 9–16) |
+| **[AWG eCubz](./amneziawg-android)** | `v1.1.4` | Клиент AWG (AmneziaWG 1.0 / 2.0 / 3.1 Core) с поддержкой мульти-профилей, раздельной маршрутизации приложений (Per-App Split Tunneling), умной паузы в доверенных Wi-Fi сетях (Smart Pause без разрыва туннеля), параметров обфускации (Jc, S1-S4, H1-H4, I1-I5), watchdog состояния туннеля, fallback-маршрутизации (pref 9001), фото-сканера QR-кодов и Material 3 WebUI. | Magisk / KernelSU / APatch (Android 9–16) |
 | **[zapret2-android](./zapret2-android)** | `v4.2.9` | Системный обход DPI-блокировок (YouTube 4K, Discord, сайты) на базе `nfqws2`/`tpws` + точечный туннель для любых приложений. Работает на уровне ядра: 0% оверхеда по батарее, поддержка обхода на раздаче (Hotspot/Wi-Fi). | Magisk / KernelSU / APatch (Android 7–16) |
 | **[tg-ws-proxy](./tg-ws-proxy)** | `v1.2.0` | Systemless MTProto WS Proxy для ускорения и стабильной работы Telegram без системного VPN. Встроенный WebUI (M3 Expressive), прямой WebSocket к ДЦ Telegram, поддержка Cloudflare Worker/доменов, пресеты батареи и Wi-Fi раздачи. | Magisk / KernelSU / APatch (Android 7–16) |
 | **[analytics_ads_disabler](./analytics_ads_disabler)** | `v7.0.2` | Блокировка рекламы и аналитики внутри процессов приложений через Zygisk: штатное выключение SDK, сетевой перехват по стеку вызовов, схлопывание баннеров, закрытие полноэкранной рекламы. Без списков доменов в основе и без сканирования APK. | **Zygisk обязателен**: Magisk / KernelSU + ZygiskNext / APatch (Android 8–16) |
@@ -36,21 +36,21 @@
 
 ---
 
-### 🌟 Ключевые преимущества
-- ⚡ **Нулевое влияние на батарею:** Модули работают через системные фильтры ядра (`iptables`, `nftables`, Android Package Manager), не создавая фоновых виртуальных сетевых интерфейсов VPN.
-- 🛡 **100% Systemless:** Ни один системный раздел (`/system`, `/vendor`, `/product`) не перемонтируется в режим RW. Безопасно для Integrity и SafetyNet.
-- 🔄 **Автообновления:** Все модули поддерживают проверку и скачивание обновлений прямо через Magisk App, KernelSU Manager и APatch WebUI.
+### Ключевые преимущества
+- **Нулевое влияние на батарею:** Модули работают через системные фильтры ядра (`iptables`, `nftables`, Android Package Manager), не создавая фоновых виртуальных сетевых интерфейсов VPN.
+- **100% Systemless:** Ни один системный раздел (`/system`, `/vendor`, `/product`) не перемонтируется в режим RW. Безопасно для Integrity и SafetyNet.
+- **Автообновления:** Все модули поддерживают проверку и скачивание обновлений прямо через Magisk App, KernelSU Manager и APatch WebUI.
 
 ---
 
-## 🇬🇧 English Section
+## English Section
 
 High-performance, battery-friendly root modules built by **eCubz** designed for everyday Android enhancement: system-level DPI bypass (YouTube, Discord), multi-profile AmneziaWG tunneling, telemetry/ad disabling, mobile hotspot carrier bypass, and seamless AI routing.
 
-### 📦 Modules Overview
+### Modules Overview
 
-1. **[AWG eCubz](./amneziawg-android) (v1.1.3)**
-   - Systemless Multi-Profile AmneziaWG (AWG 1.0) client with per-app split routing (`uidrange` kernel rules), Smart Pause in trusted Wi-Fi networks, H1-H4 ranges support, auto-import of IncludedApplications, LAN Bypass for home subnets, QR code import, and modern Material 3 WebUI.
+1. **[AWG eCubz](./amneziawg-android) (v1.1.4)**
+   - Systemless Multi-Profile AmneziaWG (AWG 1.0 / 2.0 / 3.1 Core) client with per-app split routing (`uidrange` kernel rules), Smart Pause in trusted Wi-Fi networks, full obfuscation support (Jc, S1-S4, H1-H4, I1-I5), watchdog health check, pref 9001 fallback routing, QR code camera/file import, and modern Material 3 WebUI.
 
 2. **[zapret2-android](./zapret2-android) (v4.2.9)**
    - System-level DPI bypass powered by `nfqws2`/`tpws` and lightweight tunnel for any selected applications. Restores YouTube 4K, Discord voice/media, and blocked sites directly in netfilter.
@@ -75,7 +75,7 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ---
 
-## 📦 Прямые ссылки на загрузку / Direct Downloads
+## Прямые ссылки на загрузку / Direct Downloads
 
 | Модуль / Module | Актуальная версия | Ссылка на ZIP / ZIP Direct Link | Размер / Size |
 | :--- | :--- | :--- | :--- |
@@ -88,11 +88,11 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 | **adb-wifi-fixed-port** | `v1.1` | [adb_wifi_fixed_port_v1.1_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/adb_wifi_fixed_port_v1.1_110.zip) | ~2.3 KB |
 | **alice-bt-launcher** | `v1.1.0` | [alice-bt-launcher_v1.1.0_110.zip](https://raw.githubusercontent.com/AntikFull/root_moduls/main/releases/alice-bt-launcher_v1.1.0_110.zip) | ~6.5 KB |
 
-> 📂 Все предыдущие версии доступны в каталоге [`releases/Archive/`](https://github.com/AntikFull/root_moduls/tree/main/releases/Archive).
+> Все предыдущие версии доступны в каталоге [`releases/Archive/`](https://github.com/AntikFull/root_moduls/tree/main/releases/Archive).
 
 ---
 
-## 🛠 Установка / Installation
+## Установка / Installation
 
 1. Скачайте нужный модуль из таблицы выше.
 2. Откройте **Magisk App**, **KernelSU Manager** или **APatch Manager**.
@@ -102,21 +102,22 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ---
 
-## 🔍 Теги и поисковая оптимизация / SEO Keywords
+## Теги и поисковая оптимизация / SEO Keywords
 
 `magisk` • `magisk-module` • `kernelsu` • `kernelsu-module` • `apatch` • `apatch-module` • `amneziawg` • `amneziawg-android` • `wireguard` • `tg-ws-proxy` • `telegram-proxy` • `mtproto-proxy` • `zapret` • `zapret2` • `nfqws` • `tpws` • `dpi-bypass` • `youtube-unblock` • `discord-unblock` • `adblock` • `telemetry-blocker` • `ttl-fix` • `hop-limit` • `tethering-bypass` • `adb-wifi` • `ai-unblock` • `chatgpt` • `gemini-android` • `claude` • `systemless` • `android-root` • `android-16`
 
 ---
 
-## 💬 Автор и Сообщество / Author & Community
+## Автор и Сообщество / Author & Community
 
 - **Автор / Author:** eCubz ([@eCubz](https://t.me/eCubz))
-- **Официальный Telegram-канал:** [t.me/eCubzPlugins](https://t.me/eCubzPlugins)
+- **Официальный Telegram-канал / группа модулей:** [t.me/module_ecubz](https://t.me/module_ecubz)
+- **Telegram-канал плагинов:** [t.me/eCubzPlugins](https://t.me/eCubzPlugins)
 - **Багрепорты и предложения:** [GitHub Issues](https://github.com/AntikFull/root_moduls/issues)
 
 ---
 
-## 💖 Поддержать разработчика / Support & Donations
+## Поддержать разработчика / Support & Donations
 
 Ваша поддержка мотивирует развивать проекты, поддерживать базы стратегий и оперативно выпускать регулярные обновления!  
 *Your support helps maintain the projects and release regular updates!*
@@ -132,6 +133,6 @@ High-performance, battery-friendly root modules built by **eCubz** designed for 
 
 ---
 
-## 📄 Лицензия / License
+## Лицензия / License
 
 Распространяется под лицензией MIT. При повторной публикации или форке сохранение авторства **eCubz** и ссылки на канал **https://t.me/module_ecubz** обязательно.
