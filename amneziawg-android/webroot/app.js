@@ -14,9 +14,7 @@ const STATE = {
 let asyncExecSeq = 0;
 
 function getKsuBridge() {
-  if (typeof ksu !== 'undefined') return ksu;
-  if (typeof window.ksu !== 'undefined') return window.ksu;
-  return null;
+  return window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk || (typeof ksu !== 'undefined' ? ksu : null);
 }
 
 // Android Root Shell Wrapper (Compatible with KernelSU / APatch / Magisk)
@@ -195,7 +193,7 @@ function on(id, evt, handler) {
   if (el) el.addEventListener(evt, handler);
 }
 
-// Async Initialization Loop (Waits for KernelSU Bridge)
+// Async Initialization Loop (Waits for KernelSU / APatch / Magisk Bridge)
 async function initWebUI() {
   let attempts = 0;
   while (!getKsuBridge() && attempts < 25) {
@@ -204,8 +202,27 @@ async function initWebUI() {
   }
 
   initEventHandlers();
-  await refreshAllData();
-  await loadInstalledApps();
+
+  const bridge = getKsuBridge();
+  if (!bridge || typeof bridge.exec !== 'function') {
+    console.warn('[Root Bridge not detected after waiting]');
+    const dash = document.getElementById('dashboard-cards');
+    if (dash) {
+      dash.innerHTML = '<div class="m3-card"><div class="m3-card-body" style="color:var(--md-sys-color-error);"><p><strong>[warning] Мост root-менеджера не обнаружен</strong></p><p style="font-size:12px;margin-top:6px;color:var(--md-sys-color-on-surface-variant);">WebUI ожидает мост KernelSU / APatch / Magisk (ksu/KernelSU/mmrl/magisk). Убедитесь, что модуль ksuwebui активен и приложению предоставлен root-доступ.</p></div></div>';
+    }
+  }
+
+  try {
+    await refreshAllData();
+  } catch (err) {
+    console.error('refreshAllData error:', err);
+  }
+
+  try {
+    await loadInstalledApps();
+  } catch (err) {
+    console.error('loadInstalledApps error:', err);
+  }
 
   // Periodic Auto-refresh every 4 seconds for live handshakes/traffic
   setInterval(async () => {
@@ -325,7 +342,7 @@ async function loadProfiles() {
     const match = raw.match(/\{[\s\S]*"profiles"[\s\S]*\}/);
     if (match) raw = match[0];
     const data = JSON.parse(raw);
-    STATE.profiles = data.profiles || [];
+    STATE.profiles = Array.isArray(data.profiles) ? data.profiles : [];
   } catch (e) {
     // If parse error, keep existing profiles
   }
@@ -353,14 +370,17 @@ async function loadStatus() {
     let raw = (res.stdout || '').trim();
     const match = raw.match(/\[[\s\S]*\]/);
     if (match) raw = match[0];
-    STATE.activeTunnels = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    STATE.activeTunnels = Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     STATE.activeTunnels = [];
   }
 }
 
 function updateSystemSummary() {
-  const activeCount = STATE.profiles.filter(p => !p.paused_ssid && STATE.activeTunnels.some(t => 
+  const tunnels = Array.isArray(STATE.activeTunnels) ? STATE.activeTunnels : [];
+  const profiles = Array.isArray(STATE.profiles) ? STATE.profiles : [];
+  const activeCount = profiles.filter(p => !p.paused_ssid && tunnels.some(t => 
     (t.profile_name && t.profile_name === p.name) || 
     (p.interface && t.interface === p.interface) ||
     (t.interface && t.interface === (p.interface || ''))
@@ -368,7 +388,7 @@ function updateSystemSummary() {
   const activeEl = document.getElementById('val-active-cnt');
   if (activeEl) activeEl.innerText = activeCount;
   const totalEl = document.getElementById('val-total-cnt');
-  if (totalEl) totalEl.innerText = STATE.profiles.length;
+  if (totalEl) totalEl.innerText = profiles.length;
 }
 
 // Render Dashboard Cards
@@ -377,13 +397,16 @@ function renderDashboard() {
   if (!container) return;
   container.innerHTML = '';
 
-  if (STATE.profiles.length === 0) {
+  const tunnels = Array.isArray(STATE.activeTunnels) ? STATE.activeTunnels : [];
+  const profiles = Array.isArray(STATE.profiles) ? STATE.profiles : [];
+
+  if (profiles.length === 0) {
     container.innerHTML = '<div class="m3-card"><div class="m3-card-body"><p style="color:var(--md-sys-color-on-surface-variant);font-size:13px;">Профили загружаются или еще не созданы. Перейдите во вкладку "Профили" для добавления.</p></div></div>';
     return;
   }
 
-  STATE.profiles.forEach(prof => {
-    const tunnel = STATE.activeTunnels.find(t => 
+  profiles.forEach(prof => {
+    const tunnel = tunnels.find(t => 
       (t.profile_name && t.profile_name === prof.name) || 
       (prof.interface && t.interface === prof.interface) ||
       (t.interface && t.interface === (prof.interface || ''))
@@ -1051,15 +1074,20 @@ function decodeQrFromSource(src, onDone) {
 // ==========================================
 let qrMediaStream = null;
 let qrScanAnimFrame = null;
-let barcodeDetectorInstance = null;
+let barcodeDetectorInstance = undefined;
 
-if ('BarcodeDetector' in window) {
-  try {
-    barcodeDetectorInstance = new BarcodeDetector({ formats: ['qr_code'] });
-    qrLog('BarcodeDetector API доступен');
-  } catch (e) {
+function getBarcodeDetector() {
+  if (barcodeDetectorInstance !== undefined) return barcodeDetectorInstance;
+  if ('BarcodeDetector' in window) {
+    try {
+      barcodeDetectorInstance = new BarcodeDetector({ formats: ['qr_code'] });
+    } catch (e) {
+      barcodeDetectorInstance = null;
+    }
+  } else {
     barcodeDetectorInstance = null;
   }
+  return barcodeDetectorInstance;
 }
 
 // Открытие сканера камеры
@@ -1134,8 +1162,9 @@ function startLiveScanningLoop() {
       let codeText = null;
 
       // 1. Нативный аппаратный BarcodeDetector
-      if (barcodeDetectorInstance) {
-        const barcodes = await barcodeDetectorInstance.detect(video);
+      const detector = getBarcodeDetector();
+      if (detector) {
+        const barcodes = await detector.detect(video);
         if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
           codeText = barcodes[0].rawValue;
         }
@@ -1180,9 +1209,10 @@ async function handleQrImageFile(e) {
     const img = new Image();
     img.onload = async () => {
       let text = null;
-      if (barcodeDetectorInstance) {
+      const detector = getBarcodeDetector();
+      if (detector) {
         try {
-          const barcodes = await barcodeDetectorInstance.detect(img);
+          const barcodes = await detector.detect(img);
           if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
             text = barcodes[0].rawValue;
           }
