@@ -26,7 +26,7 @@ awg_daemon_bin_dir() {
 
 awg_stop_daemon() {
   # Селектор по полному пути, чтобы не задеть посторонние процессы
-  pkill -f "/bin/$1" 2>/dev/null || true
+  pkill -f "/bin/$1" 2>/dev/null || true # глушение-обосновано: отсутствие живого процесса это штатное состояние перед стартом
   # pkill асинхронен: даем процессу завершиться, чтобы не поднять дубль
   local w=0
   while [ $w -lt 10 ] && pgrep -f "/bin/$1" >/dev/null 2>&1; do
@@ -40,7 +40,7 @@ awg_start_daemon() {
   local bin_dir
   bin_dir="$(awg_daemon_bin_dir)"
   [ -x "$bin_dir/$name" ] || return 1
-  mkdir -p "$AWG_LOG_DIR" 2>/dev/null
+  mkdir -p "$AWG_LOG_DIR" 2>/dev/null # глушение-обосновано: каталог создается в post-fs-data и обычно уже существует
   local log_file="$AWG_LOG_DIR/${name#awg-}.log"
 
   # Двойной фон обязателен: внутри фоновой подоболочки процесс гарантированно

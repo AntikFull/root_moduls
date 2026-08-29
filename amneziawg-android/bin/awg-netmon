@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# awg-netmon — Монитор сети и watchdog состояния туннелей (v1.1.2)
+# awg-netmon — Монитор сети и watchdog состояния туннелей
 # Отслеживает смену сети, деградацию туннеля и восстанавливает сессию
 # с ограничением числа попыток и экспоненциальной задержкой.
 
@@ -14,37 +14,36 @@ export AMNEZIAWG_UAPI_DIR="$RUN_DIR"
 MAX_FAILS=10
 # Возраст хендшейка, после которого сессия считается мертвой
 HS_DEAD_AGE=180
-# Минимальный исходящий трафик за интервал, при котором отсутствие входящего
-# трактуется как односторонний туннель, а не как простой
-TX_PROBE_MIN=1024
 # Верхняя граница экспоненциальной задержки между попытками
 BACKOFF_MAX=600
+# Шаг основного цикла и период полной проверки здоровья туннелей
+TICK_SECONDS=3
+HEALTH_EVERY_TICKS=12
 
 log_wd() {
-  "$BIN_DIR/awg-controller" log-watchdog "$*" >/dev/null 2>&1
+  "$BIN_DIR/awg-controller" log-watchdog "$*" >/dev/null 2>&1 || true # глушение-обосновано: журналирование не должно останавливать watchdog
 }
 
-get_default_phys_iface() {
-  local dev
-  dev="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1)"
-  if [ -z "$dev" ]; then
-    dev="$(ip route get 8.8.8.8 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1)"
-  fi
-  printf '%s' "$dev"
+# Идентификатор физического маршрута по умолчанию.
+# Читается из /proc/net/route без запуска процессов: цикл выполняется
+# каждые несколько секунд круглосуточно, и запуск ip здесь давал заметный
+# постоянный расход батареи.
+get_default_route_key() {
+  awk 'NR>1 && $2=="00000000" {print $1"|"$3; exit}' /proc/net/route 2>/dev/null # глушение-обосновано: отсутствие маршрута по умолчанию это штатное состояние без сети
 }
 
 get_current_ssid() {
-  "$BIN_DIR/awg-controller" get-current-ssid 2>/dev/null
+  "$BIN_DIR/awg-controller" get-current-ssid 2>/dev/null # глушение-обосновано: без активного Wi-Fi команда штатно возвращает пустую строку
 }
 
 read_state() {
-  cat "$RUN_DIR/$1" 2>/dev/null
+  cat "$RUN_DIR/$1" 2>/dev/null # глушение-обосновано: отсутствие файла состояния означает "профиль не запущен"
 }
 
 # Сброс счетчиков после подтвержденного восстановления обмена
 mark_healthy() {
   local p="$1"
-  rm -f "$RUN_DIR/${p}.fails" "$RUN_DIR/${p}.nextchk" 2>/dev/null || true
+  rm -f "$RUN_DIR/${p}.fails" "$RUN_DIR/${p}.nextchk" 2>/dev/null # глушение-обосновано: счетчиков может не быть, если сбоев не было
 }
 
 # Регистрация неудачи: перезапуск с backoff либо отключение профиля
@@ -53,22 +52,26 @@ register_failure() {
   local reason="$2"
   local now="$3"
 
-  local nextchk="$(read_state "${p}.nextchk")"
-  if [ -n "$nextchk" ] && [ "$now" -lt "$nextchk" ] 2>/dev/null; then
+  local nextchk
+  nextchk="$(read_state "${p}.nextchk")"
+  if [ -n "$nextchk" ] && [ "$now" -lt "$nextchk" ] 2>/dev/null; then # глушение-обосновано: нечисловое содержимое файла трактуется как отсутствие отсрочки
     return 0
   fi
 
-  local fails="$(read_state "${p}.fails")"
+  local fails
+  fails="$(read_state "${p}.fails")"
   [ -n "$fails" ] || fails=0
   fails=$((fails + 1))
   printf '%s' "$fails" > "$RUN_DIR/${p}.fails"
 
   if [ $fails -gt $MAX_FAILS ]; then
-    log_wd "[$p] Туннель не восстановлен за $MAX_FAILS попыток ($reason). Профиль остановлен, приложения переведены на прямой канал."
-    "$BIN_DIR/awg-controller" stop "$p" >/dev/null 2>&1
+    # Остановка через команду fail, а не stop: при включенном KillSwitch
+    # блокировка обязана остаться в силе, потому что туннеля больше нет.
+    log_wd "[$p] Туннель не восстановлен за $MAX_FAILS попыток ($reason). Профиль остановлен."
+    "$BIN_DIR/awg-controller" fail "$p" >/dev/null 2>&1 || \
+      log_wd "[$p] Команда fail завершилась с ошибкой."
     : > "$RUN_DIR/${p}.failed"
-    rm -f "$RUN_DIR/${p}.fails" "$RUN_DIR/${p}.nextchk" \
-          "$RUN_DIR/${p}.rxmark" "$RUN_DIR/${p}.txmark" 2>/dev/null || true
+    rm -f "$RUN_DIR/${p}.fails" "$RUN_DIR/${p}.nextchk" 2>/dev/null # глушение-обосновано: счетчики уже могли быть сняты параллельным сбросом
     return 0
   fi
 
@@ -83,20 +86,26 @@ register_failure() {
   printf '%s' "$((now + backoff))" > "$RUN_DIR/${p}.nextchk"
 
   log_wd "[$p] Туннель не отвечает ($reason). Попытка восстановления $fails из $MAX_FAILS, следующая проверка через $backoff c."
-  rm -f "$RUN_DIR/${p}.rxmark" "$RUN_DIR/${p}.txmark" 2>/dev/null || true
-  "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1
+  "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1 || \
+    log_wd "[$p] Перезапуск профиля завершился с ошибкой."
 }
 
 check_tunnel_health() {
-  local now="$(date +%s)"
+  local now
+  now="$(date +%s)"
   # Перебор идет по списку включенных профилей, а не по файлам *.iface:
   # профиль, который не смог подняться, не имеет .iface и иначе навсегда
   # выпал бы из наблюдения вместо того, чтобы быть восстановленным.
-  for p in $("$BIN_DIR/awg-controller" list-enabled 2>/dev/null); do
+  local p ifname dump hs probe_ip dns_target
+  for p in $("$BIN_DIR/awg-controller" list-enabled 2>/dev/null); do # глушение-обосновано: пустой список профилей это штатное состояние
     [ -n "$p" ] || continue
     [ -f "$RUN_DIR/${p}.paused" ] && continue
     [ -f "$RUN_DIR/${p}.failed" ] && continue
-    local ifname="$(cat "$RUN_DIR/${p}.iface" 2>/dev/null)"
+    # Участник группы со снятым маршрутом обслуживается логикой групп:
+    # его трафик уже переведен на резерв, а перезапуск здесь сбросил бы
+    # отсчет гистерезиса возврата.
+    [ -f "$RUN_DIR/${p}.routedown" ] && continue
+    ifname="$(read_state "${p}.iface")"
 
     # 1. Профиль не запущен: нет записи об интерфейсе
     if [ -z "$ifname" ]; then
@@ -105,85 +114,287 @@ check_tunnel_health() {
     fi
 
     # 2. Интерфейс исчез из ядра
-    if ! ip link show "$ifname" >/dev/null 2>&1; then
+    if ! ip link show "$ifname" >/dev/null 2>&1; then # глушение-обосновано: отсутствие интерфейса и есть проверяемый признак отказа
       register_failure "$p" "интерфейс $ifname отсутствует" "$now"
       continue
     fi
 
-    local dump="$("$BIN_DIR/awg" show "$ifname" dump 2>/dev/null)"
+    dump="$("$BIN_DIR/awg" show "$ifname" dump 2>/dev/null)" # глушение-обосновано: молчание UAPI и есть проверяемый признак отказа
     if [ -z "$dump" ]; then
       register_failure "$p" "нет ответа UAPI" "$now"
       continue
     fi
 
-    local rx="$(printf '%s\n' "$dump" | sed -n 's/^rx_bytes=//p' | sort -n | tail -n 1)"
-    local tx="$(printf '%s\n' "$dump" | sed -n 's/^tx_bytes=//p' | sort -n | tail -n 1)"
-    local hs="$(printf '%s\n' "$dump" | sed -n 's/^last_handshake_time_sec=//p' | sort -n | tail -n 1)"
-    [ -n "$rx" ] || rx=0
-    [ -n "$tx" ] || tx=0
+    # Разделение зон ответственности с логикой групп.
+    # Структурные отказы выше (профиль не поднят, интерфейс исчез, UAPI молчит)
+    # чинятся перезапуском, и это остается за watchdog. А вот живость канала у
+    # участника группы проверяет только логика групп: заблокированный эндпоинт
+    # перезапуском не чинится, зато перезапуск поднимает интерфейс заново и
+    # отменяет уже выполненное переключение на резерв. Без этого разделения два
+    # механизма гонятся, и результат зависит от того, чей такт наступил раньше.
+    if [ -f "$RUN_DIR/${p}.group" ]; then
+      mark_healthy "$p"
+      continue
+    fi
+
+    # 3. Возраст хендшейка. Свежий хендшейк - обязательное условие живой
+    # сессии: без него дальнейшая проверка пингом бессмысленна.
+    hs="$(printf '%s\n' "$dump" | sed -n 's/^last_handshake_time_sec=//p' | sort -n | tail -n 1)"
     [ -n "$hs" ] || hs=0
+    if [ "$hs" -gt 0 ] 2>/dev/null; then # глушение-обосновано: нечисловое значение трактуется как отсутствие хендшейка
+      if [ $((now - hs)) -gt $HS_DEAD_AGE ]; then
+        register_failure "$p" "хендшейк старше $HS_DEAD_AGE c" "$now"
+        continue
+      fi
+    fi
 
-    local prev_rx="$(read_state "${p}.rxmark")"
-    local prev_tx="$(read_state "${p}.txmark")"
-    printf '%s' "$rx" > "$RUN_DIR/${p}.rxmark"
-    printf '%s' "$tx" > "$RUN_DIR/${p}.txmark"
+    # 4. Активная проверка доступности сети через интерфейс туннеля
+    probe_ip="1.1.1.1"
+    dns_target="$("$BIN_DIR/awg-controller" get-opt-val "$PROFILES_DIR/${p}.json" "custom_dns" "1.1.1.1" 2>/dev/null | awk -F',' '{print $1}' | tr -d ' ')" # глушение-обосновано: отсутствие файла профиля дает пустую строку, случай обработан ниже
+    if [ -n "$dns_target" ] && [ "$dns_target" != "127.0.0.1" ] && [ "$dns_target" != "192.168.1.1" ]; then
+      probe_ip="$dns_target"
+    fi
 
-    # 3. Активная проверка доступности интернета через интерфейс туннеля
-    local probe_ip="1.1.1.1"
-    local dns_target
-    dns_target="$("$BIN_DIR/awg-controller" get-opt-val "$PROFILES_DIR/${p}.json" "custom_dns" "1.1.1.1" 2>/dev/null | awk -F',' '{print $1}' | tr -d ' ')"
-    [ -n "$dns_target" ] && [ "$dns_target" != "127.0.0.1" ] && [ "$dns_target" != "192.168.1.1" ] && probe_ip="$dns_target"
-
-    if ! ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then
+    if ! ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then # глушение-обосновано: неуспех пинга и есть проверяемый признак отказа
       sleep 1
-      if ! ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then
+      if ! ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then # глушение-обосновано: см. выше, вторая попытка отсеивает единичную потерю
         register_failure "$p" "нет ответа сети (100% loss)" "$now"
         continue
       fi
     fi
 
-    # Все проверки пройдены: интерфейс поднят, пинг прошел успешно
+    # Все проверки пройдены: интерфейс поднят, хендшейк свежий, пинг прошел
     mark_healthy "$p"
+  done
+}
+
+# --- Группы резервирования -------------------------------------------------
+#
+# Задача отличается от задачи watchdog. Watchdog чинит сломанный туннель
+# перезапуском. Здесь туннель не сломан: он поднят, хендшейк может быть
+# свежим, а трафик через него не проходит, потому что эндпоинт режет DPI.
+# Такой туннель перезапускать бесполезно, его надо обойти.
+#
+# Механизм обхода - снятие маршрута по умолчанию у нездорового участника.
+# Правила участников стоят на разных приоритетах по рангу, поэтому ядро
+# само переходит к следующему, как только таблица опустела.
+
+# Проб подряд, после которых участник признается нездоровым.
+# Время реакции: обход группы идет раз в
+# TICK_SECONDS * GRP_ACTIVE_EVERY_TICKS = 12 секунд, нужны две неудачные
+# пробы подряд, каждая до 4 секунд на два таймаута ping, плюс дамп UAPI и
+# запуск awg-controller route-down. Расчетная нижняя граница 12 секунд.
+# Замерено на устройстве (PJA110, Android 16): 34 и 36 секунд в двух замерах
+# от блокировки эндпоинта до снятия маршрута.
+GRP_FAIL_STREAK=2
+# Успешных проб подряд, после которых участник считается восстановившимся.
+GRP_OK_STREAK=3
+# Неудачных проб подряд у уже отключенного участника, после которых туннель
+# перезапускается. Нужно потому, что watchdog живость участников группы не
+# проверяет: без этого участник, которому для восстановления требуется именно
+# перезапуск, остался бы отключенным навсегда.
+GRP_RESTART_STREAK=10
+# Период проверки активного участника и резервных.
+# Резервные опрашиваются реже: их состояние нужно знать заранее, но не
+# ежесекундно, и лишние пробы это расход батареи.
+GRP_ACTIVE_EVERY_TICKS=4
+GRP_STANDBY_EVERY_TICKS=20
+
+# Проба живости туннеля.
+# Возвращает 0, если через интерфейс проходит трафик.
+#
+# Порядок сигналов - от быстрого к медленному:
+#  1. ICMP через интерфейс: ловит блокировку эндпоинта за пару секунд;
+#  2. рост rx при растущем tx: односторонняя блокировка, когда пакеты
+#     уходят и не возвращаются, при формально свежем хендшейке;
+#  3. возраст хендшейка: самый надежный, но самый медленный признак.
+probe_member() {
+  local p="$1"
+  local ifname
+  ifname="$(read_state "${p}.iface")"
+  [ -n "$ifname" ] || return 1
+  ip link show "$ifname" >/dev/null 2>&1 || return 1 # глушение-обосновано: отсутствие интерфейса и есть проверяемый признак
+
+  local probe_ip
+  probe_ip="$(read_state "${p}.probeip")"
+  [ -n "$probe_ip" ] || probe_ip="1.1.1.1"
+
+  if ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then # глушение-обосновано: неуспех пробы и есть проверяемый признак отказа
+    return 0
+  fi
+
+  # Одиночная потеря пакета не является блокировкой: вторая проба отсеивает ее.
+  if ping -c 1 -W 2 -I "$ifname" "$probe_ip" >/dev/null 2>&1; then # глушение-обосновано: см. выше
+    return 0
+  fi
+
+  # Пинг мог быть заблокирован отдельно от остального трафика. Прежде чем
+  # признать участника мертвым, проверяется встречный поток: если rx растет,
+  # туннель живой, а недоступен именно ICMP.
+  local dump rx prev_rx
+  dump="$("$BIN_DIR/awg" show "$ifname" dump 2>/dev/null)" # глушение-обосновано: молчание UAPI трактуется как отказ ниже
+  [ -n "$dump" ] || return 1
+  rx="$(printf '%s\n' "$dump" | sed -n 's/^rx_bytes=//p' | sort -n | tail -n 1)"
+  [ -n "$rx" ] || rx=0
+  prev_rx="$(read_state "${p}.grprx")"
+  printf '%s' "$rx" > "$RUN_DIR/${p}.grprx"
+  if [ -n "$prev_rx" ] && [ "$rx" -gt "$prev_rx" ] 2>/dev/null; then # глушение-обосновано: нечисловое значение трактуется как отсутствие роста
+    return 0
+  fi
+  return 1
+}
+
+# Обслуживание одной группы: опрос участников и управление маршрутами.
+handle_group() {
+  local grp="$1"
+  local now="$2"
+  local members active_found=0
+  members="$("$BIN_DIR/awg-controller" group-members "$grp" 2>/dev/null)" # глушение-обосновано: группа могла быть удалена из конфигурации между тактами
+  [ -n "$members" ] || return 0
+
+  local p is_down streak ok_streak healthy_since failback
+  for p in $members; do
+    [ -f "$RUN_DIR/${p}.iface" ] || continue
+    is_down=0
+    [ -f "$RUN_DIR/${p}.routedown" ] && is_down=1
+
+    # Активный участник - первый сверху, у которого маршрут не снят.
+    # Он опрашивается часто, остальные редко.
+    local is_active=0
+    if [ $is_down -eq 0 ] && [ $active_found -eq 0 ]; then
+      is_active=1
+      active_found=1
+    fi
+    # Активный участник проверяется на каждом обходе, резервные - реже:
+    # их состояние нужно знать заранее, но лишние пробы это расход батареи.
+    # GRP_STANDBY_EVERY_TICKS кратен GRP_ACTIVE_EVERY_TICKS, поэтому такт
+    # резервной проверки всегда попадает на обход.
+    if [ $is_active -eq 0 ]; then
+      [ $((counter % GRP_STANDBY_EVERY_TICKS)) -eq 0 ] || continue
+    fi
+
+    if probe_member "$p"; then
+      streak=0
+      ok_streak="$(read_state "${p}.grpok")"
+      [ -n "$ok_streak" ] || ok_streak=0
+      ok_streak=$((ok_streak + 1))
+      printf '%s' "$ok_streak" > "$RUN_DIR/${p}.grpok"
+      printf '%s' "0" > "$RUN_DIR/${p}.grpfail"
+
+      # Отсчет непрерывного здоровья начинается с ПЕРВОЙ успешной пробы,
+      # а не после накопления серии: иначе заявленное время возврата
+      # молча увеличивалось бы на длительность серии проб.
+      healthy_since="$(read_state "${p}.grpsince")"
+      if [ -z "$healthy_since" ]; then
+        printf '%s' "$now" > "$RUN_DIR/${p}.grpsince"
+        healthy_since="$now"
+      fi
+
+      if [ $is_down -eq 1 ] && [ "$ok_streak" -ge "$GRP_OK_STREAK" ]; then
+        # Возврат под гистерезисом: переключение рвет все установленные
+        # соединения приложения, поэтому мигающий туннель не должен
+        # забирать трафик обратно при первом же успешном пакете.
+        failback="$(read_state "${p}.grpfailback")"
+        [ -n "$failback" ] || failback=600
+        if [ "$failback" -gt 0 ] 2>/dev/null && [ $((now - healthy_since)) -lt "$failback" ]; then # глушение-обосновано: нечисловое значение трактуется как отключенный возврат
+          continue
+        fi
+        if [ "$failback" -le 0 ] 2>/dev/null; then # глушение-обосновано: см. выше
+          continue
+        fi
+        "$BIN_DIR/awg-controller" route-up "$p" >/dev/null 2>&1 || \
+          log_wd "[$p] Возврат маршрута не выполнен."
+        rm -f "$RUN_DIR/${p}.grpsince" 2>/dev/null # глушение-обосновано: отсчет начинается заново при следующем отказе
+      fi
+    else
+      ok_streak=0
+      printf '%s' "0" > "$RUN_DIR/${p}.grpok"
+      rm -f "$RUN_DIR/${p}.grpsince" 2>/dev/null # глушение-обосновано: непрерывность здоровья прервана
+      streak="$(read_state "${p}.grpfail")"
+      [ -n "$streak" ] || streak=0
+      streak=$((streak + 1))
+      printf '%s' "$streak" > "$RUN_DIR/${p}.grpfail"
+
+      if [ $is_down -eq 0 ] && [ "$streak" -ge "$GRP_FAIL_STREAK" ]; then
+        log_wd "[$p] Туннель не пропускает трафик ($streak проб подряд). Снятие маршрута, переход к резерву."
+        "$BIN_DIR/awg-controller" route-down "$p" >/dev/null 2>&1 || \
+          log_wd "[$p] Снятие маршрута не выполнено."
+        active_found=0
+      elif [ $is_down -eq 1 ] && [ "$streak" -ge "$GRP_RESTART_STREAK" ]; then
+        # Участник уже выведен из обслуживания и долго не восстанавливается.
+        # Перезапуск безопасен: трафик группы идет через резерв, а снятие
+        # маршрута переживает перезапуск и применяется заново.
+        log_wd "[$p] Не восстанавливается за $streak проб. Перезапуск туннеля."
+        "$BIN_DIR/awg-controller" restart "$p" >/dev/null 2>&1 || \
+          log_wd "[$p] Перезапуск участника группы завершился с ошибкой."
+        printf '%s' "0" > "$RUN_DIR/${p}.grpfail"
+      fi
+    fi
+  done
+}
+
+# Обход всех групп резервирования.
+check_groups() {
+  local now grp
+  now="$(date +%s)"
+  for grp in $("$BIN_DIR/awg-controller" group-members 2>/dev/null); do # глушение-обосновано: без файла групп команда штатно возвращает пустой список
+    [ -n "$grp" ] || continue
+    handle_group "$grp" "$now"
   done
 }
 
 # Немедленная синхронизация состояния и режима сна при старте монитора
 if [ -x "$BIN_DIR/awg-controller" ]; then
-  "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
+  "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1 || true # глушение-обосновано: неудача первой синхронизации не должна мешать запуску цикла наблюдения
 fi
 
-last_iface="$(get_default_phys_iface)"
+last_route="$(get_default_route_key)"
 last_ssid="$(get_current_ssid)"
 counter=0
 
 while true; do
-  sleep 3
+  sleep "$TICK_SECONDS"
   counter=$((counter + 1))
 
-  cur_iface="$(get_default_phys_iface)"
-  cur_ssid="$(get_current_ssid)"
+  # Дешевая проверка каждый тик: маршрут по умолчанию читается из /proc.
+  # Тяжелый опрос SSID выполняется только при смене маршрута либо в такте
+  # полной проверки, чтобы не будить сервис Wi-Fi каждые несколько секунд.
+  cur_route="$(get_default_route_key)"
+  route_changed=0
+  [ "$cur_route" != "$last_route" ] && route_changed=1
 
-  # Быстрое подтверждение смены сети (1 сек)
-  if [ "$cur_iface" != "$last_iface" ] || [ "$cur_ssid" != "$last_ssid" ]; then
+  if [ $route_changed -eq 1 ] || [ $((counter % HEALTH_EVERY_TICKS)) -eq 0 ]; then
+    cur_ssid="$(get_current_ssid)"
+  else
+    cur_ssid="$last_ssid"
+  fi
+
+  if [ $route_changed -eq 1 ] || [ "$cur_ssid" != "$last_ssid" ]; then
+    # Подтверждение смены сети: одиночное мерцание не должно приводить
+    # к перезапуску туннелей.
     sleep 1
-    cur_iface_confirm="$(get_default_phys_iface)"
-    cur_ssid_confirm="$(get_current_ssid)"
-    if [ "$cur_iface" = "$cur_iface_confirm" ] && [ "$cur_ssid" = "$cur_ssid_confirm" ]; then
-      last_iface="$cur_iface"
+    route_confirm="$(get_default_route_key)"
+    ssid_confirm="$(get_current_ssid)"
+    if [ "$cur_route" = "$route_confirm" ] && [ "$cur_ssid" = "$ssid_confirm" ]; then
+      last_route="$cur_route"
       last_ssid="$cur_ssid"
       # Условия сети изменились: отключенные профили получают новый шанс
-      "$BIN_DIR/awg-controller" reset-failures all >/dev/null 2>&1
-      if [ -x "$BIN_DIR/awg-controller" ]; then
-        "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
-      fi
+      "$BIN_DIR/awg-controller" reset-failures all >/dev/null 2>&1 || true # глушение-обосновано: отсутствие счетчиков не является сбоем
+      "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1 || true # глушение-обосновано: следующий такт повторит синхронизацию
     fi
   fi
 
-  # Каждые 36 секунд: сначала синхронизация правил (сон в доверенных сетях), затем проверка здоровья
-  if [ $((counter % 12)) -eq 0 ]; then
-    if [ -x "$BIN_DIR/awg-controller" ]; then
-      "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
-    fi
+  # Раз в HEALTH_EVERY_TICKS тактов: сначала синхронизация правил
+  # (сон в доверенных сетях), затем проверка здоровья туннелей.
+  # Группы резервирования опрашиваются чаще проверки здоровья, но не каждый
+  # такт: обход группы порождает процессы, и запуск их раз в три секунды
+  # круглосуточно стоил бы батареи ровно так же, как прежний опрос SSID.
+  if [ $((counter % GRP_ACTIVE_EVERY_TICKS)) -eq 0 ]; then
+    check_groups
+  fi
+
+  if [ $((counter % HEALTH_EVERY_TICKS)) -eq 0 ]; then
+    "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1 || true # глушение-обосновано: следующий такт повторит синхронизацию
     check_tunnel_health
   fi
 done

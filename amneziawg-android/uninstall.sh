@@ -1,48 +1,35 @@
 #!/system/bin/sh
-# uninstall.sh — Полная очистка при удалении модуля
+# uninstall.sh — полная очистка при удалении модуля.
+#
+# Единая точка очистки — awg-controller cleanup. Собственной копии списка
+# правил здесь быть не должно: прежняя редакция содержала второй, неполный
+# перечень (без правил pref 9000/9010, без снятия TCPMSS, без возврата
+# rp_filter и без очистки цепочек NFQWS), и он расходился с основным.
 MODDIR="${0%/*}"
 BIN_DIR="$MODDIR/bin"
+LOG_DIR="/data/adb/amneziawg/logs"
+
+log_u() {
+  printf '%s [UNINSTALL] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_DIR/uninstall.log"
+}
 
 if [ -x "$BIN_DIR/awg-controller" ]; then
-  "$BIN_DIR/awg-controller" cleanup 2>/dev/null || true
+  if ! "$BIN_DIR/awg-controller" cleanup; then
+    log_u "awg-controller cleanup завершился с ошибкой: часть правил могла остаться."
+  fi
+else
+  log_u "awg-controller недоступен: автоматическая очистка правил не выполнена."
 fi
 
-killall -9 amneziawg-go 2>/dev/null || true
-pkill -f awg-netmon 2>/dev/null || true
-pkill -f awg-appmon 2>/dev/null || true
+killall -9 amneziawg-go 2>/dev/null || true # глушение-обосновано: живых процессов демона может не быть
+pkill -f "/bin/awg-netmon" 2>/dev/null || true # глушение-обосновано: монитор может быть уже остановлен
+pkill -f "/bin/awg-appmon" 2>/dev/null || true # глушение-обосновано: монитор может быть уже остановлен
 
-# Очистка iptables
-iptables -w 2 -t mangle -D OUTPUT -j AWG_MANGLE 2>/dev/null || true
-iptables -w 2 -t mangle -D PREROUTING -j AWG_MANGLE 2>/dev/null || true
-iptables -w 2 -t mangle -F AWG_MANGLE 2>/dev/null || true
-iptables -w 2 -t mangle -X AWG_MANGLE 2>/dev/null || true
+rm -rf /data/adb/amneziawg/run /data/adb/amneziawg/state /data/local/tmp/wireguard 2>/dev/null # глушение-обосновано: каталоги могли быть удалены очисткой выше
+rm -f /dev/wireguard/awg*.sock 2>/dev/null # глушение-обосновано: сокетов может не быть
 
-iptables -w 2 -t nat -D OUTPUT -j AWG_NAT 2>/dev/null || true
-iptables -w 2 -t nat -D PREROUTING -j AWG_NAT 2>/dev/null || true
-iptables -w 2 -t nat -F AWG_NAT 2>/dev/null || true
-iptables -w 2 -t nat -X AWG_NAT 2>/dev/null || true
-
-iptables -w 2 -t filter -D OUTPUT -j AWG_FILTER 2>/dev/null || true
-iptables -w 2 -t filter -F AWG_FILTER 2>/dev/null || true
-iptables -w 2 -t filter -X AWG_FILTER 2>/dev/null || true
-
-iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
-
-# Очистка правил маршрутизации
-while ip rule del table main pref 8990 2>/dev/null; do :; done
-while ip -6 rule del table main pref 8990 2>/dev/null; do :; done
-while ip rule del table main pref 9001 2>/dev/null; do :; done
-while ip -6 rule del table main pref 9001 2>/dev/null; do :; done
-
-# Очистка таблиц 201..232
-t=201
-while [ $t -le 232 ]; do
-  while ip rule del table "$t" 2>/dev/null; do :; done
-  while ip -6 rule del table "$t" 2>/dev/null; do :; done
-  ip route flush table "$t" 2>/dev/null || true
-  ip -6 route flush table "$t" 2>/dev/null || true
-  t=$((t + 1))
-done
-
-rm -rf /data/adb/amneziawg/run /data/local/tmp/wireguard 2>/dev/null || true
-rm -f /dev/wireguard/awg*.sock 2>/dev/null || true
+# Профили и журналы намеренно остаются: /data/adb/amneziawg/profiles содержит
+# конфигурации пользователя с приватными ключами, и их удаление при
+# переустановке модуля было бы безвозвратной потерей данных.
+# Полное удаление вместе с ключами выполняется вручную:
+#   rm -rf /data/adb/amneziawg

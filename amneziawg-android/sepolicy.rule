@@ -1,3 +1,11 @@
-allow { untrusted_app system_app ksu magisk su } tun_device chr_file { read write open ioctl getattr }
-allow { untrusted_app system_app ksu magisk su } self tun_socket { create bind setopt getattr read write ioctl }
-allow { untrusted_app system_app ksu magisk su } self netlink_route_socket { read bind create nlmsg_read write getattr nlmsg_write }
+# Правила SELinux для процессов модуля.
+#
+# Домены сужены до тех, под которыми фактически исполняются amneziawg-go,
+# awg и скрипты модуля: su, magisk, ksu. Прежняя редакция выдавала доступ
+# к tun_device и право nlmsg_write на netlink-маршрутизацию всем доменам
+# untrusted_app и system_app, то есть любому стороннему приложению системы.
+# Туннель создает и настраивает только root-процесс модуля, поэтому
+# приложениям эти права не нужны.
+allow { ksu magisk su } tun_device chr_file { read write open ioctl getattr }
+allow { ksu magisk su } self tun_socket { create bind setopt getattr read write ioctl }
+allow { ksu magisk su } self netlink_route_socket { read bind create nlmsg_read write getattr nlmsg_write }

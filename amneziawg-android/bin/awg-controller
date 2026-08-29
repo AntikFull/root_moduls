@@ -6,27 +6,143 @@
 
 MODDIR="${0%/*}/.."
 [ -d "$MODDIR/bin" ] || MODDIR="/data/adb/modules/amneziawg-android"
-BIN_DIR="$MODDIR/bin"
-RUN_DIR="/data/adb/amneziawg/run"
-TMP_DIR="/data/local/tmp/wireguard"
-PROFILES_DIR="/data/adb/amneziawg/profiles"
-LOG_DIR="/data/adb/amneziawg/logs"
+BIN_DIR="${AWG_BIN_DIR:-$MODDIR/bin}"
+
+# Рабочие каталоги допускают переопределение через окружение.
+# Без этого автотест не может запустить настоящий скрипт и вынужден проверять
+# копию его логики, вписанную в сам тест, - то есть не проверять ничего.
+# В боевой установке переменные не заданы и действуют штатные пути.
+AWG_DATA_DIR="${AWG_DATA_DIR:-/data/adb/amneziawg}"
+RUN_DIR="${AWG_RUN_DIR:-$AWG_DATA_DIR/run}"
+TMP_DIR="${AWG_TMP_DIR:-/data/local/tmp/wireguard}"
+PROFILES_DIR="${AWG_PROFILES_DIR:-$AWG_DATA_DIR/profiles}"
+LOG_DIR="${AWG_LOG_DIR:-$AWG_DATA_DIR/logs}"
 LOG_FILE="$LOG_DIR/awg-controller.log"
+STATE_DIR="${AWG_STATE_DIR:-$AWG_DATA_DIR/state}"
+
+# Разметка fwmark. Младшие 16 бит метки Android занимает netId, биты 16-21 -
+# служебные флаги netd (в том числе protectedFromVpn 0x20000). Метка модуля
+# живет строго в старшем байте, а запись идет через --set-xmark с маской,
+# поэтому служебные биты системы сохраняются. Соседние модули воркспейса
+# держат то же соглашение: nfqws2-android использует 0x20000000/0x20000000.
+# Метка слота собирается как строка "0x<байт>000000": арифметика shell на
+# 32-битных сборках Android переполняется на значениях выше 0x7fffffff.
+AWG_MARK_BYTE_BASE=0x80
+AWG_MARK_MASK=0xff000000
+# Групповая проверка "это метка AWG": старшие три бита равны 100.
+AWG_MARK_GROUP=0x80000000
+AWG_MARK_GROUP_MASK=0xe0000000
+
+# Группы резервирования. Участники группы получают правила на РАЗНЫХ
+# приоритетах (база + ранг), поэтому ядро само проваливается на следующего
+# участника, когда таблица предыдущего пуста. Переключение выполняется
+# снятием маршрута по умолчанию у нездорового туннеля, а не перестановкой
+# правил: заблокированный туннель остается поднятым, и без снятия маршрута
+# пакеты продолжали бы уходить в него.
+GROUPS_FILE="${AWG_GROUPS_FILE:-$AWG_DATA_DIR/groups.json}"
+AWG_GROUP_PREF_BASE=9100
+AWG_GROUP_MAX_RANK=19
+# Прямой канал ниже всех участников группы: используется только при
+# выключенном KillSwitch, когда не осталось ни одного живого туннеля.
+AWG_GROUP_PREF_DIRECT=9120
+
+# Предел имени цепочки iptables - 28 символов, префикс цепочки профиля
+# занимает 6 ("AWG_M_"). Имя длиннее приводило к молчаливому отказу
+# создания цепочки и к профилю без единого правила маршрутизации.
+AWG_MAX_PROFILE_NAME=22
+
+# Порог ротации журнала. Без него файл рос неограниченно в /data/adb.
+LOG_MAX_BYTES=524288
+
+rotate_log() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  local sz
+  sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+  if [ "$sz" -gt "$LOG_MAX_BYTES" ] 2>/dev/null; then
+    mv -f "$f" "${f}.1" 2>/dev/null || true
+    : > "$f" 2>/dev/null || true
+  fi
+}
 
 export WG_UAPI_DIR="$RUN_DIR"
 export AMNEZIAWG_UAPI_DIR="$RUN_DIR"
 export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
 
-mkdir -p "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" "/dev/wireguard" 2>/dev/null
-chmod 755 "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" 2>/dev/null
+mkdir -p "$RUN_DIR" "$TMP_DIR" "$PROFILES_DIR" "$LOG_DIR" "$STATE_DIR" "/dev/wireguard" 2>/dev/null # глушение-обосновано: каталоги могут уже существовать
+chmod 755 "$RUN_DIR" "$TMP_DIR" "$LOG_DIR" "$STATE_DIR" 2>/dev/null # глушение-обосновано: права уже выставлены установщиком
+# Каталог профилей содержит PrivateKey интерфейсов и не должен быть доступен
+# на чтение кому-либо кроме владельца.
+chmod 700 "$PROFILES_DIR" 2>/dev/null # глушение-обосновано: каталог мог быть создан установщиком
 
 log_msg() {
   local level="$1"
   shift
   local ts
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  rotate_log "$LOG_FILE"
   printf '%s [%s] %s\n' "$ts" "$level" "$*" >> "$LOG_FILE"
   [ -t 1 ] && printf '[%s] %s\n' "$level" "$*"
+}
+
+# Проверка имени профиля. Выполняется до любых операций с цепочками и файлами:
+# имя приходит из WebUI и из имен файлов в каталоге профилей.
+validate_profile_name() {
+  local n="$1"
+  case "$n" in
+    ""|*[!A-Za-z0-9_-]*)
+      log_e "Недопустимое имя профиля: '$n' (разрешены латиница, цифры, _ и -)"
+      return 1
+      ;;
+  esac
+  if [ "${#n}" -gt "$AWG_MAX_PROFILE_NAME" ]; then
+    log_e "Имя профиля '$n' длиннее $AWG_MAX_PROFILE_NAME символов: цепочка iptables не будет создана."
+    return 1
+  fi
+  return 0
+}
+
+# Единый лок на все операции, меняющие состояние туннелей.
+# Раньше лок брала только sync_rules, поэтому запуск профилей из service.sh
+# и первая синхронизация awg-netmon могли одновременно занять один слот.
+LOCK_DIR="$RUN_DIR/.state.lock"
+LOCK_HELD=0
+
+acquire_lock() {
+  local waited=0
+  local limit="${1:-100}"
+  while [ $waited -lt "$limit" ]; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      printf '%s' "$$" > "$LOCK_DIR/pid" 2>/dev/null # глушение-обосновано: pid нужен только для диагностики
+      LOCK_HELD=1
+      trap 'release_lock' EXIT INT TERM
+      return 0
+    fi
+    # Зависший лок: держатель мертв либо каталог старше 60 секунд.
+    local holder
+    holder="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -rf "$LOCK_DIR" 2>/dev/null # глушение-обосновано: держатель процесса не существует
+      continue
+    fi
+    local now mtime
+    now="$(date +%s)"
+    mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "$now")"
+    if [ $((now - mtime)) -gt 60 ]; then
+      rm -rf "$LOCK_DIR" 2>/dev/null # глушение-обосновано: лок старше предельного времени операции
+      continue
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+release_lock() {
+  if [ "$LOCK_HELD" = "1" ]; then
+    LOCK_HELD=0
+    rm -rf "$LOCK_DIR" 2>/dev/null # глушение-обосновано: каталог мог быть снят сборщиком зависших локов
+  fi
 }
 
 log_i() { log_msg "INFO" "$*"; }
@@ -35,9 +151,18 @@ log_e() { log_msg "ERROR" "$*"; }
 
 # Инициализация корневых цепочек iptables (только OUTPUT для сокетов локальных процессов)
 init_iptables_root() {
-  # Системные настройки rp_filter для корректного приема трафика от VPN
-  sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+  # Системные настройки rp_filter для корректного приема трафика от VPN.
+  # Исходные значения сохраняются один раз, чтобы cleanup_all вернул систему
+  # в то состояние, в котором ее застал модуль.
+  local k
+  for k in all default; do
+    if [ ! -f "$STATE_DIR/rp_filter.$k" ]; then
+      local orig
+      orig="$(cat "/proc/sys/net/ipv4/conf/$k/rp_filter" 2>/dev/null)"
+      [ -n "$orig" ] && printf '%s' "$orig" > "$STATE_DIR/rp_filter.$k" 2>/dev/null # глушение-обосновано: без записи снимка откат просто не выполнится
+    fi
+    sysctl -w "net.ipv4.conf.$k.rp_filter=0" >/dev/null 2>&1 || true # глушение-обосновано: параметр отсутствует на части ядер
+  done
 
   # Mangle (только OUTPUT для локального трафика приложений с -m owner)
   iptables -w 2 -t mangle -N AWG_MANGLE 2>/dev/null || true
@@ -52,40 +177,64 @@ init_iptables_root() {
   iptables -w 2 -t filter -C OUTPUT -j AWG_FILTER 2>/dev/null || iptables -w 2 -t filter -I OUTPUT 1 -j AWG_FILTER
 
   # Автоматический обход цепочек Zapret/NFQWS, если они активны в системе (IPv4 и IPv6)
-  if iptables -w 2 -t mangle -L NFQWS2_POST >/dev/null 2>&1; then
-    iptables -w 2 -t mangle -C NFQWS2_POST -o awg+ -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS2_POST 1 -o awg+ -j RETURN
-    iptables -w 2 -t mangle -C NFQWS2_POST -m mark --mark 0x2000/0xf000 -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS2_POST 1 -m mark --mark 0x2000/0xf000 -j RETURN
-  fi
-  if iptables -w 2 -t mangle -L NFQWS2_PRE >/dev/null 2>&1; then
-    iptables -w 2 -t mangle -C NFQWS2_PRE -i awg+ -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS2_PRE 1 -i awg+ -j RETURN
-  fi
-  if ip6tables -w 2 -t mangle -L NFQWS2_POST >/dev/null 2>&1; then
-    ip6tables -w 2 -t mangle -C NFQWS2_POST -o awg+ -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS2_POST 1 -o awg+ -j RETURN
-    ip6tables -w 2 -t mangle -C NFQWS2_POST -m mark --mark 0x2000/0xf000 -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS2_POST 1 -m mark --mark 0x2000/0xf000 -j RETURN
-  fi
-  if ip6tables -w 2 -t mangle -L NFQWS2_PRE >/dev/null 2>&1; then
-    ip6tables -w 2 -t mangle -C NFQWS2_PRE -i awg+ -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS2_PRE 1 -i awg+ -j RETURN
-  fi
-  if iptables -w 2 -t mangle -L NFQWS_POST >/dev/null 2>&1; then
-    iptables -w 2 -t mangle -C NFQWS_POST -o awg+ -j RETURN 2>/dev/null || iptables -w 2 -t mangle -I NFQWS_POST 1 -o awg+ -j RETURN
-  fi
-  if ip6tables -w 2 -t mangle -L NFQWS_POST >/dev/null 2>&1; then
-    ip6tables -w 2 -t mangle -C NFQWS_POST -o awg+ -j RETURN 2>/dev/null || ip6tables -w 2 -t mangle -I NFQWS_POST 1 -o awg+ -j RETURN
-  fi
-
-  # MSS Clamping (IPv4 и IPv6)
-  iptables -w 2 -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-    iptables -w 2 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-  iptables -w 2 -t mangle -C OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-    iptables -w 2 -t mangle -A OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-  ip6tables -w 2 -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-    ip6tables -w 2 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-  ip6tables -w 2 -t mangle -C OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-    ip6tables -w 2 -t mangle -A OUTPUT -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  awg_nfqws_bypass add
+  awg_mss_clamp add
 
   # NAT Masquerade для tun-интерфейсов
   iptables -w 2 -t nat -C POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || \
-    iptables -w 2 -t nat -A POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
+    iptables -w 2 -t nat -A POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true # глушение-обосновано: правило уже есть либо цель недоступна в ядре
+}
+
+# Обход цепочек соседних модулей Zapret/NFQWS для трафика туннеля.
+# Симметричная функция: add ставит правила, del снимает. Раньше правила
+# только ставились, и после удаления модуля оставались в чужих цепочках.
+awg_nfqws_bypass() {
+  local op="$1"
+  local flag ipt chain
+  if [ "$op" = "add" ]; then flag="-I"; else flag="-D"; fi
+  for ipt in iptables ip6tables; do
+    for chain in NFQWS2_POST NFQWS_POST; do
+      "$ipt" -w 2 -t mangle -L "$chain" >/dev/null 2>&1 || continue
+      if [ "$op" = "add" ]; then
+        "$ipt" -w 2 -t mangle -C "$chain" -o awg+ -j RETURN 2>/dev/null || \
+          "$ipt" -w 2 -t mangle -I "$chain" 1 -o awg+ -j RETURN 2>/dev/null || true # глушение-обосновано: чужая цепочка может быть занята другим модулем
+        "$ipt" -w 2 -t mangle -C "$chain" -m mark --mark "$AWG_MARK_GROUP/$AWG_MARK_GROUP_MASK" -j RETURN 2>/dev/null || \
+          "$ipt" -w 2 -t mangle -I "$chain" 1 -m mark --mark "$AWG_MARK_GROUP/$AWG_MARK_GROUP_MASK" -j RETURN 2>/dev/null || true # глушение-обосновано: см. выше
+      else
+        while "$ipt" -w 2 -t mangle "$flag" "$chain" -o awg+ -j RETURN 2>/dev/null; do :; done
+        while "$ipt" -w 2 -t mangle "$flag" "$chain" -m mark --mark "$AWG_MARK_GROUP/$AWG_MARK_GROUP_MASK" -j RETURN 2>/dev/null; do :; done
+      fi
+    done
+    for chain in NFQWS2_PRE; do
+      "$ipt" -w 2 -t mangle -L "$chain" >/dev/null 2>&1 || continue
+      if [ "$op" = "add" ]; then
+        "$ipt" -w 2 -t mangle -C "$chain" -i awg+ -j RETURN 2>/dev/null || \
+          "$ipt" -w 2 -t mangle -I "$chain" 1 -i awg+ -j RETURN 2>/dev/null || true # глушение-обосновано: чужая цепочка может быть занята другим модулем
+      else
+        while "$ipt" -w 2 -t mangle "$flag" "$chain" -i awg+ -j RETURN 2>/dev/null; do :; done
+      fi
+    done
+  done
+}
+
+# Обрезание MSS. Ограничено интерфейсами туннеля: прежняя редакция вешала
+# клампинг на весь OUTPUT и FORWARD устройства и нигде его не снимала,
+# то есть меняла параметры TCP для трафика, к модулю не относящегося.
+awg_mss_clamp() {
+  local op="$1"
+  local ipt chain
+  for ipt in iptables ip6tables; do
+    for chain in FORWARD OUTPUT; do
+      if [ "$op" = "add" ]; then
+        "$ipt" -w 2 -t mangle -C "$chain" -o awg+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+          "$ipt" -w 2 -t mangle -A "$chain" -o awg+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true # глушение-обосновано: цель TCPMSS отсутствует в части ядер Android
+      else
+        while "$ipt" -w 2 -t mangle -D "$chain" -o awg+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done
+        # Снятие правил прежней редакции без привязки к интерфейсу.
+        while "$ipt" -w 2 -t mangle -D "$chain" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done
+      fi
+    done
+  done
 }
 
 # Извлечение параметра из секции Peer конфигурации .conf
@@ -140,23 +289,16 @@ get_conf_val() {
   ' "$file" 2>/dev/null
 }
 
-# Получение опций профиля из JSON (с поддержкой fallback-ключей)
+# Получение опций профиля из JSON.
+# Разбор выполняет Go-утилита настоящим json.Unmarshal. Прежняя реализация на
+# регулярном выражении с группой [^",}]+ обрывала значение на первой запятой,
+# из-за чего список доверенных сетей trusted_wifi усекался до одной сети.
 get_opt_val() {
   local json_file="$1"
   local key="$2"
   local def="$3"
-  if [ -f "$json_file" ]; then
-    local v
-    v="$(sed -n -E 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"?([^",}]+)"?.*/\1/p' "$json_file" 2>/dev/null | head -n 1 | tr -d ' \n\t\r')"
-    if [ -z "$v" ] && [ "$key" = "custom_dns" ]; then
-      v="$(sed -n -E 's/.*"dns"[[:space:]]*:[[:space:]]*"?([^",}]+)"?.*/\1/p' "$json_file" 2>/dev/null | head -n 1 | tr -d ' \n\t\r')"
-    elif [ -z "$v" ] && [ "$key" = "dns" ]; then
-      v="$(sed -n -E 's/.*"custom_dns"[[:space:]]*:[[:space:]]*"?([^",}]+)"?.*/\1/p' "$json_file" 2>/dev/null | head -n 1 | tr -d ' \n\t\r')"
-    fi
-    if [ -n "$v" ]; then
-      printf '%s' "$v"
-      return 0
-    fi
+  if [ -f "$json_file" ] && [ -x "$BIN_DIR/awg" ]; then
+    "$BIN_DIR/awg" get-opt "$json_file" "$key" "$def" 2>/dev/null && return 0
   fi
   printf '%s' "$def"
 }
@@ -211,6 +353,7 @@ is_ssid_trusted() {
 start_profile() {
   local prof_name="$1"
   local force_flag="$2"
+  validate_profile_name "$prof_name" || return 1
   local conf_file="$PROFILES_DIR/${prof_name}.conf"
   local opts_file="$PROFILES_DIR/${prof_name}.json"
   [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
@@ -242,15 +385,8 @@ start_profile() {
   slot_idx="$(find_free_slot)"
   local iface="awg$slot_idx"
   local table_id=$((201 + slot_idx))
-  local fwmark="$(printf '0x%x' $((0x2010 + slot_idx * 16)))"
+  local fwmark="0x$(printf '%02x' $((AWG_MARK_BYTE_BASE + slot_idx)))000000"
   local priority=$((10201 + slot_idx * 10))
-
-  local routing_mode
-  routing_mode="$(get_opt_val "$opts_file" "routing_mode" "include_apps")"
-
-  local dns_val
-  dns_val="$(get_opt_val "$opts_file" "dns" "")"
-  [ -z "$dns_val" ] && dns_val="$(get_conf_val "$conf_file" "DNS")"
 
   local address_val
   address_val="$(get_conf_val "$conf_file" "Address")"
@@ -265,7 +401,10 @@ start_profile() {
   ip link del "$iface" 2>/dev/null || true
   rm -f "$TMP_DIR/${iface}.sock" "$RUN_DIR/${iface}.sock" "/dev/wireguard/${iface}.sock" 2>/dev/null || true
 
-  # 1. Запуск amneziawg-go
+  # 1. Запуск amneziawg-go.
+  # Журнал демона ротируется по тому же порогу, что и журнал контроллера:
+  # он пишется самим amneziawg-go в режиме отладки и рос без ограничения.
+  rotate_log "$LOG_DIR/${iface}.log"
   log_i "[$prof_name] Старт amneziawg-go для интерфейса $iface (Слот #$slot_idx)..."
   WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" \
     "$BIN_DIR/amneziawg-go" -f "$iface" >> "$LOG_DIR/${iface}.log" 2>&1 &
@@ -347,6 +486,14 @@ start_profile() {
   # 5. Применение правил Policy Routing и iptables
   apply_profile_rules "$prof_name"
 
+  # Перезапуск не возвращает участника группы в строй самовольно: маршрут
+  # был снят проверкой живости, и решение о возврате принимает она же после
+  # гистерезиса. Иначе перезапуск обнулял бы защиту от мигающей блокировки.
+  if [ -f "$RUN_DIR/${prof_name}.routedown" ]; then
+    rm -f "$RUN_DIR/${prof_name}.routedown" 2>/dev/null # глушение-обосновано: маркер снимается, чтобы route_down отработал заново
+    route_down "$prof_name"
+  fi
+
   # Инициализация хендшейка отправкой пробного ICMP пакета через интерфейс
   ping -c 1 -W 1 -I "$iface" 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 -I "$iface" 8.8.8.8 >/dev/null 2>&1 || true
 
@@ -354,74 +501,191 @@ start_profile() {
   return 0
 }
 
+# Чтение файла состояния профиля.
+# Отсутствие файла - штатная ситуация "профиль не запущен", поэтому stderr
+# гасится здесь один раз, а не в каждом вызове по всему скрипту.
+read_state() {
+  cat "$RUN_DIR/$1" 2>/dev/null # глушение-обосновано: отсутствие файла состояния означает "профиль не запущен"
+}
+
+# Запись файла состояния профиля.
+write_state() {
+  printf '%s' "$2" > "$RUN_DIR/$1" 2>/dev/null # глушение-обосновано: при недоступном каталоге состояние восстановится следующей синхронизацией
+}
+
+# Удаление всех правил маршрутизации, совпадающих с шаблоном (IPv4 и IPv6).
+ip_rule_del_all() {
+  while ip rule del "$@" 2>/dev/null; do :; done # глушение-обосновано: цикл штатно завершается кодом ошибки, когда совпадений больше нет
+  while ip -6 rule del "$@" 2>/dev/null; do :; done # глушение-обосновано: см. выше
+}
+
+# Добавление правила маршрутизации. Первый аргумент - семейство (4 или 6).
+ip_rule_add() {
+  local family="$1"
+  shift
+  if [ "$family" = "6" ]; then
+    ip -6 rule add "$@" 2>/dev/null || true # глушение-обосновано: повтор правила при параллельном применении не является сбоем
+  else
+    ip rule add "$@" 2>/dev/null || true # глушение-обосновано: см. выше
+  fi
+}
+
+# Гарантированная ссылка из корневой цепочки на цепочку профиля.
+ensure_jump() {
+  local table="$1" root="$2" chain="$3"
+  if ! iptables -w 2 -t "$table" -C "$root" -j "$chain" 2>/dev/null; then # глушение-обосновано: -C это проверка наличия, ее отрицательный код обрабатывается здесь же
+    iptables -w 2 -t "$table" -A "$root" -j "$chain"
+  fi
+}
+
+# Перенаправление DNS в цепочку профиля.
+# Прежняя редакция ставила эти правила только внутри цикла по UID режима
+# include_apps, поэтому в режимах all_traffic и exclude_apps DNS-запросы
+# уходили резолверу оператора мимо туннеля.
+awg_dns_redirect() {
+  local chain="$1"
+  local dns="$2"
+  local uid="$3"
+  [ -n "$dns" ] || return 0
+  local proto
+  for proto in udp tcp; do
+    if [ -n "$uid" ]; then
+      iptables -w 2 -t nat -A "$chain" -m owner --uid-owner "$uid" -p "$proto" --dport 53 \
+        ! -d "$dns" -j DNAT --to-destination "${dns}:53"
+    else
+      iptables -w 2 -t nat -A "$chain" -p "$proto" --dport 53 \
+        ! -d "$dns" -j DNAT --to-destination "${dns}:53"
+    fi
+  done
+}
+
+# Снятие правил uidrange по снимку прошлого применения.
+# Список приложений профиля мог измениться: правила для убранных UID указывают
+# на table main и групповой очисткой по номеру таблицы не снимаются.
+awg_drop_uid_rules() {
+  local prof_name="$1"
+  local table_id="$2"
+  local uid grp_pref grp_rank
+  grp_pref="$(read_state "${prof_name}.grouppref")"
+  grp_rank="$(read_state "${prof_name}.grouprank")"
+  for uid in $(read_state "${prof_name}.uids"); do
+    [ -n "$uid" ] || continue
+    if [ -n "$table_id" ]; then
+      ip_rule_del_all uidrange "${uid}-${uid}" table "$table_id" pref 9000
+      # Правило участника группы стоит на собственном приоритете по рангу.
+      [ -n "$grp_pref" ] && ip_rule_del_all uidrange "${uid}-${uid}" table "$table_id" pref "$grp_pref"
+    fi
+    ip_rule_del_all uidrange "${uid}-${uid}" table main pref 8990
+    ip_rule_del_all uidrange "${uid}-${uid}" table main pref 9001
+    # Прямой канал группы принадлежит участнику нулевого ранга: он один его
+    # ставит, он один и снимает. Иначе очистка участника ранга 1 удаляла бы
+    # правило, поставленное рангом 0, а тот переставлял бы его лишь на
+    # следующем цикле - где оно снова удалялось бы. В итоге прямой канал
+    # не переживал ни одного полного цикла синхронизации.
+    if [ -z "$grp_rank" ] || [ "$grp_rank" = "0" ]; then
+      ip_rule_del_all uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
+    fi
+  done
+}
+
 # Применение правил маршрутизации и фильтрации для профиля
 apply_profile_rules() {
   local prof_name="$1"
+  validate_profile_name "$prof_name" || return 1
+
   local opts_file="$PROFILES_DIR/${prof_name}.json"
   [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
-  local iface
-  iface="$(cat "$RUN_DIR/${prof_name}.iface" 2>/dev/null)"
-  local table_id
-  table_id="$(cat "$RUN_DIR/${prof_name}.table" 2>/dev/null)"
-  local fwmark
-  fwmark="$(cat "$RUN_DIR/${prof_name}.mark" 2>/dev/null)"
-  local priority
-  priority="$(cat "$RUN_DIR/${prof_name}.prio" 2>/dev/null)"
+  local iface table_id fwmark priority
+  iface="$(read_state "${prof_name}.iface")"
+  table_id="$(read_state "${prof_name}.table")"
+  fwmark="$(read_state "${prof_name}.mark")"
+  priority="$(read_state "${prof_name}.prio")"
   [ -z "$priority" ] && priority="10201"
 
-  [ -z "$iface" ] || [ -z "$table_id" ] || [ -z "$fwmark" ] && return 1
+  if [ -z "$iface" ] || [ -z "$table_id" ] || [ -z "$fwmark" ]; then
+    return 1
+  fi
 
-  local routing_mode
+  local mark_sel="${fwmark}/${AWG_MARK_MASK}"
+
+  local routing_mode killswitch lan_bypass dns_val primary_dns
   routing_mode="$(get_opt_val "$opts_file" "routing_mode" "include_apps")"
-  local dns_val
-  dns_val="$(get_opt_val "$opts_file" "dns" "")"
-  [ -z "$dns_val" ] && dns_val="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "DNS")"
-  local killswitch
   killswitch="$(get_opt_val "$opts_file" "killswitch" "false")"
-  local lan_bypass
   lan_bypass="$(get_opt_val "$opts_file" "lan_bypass" "true")"
+  dns_val="$(get_opt_val "$opts_file" "custom_dns" "")"
+  [ -z "$dns_val" ] && dns_val="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "DNS")"
+  primary_dns=""
+  [ -n "$dns_val" ] && primary_dns="$(printf '%s' "$dns_val" | awk -F',' '{print $1}' | tr -d ' \r\t')"
+
+  # Членство в группе резервирования. Если профиль в нее входит, приложения,
+  # DNS, KillSwitch и обход локальных сетей берутся из группы: держать эти
+  # параметры у каждого участника отдельно означало бы, что они разойдутся,
+  # и поведение при переключении зависело бы от того, кто сейчас активен.
+  local grp_name="" grp_rank="" grp_uids="" grp_info=""
+  if [ -f "$GROUPS_FILE" ] && [ -x "$BIN_DIR/awg" ]; then
+    if grp_info="$("$BIN_DIR/awg" group-info "$GROUPS_FILE" "$prof_name" 2>/dev/null)"; then # глушение-обосновано: код возврата 1 означает "профиль не состоит в группе", это штатный случай
+      grp_name="$(printf '%s\n' "$grp_info" | sed -n 's/^group=//p')"
+      grp_rank="$(printf '%s\n' "$grp_info" | sed -n 's/^rank=//p')"
+      grp_uids="$(printf '%s\n' "$grp_info" | sed -n 's/^uids=//p')"
+      killswitch="$(printf '%s\n' "$grp_info" | sed -n 's/^killswitch=//p')"
+      lan_bypass="$(printf '%s\n' "$grp_info" | sed -n 's/^lan_bypass=//p')"
+      local grp_dns
+      grp_dns="$(printf '%s\n' "$grp_info" | sed -n 's/^dns=//p')"
+      [ -n "$grp_dns" ] && primary_dns="$(printf '%s' "$grp_dns" | awk -F',' '{print $1}' | tr -d ' \r\t')"
+    fi
+  fi
+  if [ -n "$grp_name" ] && [ "$grp_rank" -gt "$AWG_GROUP_MAX_RANK" ] 2>/dev/null; then # глушение-обосновано: нечисловой ранг обрабатывается как выход за предел следующей строкой
+    log_e "[$prof_name] Ранг $grp_rank в группе $grp_name превышает предел $AWG_GROUP_MAX_RANK. Правила группы не применены."
+    grp_name=""
+  fi
 
   init_iptables_root
 
-  # Создание персональных цепочек профиля
   local ch_mangle="AWG_M_${prof_name}"
   local ch_nat="AWG_N_${prof_name}"
   local ch_kill="AWG_K_${prof_name}"
 
-  iptables -w 2 -t mangle -N "$ch_mangle" 2>/dev/null || iptables -w 2 -t mangle -F "$ch_mangle"
-  iptables -w 2 -t mangle -C AWG_MANGLE -j "$ch_mangle" 2>/dev/null || iptables -w 2 -t mangle -A AWG_MANGLE -j "$ch_mangle"
+  # Отказ создания цепочки означает профиль без единого правила маршрутизации,
+  # поэтому он не заглушается, а прекращает применение с записью в журнал.
+  local spec t chain
+  for spec in "mangle:$ch_mangle" "nat:$ch_nat" "filter:$ch_kill"; do
+    t="${spec%%:*}"
+    chain="${spec#*:}"
+    if ! iptables -w 2 -t "$t" -N "$chain" 2>/dev/null; then # глушение-обосновано: цепочка уже создана предыдущим применением, случай обрабатывается ниже
+      if ! iptables -w 2 -t "$t" -F "$chain" 2>/dev/null; then # глушение-обосновано: отличить "уже есть" от "создать нельзя" можно только повторной операцией
+        log_e "[$prof_name] Не удалось создать цепочку $chain в таблице $t. Правила не применены."
+        return 1
+      fi
+    fi
+  done
 
-  iptables -w 2 -t nat -N "$ch_nat" 2>/dev/null || iptables -w 2 -t nat -F "$ch_nat"
-  iptables -w 2 -t nat -C AWG_NAT -j "$ch_nat" 2>/dev/null || iptables -w 2 -t nat -A AWG_NAT -j "$ch_nat"
-
-  iptables -w 2 -t filter -N "$ch_kill" 2>/dev/null || iptables -w 2 -t filter -F "$ch_kill"
-  iptables -w 2 -t filter -C AWG_FILTER -j "$ch_kill" 2>/dev/null || iptables -w 2 -t filter -A AWG_FILTER -j "$ch_kill"
+  ensure_jump mangle AWG_MANGLE "$ch_mangle"
+  ensure_jump nat AWG_NAT "$ch_nat"
+  ensure_jump filter AWG_FILTER "$ch_kill"
 
   # Проверка наличия IPv6 в конфигурации профиля
   local has_ipv6=0
-  local conf_addrs="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "Address")"
-  local conf_aips="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "AllowedIPs")"
+  local conf_addrs conf_aips
+  conf_addrs="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "Address")"
+  conf_aips="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "AllowedIPs")"
   if printf '%s\n%s' "$conf_addrs" "$conf_aips" | grep -Fq ':'; then
     has_ipv6=1
   fi
 
-  # Полная очистка ВСЕХ старых правил маршрутизации для этой таблицы
-  while ip rule del table "$table_id" 2>/dev/null; do :; done
-  while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
-  while ip rule del fwmark "$fwmark" 2>/dev/null; do :; done
-  while ip -6 rule del fwmark "$fwmark" 2>/dev/null; do :; done
+  # Снятие правил прошлого применения: сначала по снимку UID, затем групповое
+  # по номеру таблицы и по метке.
+  awg_drop_uid_rules "$prof_name" "$table_id"
+  ip_rule_del_all table "$table_id"
+  ip_rule_del_all fwmark "$mark_sel"
 
-  # Добавление ip rule для fwmark
-  ip rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
-  if [ "$has_ipv6" = "1" ]; then
-    ip -6 rule add fwmark "$fwmark" table "$table_id" pref "$priority" 2>/dev/null || true
-  fi
+  ip_rule_add 4 fwmark "$mark_sel" table "$table_id" pref "$priority"
+  [ "$has_ipv6" = "1" ] && ip_rule_add 6 fwmark "$mark_sel" table "$table_id" pref "$priority"
 
-  # Добавление ip rule от IP-адресов интерфейса (toybox-совместимый awk)
-  local if_ips
-  if_ips="$(ip -4 addr show dev "$iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="inet") {split($(i+1),a,"/"); print a[1]}}')"
+  # Правила от IP-адресов интерфейса (toybox-совместимый awk)
+  local if_ips ip_a
+  if_ips="$(ip -4 addr show dev "$iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="inet") {split($(i+1),a,"/"); print a[1]}}')" # глушение-обосновано: интерфейс мог быть снят между запуском и применением правил
   for ip_a in $if_ips; do
-    [ -n "$ip_a" ] && ip rule add from "$ip_a" table "$table_id" pref "$((priority - 1))" 2>/dev/null || true
+    [ -n "$ip_a" ] && ip_rule_add 4 from "$ip_a" table "$table_id" pref "$((priority - 1))"
   done
 
   # Исключение локальных сетей от маркировки (только при lan_bypass=true)
@@ -434,53 +698,105 @@ apply_profile_rules() {
   iptables -w 2 -t mangle -A "$ch_mangle" -d 224.0.0.0/4 -j RETURN
   iptables -w 2 -t mangle -A "$ch_mangle" -d 255.255.255.255/32 -j RETURN
 
-  # Исключение самого туннельного демона amneziawg-go от зацикливания по порту
-  local lport="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "ListenPort")"
+  # Исключение самого туннельного демона от зацикливания
+  local lport
+  lport="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "ListenPort")"
   if [ -n "$lport" ]; then
     iptables -w 2 -t mangle -A "$ch_mangle" -p udp --sport "$lport" -j RETURN
   else
-    iptables -w 2 -t mangle -A "$ch_mangle" -m mark --mark "$fwmark" -j RETURN
+    iptables -w 2 -t mangle -A "$ch_mangle" -m mark --mark "$mark_sel" -j RETURN
   fi
 
   # Резолв списка приложений в UIDs через Go CLI
   local uids=""
   if [ -f "$opts_file" ]; then
-    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)"
+    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)" # глушение-обосновано: пустой список приложений обрабатывается ниже как отсутствие правил
+  fi
+  # В группе резервирования список приложений задает группа, а не участник:
+  # иначе состав приложений у участников разошелся бы, и после переключения
+  # в туннель попадало бы не то, что до него.
+  if [ -n "$grp_name" ]; then
+    uids="$grp_uids"
+    routing_mode="group"
+    write_state "${prof_name}.group" "$grp_name"
+    write_state "${prof_name}.grouprank" "$grp_rank"
+    write_state "${prof_name}.grouppref" "$((AWG_GROUP_PREF_BASE + grp_rank))"
+    # Параметры для проверки живости в awg-netmon.
+    write_state "${prof_name}.grpfailback" "$(printf '%s
+' "$grp_info" | sed -n 's/^failback_after_sec=//p')"
+    write_state "${prof_name}.probeip" "${primary_dns:-1.1.1.1}"
+  else
+    rm -f "$RUN_DIR/${prof_name}.group" "$RUN_DIR/${prof_name}.grouprank"           "$RUN_DIR/${prof_name}.grouppref" 2>/dev/null # глушение-обосновано: профиль мог никогда не состоять в группе
   fi
 
-  if [ "$routing_mode" = "include_apps" ]; then
+  write_state "${prof_name}.uids" "$uids"
+  write_state "${prof_name}.mode" "$routing_mode"
+  write_state "${prof_name}.killswitch" "$killswitch"
+  write_state "${prof_name}.ipv6" "$has_ipv6"
+  # Копия снимка переживает перезагрузку: на ранней стадии post-fs-data
+  # менеджер пакетов еще не запущен и резолв UID выполнить нельзя, а ранняя
+  # блокировка KillSwitch нужна до появления сети.
+  printf '%s' "$uids" > "$STATE_DIR/${prof_name}.uids" 2>/dev/null # глушение-обосновано: без снимка ранняя блокировка просто отработает в общем режиме
+  printf '%s' "$routing_mode" > "$STATE_DIR/${prof_name}.mode" 2>/dev/null # глушение-обосновано: см. выше
+
+  local uid
+  if [ "$routing_mode" = "group" ]; then
+    # Участник группы резервирования.
+    # Правило стоит на приоритете "база + ранг", поэтому участники выстроены
+    # в очередь. Пока в таблице участника есть маршрут по умолчанию, трафик
+    # идет через него; как только проверка живости снимает маршрут, ядро
+    # переходит к следующему правилу без какого-либо участия скриптов.
+    local grp_pref=$((AWG_GROUP_PREF_BASE + grp_rank))
     if [ -n "$uids" ]; then
-      log_i "[$prof_name] Маршрутизация UIDs (Include): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
-        ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
-        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
-        ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-        # 1. Приоритетный маршрут в туннель
-        ip rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
-        if [ "$has_ipv6" = "1" ]; then
-          ip -6 rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        ip_rule_add 4 uidrange "${uid}-${uid}" table "$table_id" pref "$grp_pref"
+        [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table "$table_id" pref "$grp_pref"
+
+        # Прямой канал ниже всех участников группы. Ставит его только
+        # участник нулевого ранга: правило одно на группу, и дублировать
+        # его у каждого участника незачем.
+        if [ "$grp_rank" = "0" ] && [ "$killswitch" != "true" ] && [ "$killswitch" != "1" ]; then
+          ip_rule_add 4 uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
+          [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
         fi
+
+        # Маркировка пакетов в групповом режиме не ставится: маршрут уже
+        # выбран правилом по uid на более высоком приоритете, а метка от
+        # каждого участника перезаписывала бы метку предыдущего.
+        awg_dns_redirect "$ch_nat" "$primary_dns" "$uid"
+
+        if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 127.0.0.0/8 -j ACCEPT
+          if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+            iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 10.0.0.0/8 -j ACCEPT
+            iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 172.16.0.0/12 -j ACCEPT
+            iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 192.168.0.0/16 -j ACCEPT
+          fi
+          # Разрешен выход через любой интерфейс группы, а не только через
+          # свой: при переключении трафик уходит в туннель другого участника,
+          # и запрет по своему интерфейсу оборвал бы его.
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -o awg+ -j ACCEPT
+          iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -j REJECT --reject-with icmp-port-unreachable
+        fi
+      done
+    fi
+  elif [ "$routing_mode" = "include_apps" ]; then
+    if [ -n "$uids" ]; then
+      for uid in $uids; do
+        [ -z "$uid" ] && continue
+        # 1. Приоритетный маршрут в туннель
+        ip_rule_add 4 uidrange "${uid}-${uid}" table "$table_id" pref 9000
+        [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table "$table_id" pref 9000
 
         # 2. Fallback-маршрут (pref 9001) в table main при выключенном KillSwitch
         if [ "$killswitch" != "true" ] && [ "$killswitch" != "1" ]; then
-          ip rule add uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-          if [ "$has_ipv6" = "1" ]; then
-            ip -6 rule add uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-          fi
+          ip_rule_add 4 uidrange "${uid}-${uid}" table main pref 9001
+          [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table main pref 9001
         fi
 
-        iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j MARK --set-mark "$fwmark"
-        if [ -n "$dns_val" ]; then
-          local primary_dns="$(printf '%s' "$dns_val" | awk -F',' '{print $1}' | tr -d ' ')"
-          if [ -n "$primary_dns" ]; then
-            iptables -w 2 -t nat -A "$ch_nat" -m owner --uid-owner "$uid" -p udp --dport 53 -j DNAT --to-destination "${primary_dns}:53"
-            iptables -w 2 -t nat -A "$ch_nat" -m owner --uid-owner "$uid" -p tcp --dport 53 -j DNAT --to-destination "${primary_dns}:53"
-          fi
-        fi
+        iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j MARK --set-xmark "$mark_sel"
+        awg_dns_redirect "$ch_nat" "$primary_dns" "$uid"
         if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
           iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 127.0.0.0/8 -j ACCEPT
           if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
@@ -493,139 +809,252 @@ apply_profile_rules() {
         fi
       done
     fi
-  elif [ "$routing_mode" = "exclude_apps" ]; then
-    if [ -n "$uids" ]; then
-      log_i "[$prof_name] Исключение UIDs (Exclude): $uids (LAN Bypass: $lan_bypass)"
+  elif [ "$routing_mode" = "exclude_apps" ] || [ "$routing_mode" = "all_traffic" ]; then
+    if [ "$routing_mode" = "exclude_apps" ] && [ -n "$uids" ]; then
       for uid in $uids; do
         [ -z "$uid" ] && continue
-        ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-        ip rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        if [ "$has_ipv6" = "1" ]; then
-          ip -6 rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-        fi
+        ip_rule_add 4 uidrange "${uid}-${uid}" table main pref 8990
+        [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table main pref 8990
         iptables -w 2 -t mangle -A "$ch_mangle" -m owner --uid-owner "$uid" -j RETURN
+        iptables -w 2 -t nat -A "$ch_nat" -m owner --uid-owner "$uid" -j RETURN
       done
     fi
-    ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
-    if [ "$has_ipv6" = "1" ]; then
-      ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
-    fi
-    iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
+
+    ip_rule_add 4 from all table "$table_id" pref 9010
+    [ "$has_ipv6" = "1" ] && ip_rule_add 6 from all table "$table_id" pref 9010
+    iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-xmark "$mark_sel"
+    awg_dns_redirect "$ch_nat" "$primary_dns" ""
     if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$mark_sel" -d 127.0.0.0/8 -j ACCEPT
       if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
-        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
-        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
-        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$mark_sel" -d 10.0.0.0/8 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$mark_sel" -d 172.16.0.0/12 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$mark_sel" -d 192.168.0.0/16 -j ACCEPT
       fi
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -o "$iface" -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -j REJECT --reject-with icmp-port-unreachable
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$mark_sel" -o "$iface" -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$mark_sel" -j REJECT --reject-with icmp-port-unreachable
     fi
-  elif [ "$routing_mode" = "all_traffic" ]; then
-    log_i "[$prof_name] Режим полного туннеля (все приложения, LAN Bypass: $lan_bypass)..."
-    ip rule add from all table "$table_id" pref 9010 2>/dev/null || true
-    if [ "$has_ipv6" = "1" ]; then
-      ip -6 rule add from all table "$table_id" pref 9010 2>/dev/null || true
-    fi
-    iptables -w 2 -t mangle -A "$ch_mangle" -j MARK --set-mark "$fwmark"
-    if [ "$killswitch" = "true" ] || [ "$killswitch" = "1" ]; then
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 127.0.0.0/8 -j ACCEPT
-      if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
-        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 10.0.0.0/8 -j ACCEPT
-        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 172.16.0.0/12 -j ACCEPT
-        iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -d 192.168.0.0/16 -j ACCEPT
-      fi
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -o "$iface" -j ACCEPT
-      iptables -w 2 -t filter -A "$ch_kill" -m mark --mark "$fwmark" -j REJECT --reject-with icmp-port-unreachable
-    fi
+  fi
+
+  # Итоговая строка пишется один раз за применение и только при смене состава
+  # правил: прежняя редакция писала ее каждые 36 секунд и растила журнал.
+  local sig
+  sig="${routing_mode}|${killswitch}|${lan_bypass}|${primary_dns}|${uids}"
+  if [ "$sig" != "$(read_state "${prof_name}.rulesig")" ]; then
+    write_state "${prof_name}.rulesig" "$sig"
+    log_i "[$prof_name] Правила применены: режим $routing_mode, приложений $(printf '%s' "$uids" | wc -w), KillSwitch $killswitch, LAN Bypass $lan_bypass, DNS ${primary_dns:-по умолчанию}"
   fi
 }
 
-# Остановка профиля и безопасная очистка правил
+# Снятие маршрута по умолчанию у участника группы.
+# Это и есть механизм переключения: туннель остается поднятым и продолжает
+# попытки восстановиться, но его таблица становится пустой, и ядро при
+# следующем же пакете уходит по правилу следующего участника.
+# Профиль при этом НЕ останавливается: подъем туннеля заново занял бы
+# секунды и потребовал нового хендшейка, а так резерв уже готов.
+route_down() {
+  local prof_name="$1"
+  validate_profile_name "$prof_name" || return 1
+  local table_id iface
+  table_id="$(read_state "${prof_name}.table")"
+  iface="$(read_state "${prof_name}.iface")"
+  if [ -z "$table_id" ] || [ -z "$iface" ]; then
+    return 1
+  fi
+  if [ -f "$RUN_DIR/${prof_name}.routedown" ]; then
+    return 0
+  fi
+  ip route del default dev "$iface" table "$table_id" 2>/dev/null || true # глушение-обосновано: маршрут мог быть снят вместе с интерфейсом
+  ip -6 route del default dev "$iface" table "$table_id" 2>/dev/null || true # глушение-обосновано: IPv6 в профиле может отсутствовать
+  write_state "${prof_name}.routedown" "1"
+  log_w "[$prof_name] Маршрут снят: трафик группы уходит к следующему участнику."
+  return 0
+}
+
+# Возврат маршрута участнику группы.
+route_up() {
+  local prof_name="$1"
+  validate_profile_name "$prof_name" || return 1
+  local table_id iface
+  table_id="$(read_state "${prof_name}.table")"
+  iface="$(read_state "${prof_name}.iface")"
+  if [ -z "$table_id" ] || [ -z "$iface" ]; then
+    return 1
+  fi
+  if ! ip link show "$iface" >/dev/null 2>&1; then # глушение-обосновано: отсутствие интерфейса означает, что возвращать маршрут некуда
+    return 1
+  fi
+  ip route replace default dev "$iface" table "$table_id" 2>/dev/null || true # глушение-обосновано: маршрут мог остаться от предыдущего применения
+  local has_ipv6
+  has_ipv6="$(read_state "${prof_name}.ipv6")"
+  if [ "$has_ipv6" = "1" ]; then
+    ip -6 route replace default dev "$iface" table "$table_id" 2>/dev/null || true # глушение-обосновано: см. выше
+  fi
+  rm -f "$RUN_DIR/${prof_name}.routedown" 2>/dev/null # глушение-обосновано: маркера может не быть
+  log_i "[$prof_name] Маршрут возвращен: участник снова принимает трафик группы."
+  return 0
+}
+
+# Перевод KillSwitch в режим блокировки на время отсутствия туннеля.
+# Смысл функции: при потере туннеля защита обязана усиливаться, а не сниматься.
+# Прежняя редакция удаляла цепочку REJECT внутри stop_profile, поэтому после
+# исчерпания попыток восстановления трафик приложений уходил в открытую сеть -
+# ровно в том сценарии, ради которого KillSwitch включают.
+awg_killswitch_lockdown() {
+  local prof_name="$1"
+  local ch_kill="AWG_K_${prof_name}"
+  local opts_file="$PROFILES_DIR/${prof_name}.json"
+  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
+
+  local killswitch
+  killswitch="$(read_state "${prof_name}.killswitch")"
+  [ -n "$killswitch" ] || killswitch="$(get_opt_val "$opts_file" "killswitch" "false")"
+  if [ "$killswitch" != "true" ] && [ "$killswitch" != "1" ]; then
+    return 1
+  fi
+
+  local mode uids lan_bypass uid
+  mode="$(read_state "${prof_name}.mode")"
+  [ -n "$mode" ] || mode="$(cat "$STATE_DIR/${prof_name}.mode" 2>/dev/null)" # глушение-обосновано: снимка нет до первого успешного применения правил
+  [ -n "$mode" ] || mode="$(get_opt_val "$opts_file" "routing_mode" "include_apps")"
+  uids="$(read_state "${prof_name}.uids")"
+  # После перезагрузки каталог run очищен, а менеджер пакетов на стадии
+  # post-fs-data еще не работает: берется снимок прошлого применения.
+  [ -n "$uids" ] || uids="$(cat "$STATE_DIR/${prof_name}.uids" 2>/dev/null)" # глушение-обосновано: снимка нет до первого успешного применения правил
+  [ -n "$uids" ] || uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)" # глушение-обосновано: на ранней стадии загрузки резолв недоступен, случай обработан ниже
+  lan_bypass="$(get_opt_val "$opts_file" "lan_bypass" "true")"
+
+  if ! iptables -w 2 -t filter -N "$ch_kill" 2>/dev/null; then # глушение-обосновано: цепочка уже создана, случай обрабатывается следующей строкой
+    iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || return 1 # глушение-обосновано: невозможность очистить цепочку означает отказ блокировки и возвращается вызывающему
+  fi
+  ensure_jump filter AWG_FILTER "$ch_kill"
+
+  if [ "$mode" = "include_apps" ]; then
+    if [ -z "$uids" ]; then
+      log_e "[$prof_name] KillSwitch не установлен: список UID приложений неизвестен."
+      return 1
+    fi
+    for uid in $uids; do
+      [ -z "$uid" ] && continue
+      iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 127.0.0.0/8 -j ACCEPT
+      if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+        iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 10.0.0.0/8 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 172.16.0.0/12 -j ACCEPT
+        iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -d 192.168.0.0/16 -j ACCEPT
+      fi
+      iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -j REJECT --reject-with icmp-port-unreachable
+    done
+  else
+    # Режимы полного туннеля: блокируется весь исходящий трафик, кроме
+    # локального, локальных подсетей и явно исключенных приложений.
+    iptables -w 2 -t filter -A "$ch_kill" -d 127.0.0.0/8 -j ACCEPT
+    if [ "$lan_bypass" = "true" ] || [ "$lan_bypass" = "1" ]; then
+      iptables -w 2 -t filter -A "$ch_kill" -d 10.0.0.0/8 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -d 172.16.0.0/12 -j ACCEPT
+      iptables -w 2 -t filter -A "$ch_kill" -d 192.168.0.0/16 -j ACCEPT
+    fi
+    if [ "$mode" = "exclude_apps" ]; then
+      for uid in $uids; do
+        [ -z "$uid" ] && continue
+        iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner "$uid" -j ACCEPT
+      done
+    fi
+    # Процессы root сохраняют доступ: без них туннель не сможет подняться
+    # заново, и блокировка стала бы необратимой без перезагрузки.
+    iptables -w 2 -t filter -A "$ch_kill" -m owner --uid-owner 0 -j ACCEPT
+    iptables -w 2 -t filter -A "$ch_kill" -j REJECT --reject-with icmp-port-unreachable
+  fi
+
+  write_state "${prof_name}.locked" "1"
+  log_w "[$prof_name] KillSwitch: туннель недоступен, трафик приложений заблокирован."
+  return 0
+}
+
+# Снятие блокировки KillSwitch. Вызывается только по явному решению
+# пользователя (stop, disable, cleanup) и при уходе в доверенную сеть.
+awg_killswitch_release() {
+  local prof_name="$1"
+  local ch_kill="AWG_K_${prof_name}"
+  iptables -w 2 -t filter -D AWG_FILTER -j "$ch_kill" 2>/dev/null || true # глушение-обосновано: ссылки на цепочку может не быть
+  iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  iptables -w 2 -t filter -X "$ch_kill" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  rm -f "$RUN_DIR/${prof_name}.locked" 2>/dev/null # глушение-обосновано: маркера может не быть
+}
+
+# Остановка профиля и безопасная очистка правил.
+# Второй аргумент управляет судьбой KillSwitch:
+#   --release  снять блокировку (явное решение пользователя, уход в доверенную
+#              сеть, полная очистка);
+#   без флага  при включенном KillSwitch перевести цепочку профиля в режим
+#              блокировки, потому что туннель пропал не по воле пользователя.
 stop_profile() {
   local prof_name="$1"
+  local release_flag="$2"
   log_i "Остановка профиля: $prof_name..."
 
-  local iface
-  iface="$(cat "$RUN_DIR/${prof_name}.iface" 2>/dev/null)"
-  local table_id
-  table_id="$(cat "$RUN_DIR/${prof_name}.table" 2>/dev/null)"
-  local fwmark
-  fwmark="$(cat "$RUN_DIR/${prof_name}.mark" 2>/dev/null)"
+  local iface table_id fwmark
+  iface="$(read_state "${prof_name}.iface")"
+  table_id="$(read_state "${prof_name}.table")"
+  fwmark="$(read_state "${prof_name}.mark")"
 
   if [ -z "$iface" ] && [ -f "$RUN_DIR/${prof_name}.pid" ]; then
     iface="$prof_name"
   fi
 
-  # 1. Очистка правил iptables для этого профиля
+  # 1. Очистка правил маркировки и DNS. Цепочка KillSwitch обрабатывается
+  # отдельно ниже: ее судьба зависит от причины остановки.
   local ch_mangle="AWG_M_${prof_name}"
   local ch_nat="AWG_N_${prof_name}"
-  local ch_kill="AWG_K_${prof_name}"
 
-  iptables -w 2 -t mangle -D AWG_MANGLE -j "$ch_mangle" 2>/dev/null || true
-  iptables -w 2 -t mangle -F "$ch_mangle" 2>/dev/null || true
-  iptables -w 2 -t mangle -X "$ch_mangle" 2>/dev/null || true
+  iptables -w 2 -t mangle -D AWG_MANGLE -j "$ch_mangle" 2>/dev/null || true # глушение-обосновано: ссылки на цепочку может не быть
+  iptables -w 2 -t mangle -F "$ch_mangle" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  iptables -w 2 -t mangle -X "$ch_mangle" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
 
-  iptables -w 2 -t nat -D AWG_NAT -j "$ch_nat" 2>/dev/null || true
-  iptables -w 2 -t nat -F "$ch_nat" 2>/dev/null || true
-  iptables -w 2 -t nat -X "$ch_nat" 2>/dev/null || true
+  iptables -w 2 -t nat -D AWG_NAT -j "$ch_nat" 2>/dev/null || true # глушение-обосновано: ссылки на цепочку может не быть
+  iptables -w 2 -t nat -F "$ch_nat" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  iptables -w 2 -t nat -X "$ch_nat" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
 
-  iptables -w 2 -t filter -D AWG_FILTER -j "$ch_kill" 2>/dev/null || true
-  iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || true
-  iptables -w 2 -t filter -X "$ch_kill" 2>/dev/null || true
-
-  local opts_file="$PROFILES_DIR/${prof_name}.json"
-  [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
-  local uids=""
-  if [ -f "$opts_file" ]; then
-    uids="$("$BIN_DIR/awg" resolve-profile "$opts_file" 2>/dev/null)"
-  fi
-  for uid in $uids; do
-    [ -z "$uid" ] && continue
-    ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
-    ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
-    ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-    ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
-    ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-    ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
-  done
-
-  # 2. Очистка ip rule и ip route
+  # 2. Очистка правил маршрутизации по снимку прошлого применения.
+  awg_drop_uid_rules "$prof_name" "$table_id"
   if [ -n "$fwmark" ]; then
-    while ip rule del fwmark "$fwmark" 2>/dev/null; do :; done
-    while ip -6 rule del fwmark "$fwmark" 2>/dev/null; do :; done
+    ip_rule_del_all fwmark "${fwmark}/${AWG_MARK_MASK}"
   fi
   if [ -n "$table_id" ]; then
-    while ip rule del table "$table_id" 2>/dev/null; do :; done
-    while ip -6 rule del table "$table_id" 2>/dev/null; do :; done
-    ip route flush table "$table_id" 2>/dev/null || true
-    ip -6 route flush table "$table_id" 2>/dev/null || true
+    ip_rule_del_all table "$table_id"
+    ip route flush table "$table_id" 2>/dev/null || true # глушение-обосновано: таблица может быть уже пуста
+    ip -6 route flush table "$table_id" 2>/dev/null || true # глушение-обосновано: таблица может быть уже пуста
   fi
 
   # 3. Остановка процесса amneziawg-go
-  iptables -w 2 -D INPUT -m comment --comment "AWG_SLEEP_${prof_name}" -j DROP 2>/dev/null || true
   if [ -n "$iface" ]; then
-    local lport="$(WG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" show "$iface" listen-port 2>/dev/null)"
-    [ -n "$lport" ] && iptables -w 2 -D INPUT -p udp --dport "$lport" -j DROP -m comment --comment "AWG_SLEEP_${prof_name}" 2>/dev/null || true
     local pid
-    pid="$(cat "$RUN_DIR/${iface}.pid" 2>/dev/null)"
+    pid="$(read_state "${iface}.pid")"
     if [ -n "$pid" ]; then
-      kill -TERM "$pid" 2>/dev/null || true
+      kill -TERM "$pid" 2>/dev/null || true # глушение-обосновано: процесс мог завершиться сам
       sleep 0.2
-      kill -9 "$pid" 2>/dev/null || true
+      kill -9 "$pid" 2>/dev/null || true # глушение-обосновано: процесс уже завершен предыдущим сигналом
     fi
-    ip link del dev "$iface" 2>/dev/null || true
-    rm -f "$RUN_DIR/${iface}.pid" "$RUN_DIR/${iface}.profile" "$RUN_DIR/${iface}.sock" "$TMP_DIR/${iface}.sock" "/dev/wireguard/${iface}.sock" 2>/dev/null || true
+    ip link del dev "$iface" 2>/dev/null || true # глушение-обосновано: интерфейс исчезает вместе с процессом демона
+    rm -f "$RUN_DIR/${iface}.pid" "$RUN_DIR/${iface}.profile" "$RUN_DIR/${iface}.sock" \
+          "$TMP_DIR/${iface}.sock" "/dev/wireguard/${iface}.sock" 2>/dev/null # глушение-обосновано: часть файлов удаляется самим демоном при выходе
   fi
 
-  rm -f "$RUN_DIR/${prof_name}.iface" "$RUN_DIR/${prof_name}.table" "$RUN_DIR/${prof_name}.mark" "$RUN_DIR/${prof_name}.prio" "$RUN_DIR/${prof_name}.pid" "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
-  log_i "[$prof_name] Профиль полностью остановлен и очищен."
+  # 4. KillSwitch. Блокировка ставится ровно тогда, когда туннель пропал
+  # не по воле пользователя, и снимается только по явному решению.
+  if [ "$release_flag" = "--release" ]; then
+    awg_killswitch_release "$prof_name"
+  else
+    awg_killswitch_lockdown "$prof_name" || awg_killswitch_release "$prof_name"
+  fi
+
+  rm -f "$RUN_DIR/${prof_name}.iface" "$RUN_DIR/${prof_name}.table" "$RUN_DIR/${prof_name}.mark" \
+        "$RUN_DIR/${prof_name}.prio" "$RUN_DIR/${prof_name}.pid" "$RUN_DIR/${prof_name}.paused" \
+        "$RUN_DIR/${prof_name}.rulesig" "$RUN_DIR/${prof_name}.ipv6" 2>/dev/null # глушение-обосновано: часть файлов состояния могла не создаваться
+  log_i "[$prof_name] Профиль остановлен."
 }
 
-# Приостановка профиля (полная остановка туннеля на время сна в доверенной сети)
+# Приостановка профиля на время сна в доверенной сети.
+# В доверенной сети трафик обязан идти напрямую, поэтому блокировка снимается.
 pause_profile() {
   local prof_name="$1"
   local cur_ssid="$2"
@@ -633,64 +1062,57 @@ pause_profile() {
   [ -z "$cur_ssid" ] && cur_ssid="Wi-Fi"
 
   log_i "[$prof_name] Перевод в режим сна (остановка туннеля для сети '$cur_ssid')..."
-  stop_profile "$prof_name"
-  echo "$cur_ssid" > "$RUN_DIR/${prof_name}.paused"
+  stop_profile "$prof_name" --release
+  write_state "${prof_name}.paused" "$cur_ssid"
 }
 
 # Пробуждение профиля (полный запуск туннеля при выходе из доверенной сети)
 resume_profile() {
   local prof_name="$1"
   log_i "[$prof_name] Пробуждение из режима сна (запуск туннеля)..."
-  rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
+  rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null # глушение-обосновано: маркера паузы может не быть
   start_profile "$prof_name" --force
 }
-# Синхронизация правил и умная пауза в доверенных сетях с защищенным файловым локом
+
+# Синхронизация правил и умная пауза в доверенных сетях.
+# Лок общий для всех операций смены состояния (acquire_lock), поэтому
+# синхронизация больше не может пересечься с запуском профилей из service.sh.
 sync_rules() {
-  local lock_dir="$RUN_DIR/.sync.lock"
-  if ! mkdir "$lock_dir" 2>/dev/null; then
-    # Проверка на зависший лок старше 15 секунд
-    if [ -d "$lock_dir" ]; then
-      local now="$(date +%s)"
-      local mtime="$(stat -c %Y "$lock_dir" 2>/dev/null || echo "$now")"
-      if [ $((now - mtime)) -gt 15 ]; then
-        rmdir "$lock_dir" 2>/dev/null || rm -rf "$lock_dir" 2>/dev/null
-        mkdir "$lock_dir" 2>/dev/null || return 0
-      else
-        return 0
-      fi
-    else
-      return 0
-    fi
+  if [ "$LOCK_HELD" != "1" ]; then
+    acquire_lock 50 || return 0
   fi
-  trap 'rmdir "$RUN_DIR/.sync.lock" 2>/dev/null' EXIT INT TERM
 
   init_iptables_root
-  local cur_ssid="$(get_current_ssid)"
+  local cur_ssid
+  cur_ssid="$(get_current_ssid)"
 
+  local c p opts en trusted
   for c in "$PROFILES_DIR"/*.conf; do
     [ -f "$c" ] || continue
-    local p="$(basename "$c" .conf)"
-    local opts="$PROFILES_DIR/${p}.json"
+    p="$(basename "$c" .conf)"
+    validate_profile_name "$p" || continue
+    opts="$PROFILES_DIR/${p}.json"
     [ -f "$opts" ] || opts="$PROFILES_DIR/${p}.opts"
-    local en="$(get_opt_val "$opts" "enabled" "false")"
-    local trusted="$(get_opt_val "$opts" "trusted_wifi" "")"
+    en="$(get_opt_val "$opts" "enabled" "false")"
+    trusted="$(get_opt_val "$opts" "trusted_wifi" "")"
 
     if [ "$en" != "true" ] && [ "$en" != "1" ]; then
       continue
     fi
 
     # Профиль отключен watchdog-ом после исчерпания попыток восстановления.
-    # Приложения работают напрямую до смены сети или ручного запуска.
+    # При включенном KillSwitch блокировка при этом остается в силе.
     if [ -f "$RUN_DIR/${p}.failed" ]; then
       continue
     fi
 
     # Проверка живого состояния интерфейса и демона в ядре
     local is_running=0
-    local cur_ifname="$(cat "$RUN_DIR/${p}.iface" 2>/dev/null)"
+    local cur_ifname d_pid
+    cur_ifname="$(read_state "${p}.iface")"
     if [ -n "$cur_ifname" ] && ip link show "$cur_ifname" >/dev/null 2>&1; then
-      local d_pid="$(cat "$RUN_DIR/${cur_ifname}.pid" 2>/dev/null)"
-      if [ -n "$d_pid" ] && kill -0 "$d_pid" 2>/dev/null; then
+      d_pid="$(read_state "${cur_ifname}.pid")"
+      if [ -n "$d_pid" ] && kill -0 "$d_pid" 2>/dev/null; then # глушение-обосновано: kill -0 это проверка существования процесса, ее отрицательный код и есть искомый ответ
         is_running=1
       fi
     fi
@@ -698,7 +1120,7 @@ sync_rules() {
     [ -f "$RUN_DIR/${p}.paused" ] && is_paused=1
 
     if [ -n "$cur_ssid" ] && is_ssid_trusted "$cur_ssid" "$trusted"; then
-      # Должен спать в доверенной сети
+      # Доверенная сеть: туннель спит, трафик идет напрямую.
       if [ $is_paused -eq 0 ] || [ $is_running -eq 1 ]; then
         pause_profile "$p" "$cur_ssid"
       fi
@@ -708,15 +1130,19 @@ sync_rules() {
         log_i "[$p] Сеть сменилась (актуальный SSID: '${cur_ssid:-LTE/Other}'). Пробуждение туннеля..."
         resume_profile "$p"
       elif [ $is_running -eq 0 ]; then
-        start_profile "$p" 2>/dev/null || true
+        start_profile "$p"
       else
-        # Профиль активен: сброс роуминга, если эндпоинт остался локальным IP роутера
-        if [ -n "$cur_ifname" ] && [ -f "$c" ]; then
-          local cur_ep="$("$BIN_DIR/awg" show "$cur_ifname" endpoints 2>/dev/null | awk '{print $2}')"
+        # Профиль активен: сброс роуминга, если эндпоинт залип на локальном
+        # адресе роутера доверенной сети. Формат endpoints - "<ключ>\t<адрес>",
+        # поэтому берется второе поле первой строки.
+        if [ -n "$cur_ifname" ]; then
+          local cur_ep
+          cur_ep="$(WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" show "$cur_ifname" endpoints 2>/dev/null | awk 'NR==1{print $2}')" # глушение-обосновано: отсутствие пиров означает пустой эндпоинт, случай обрабатывается ниже
           case "$cur_ep" in
             192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
-              log_w "[$p] Обнаружен локальный эндпоинт ($cur_ep) вне доверенной сети! Сброс к $c..."
-              WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$cur_ifname" "$c" >/dev/null 2>&1 || true
+              log_w "[$p] Локальный эндпоинт ($cur_ep) вне доверенной сети. Сброс конфигурации из $c..."
+              WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR" "$BIN_DIR/awg" setconf "$cur_ifname" "$c" >/dev/null 2>&1 || \
+                log_e "[$p] Сброс эндпоинта не выполнен: awg setconf вернул ошибку."
               ;;
           esac
         fi
@@ -725,55 +1151,72 @@ sync_rules() {
     fi
   done
 
-  rmdir "$lock_dir" 2>/dev/null || true
+  release_lock
 }
 
-# Полная очистка всех профилей и модульных цепочек iptables
+# Полная очистка: все профили, цепочки модуля и системные параметры,
+# которые модуль менял. Единственная точка очистки - uninstall.sh вызывает
+# именно ее, а не собственную копию списка правил.
 cleanup_all() {
   log_i "Полная очистка всех профилей и правил AmneziaWG..."
 
+  local f p
   for f in "$RUN_DIR"/*.profile; do
     [ -f "$f" ] || continue
-    local p
-    p="$(cat "$f" 2>/dev/null)"
-    [ -n "$p" ] && stop_profile "$p"
+    p="$(cat "$f" 2>/dev/null)" # глушение-обосновано: файл может исчезнуть между листингом и чтением
+    [ -n "$p" ] && stop_profile "$p" --release
+  done
+  # Профили, не успевшие записать .profile, но оставившие цепочку KillSwitch.
+  for f in "$PROFILES_DIR"/*.conf; do
+    [ -f "$f" ] || continue
+    p="$(basename "$f" .conf)"
+    awg_killswitch_release "$p"
   done
 
-  killall -9 amneziawg-go 2>/dev/null || true
+  killall -9 amneziawg-go 2>/dev/null || true # глушение-обосновано: живых процессов демона может не быть
 
-  iptables -w 2 -t mangle -D OUTPUT -j AWG_MANGLE 2>/dev/null || true
-  iptables -w 2 -t mangle -D PREROUTING -j AWG_MANGLE 2>/dev/null || true
-  iptables -w 2 -t mangle -F AWG_MANGLE 2>/dev/null || true
-  iptables -w 2 -t mangle -X AWG_MANGLE 2>/dev/null || true
+  local tbl root chain
+  for tbl in "mangle:AWG_MANGLE" "nat:AWG_NAT" "filter:AWG_FILTER"; do
+    t="${tbl%%:*}"
+    chain="${tbl#*:}"
+    for root in OUTPUT PREROUTING POSTROUTING; do
+      iptables -w 2 -t "$t" -D "$root" -j "$chain" 2>/dev/null || true # глушение-обосновано: ссылки в этой корневой цепочке может не быть
+    done
+    iptables -w 2 -t "$t" -F "$chain" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+    iptables -w 2 -t "$t" -X "$chain" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  done
 
-  iptables -w 2 -t nat -D OUTPUT -j AWG_NAT 2>/dev/null || true
-  iptables -w 2 -t nat -D PREROUTING -j AWG_NAT 2>/dev/null || true
-  iptables -w 2 -t nat -F AWG_NAT 2>/dev/null || true
-  iptables -w 2 -t nat -X AWG_NAT 2>/dev/null || true
+  iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true # глушение-обосновано: правила может не быть
 
-  iptables -w 2 -t filter -D OUTPUT -j AWG_FILTER 2>/dev/null || true
-  iptables -w 2 -t filter -F AWG_FILTER 2>/dev/null || true
-  iptables -w 2 -t filter -X AWG_FILTER 2>/dev/null || true
+  # Снятие воздействий на систему за пределами собственных цепочек.
+  awg_mss_clamp del
+  awg_nfqws_bypass del
 
-  iptables -w 2 -t nat -D POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true
+  # Возврат rp_filter к значению, которое было до установки модуля.
+  local k orig
+  for k in all default; do
+    orig="$(cat "$STATE_DIR/rp_filter.$k" 2>/dev/null)" # глушение-обосновано: снимка нет, если модуль ни разу не менял параметр
+    if [ -n "$orig" ]; then
+      sysctl -w "net.ipv4.conf.$k.rp_filter=$orig" >/dev/null 2>&1 || \
+        log_w "Не удалось вернуть net.ipv4.conf.$k.rp_filter в значение $orig."
+      rm -f "$STATE_DIR/rp_filter.$k" 2>/dev/null # глушение-обосновано: снимок больше не нужен
+    fi
+  done
 
-  while ip rule del table main pref 8990 2>/dev/null; do :; done
-  while ip -6 rule del table main pref 8990 2>/dev/null; do :; done
-  while ip rule del pref 9000 2>/dev/null; do :; done
-  while ip -6 rule del pref 9000 2>/dev/null; do :; done
-  while ip rule del table main pref 9001 2>/dev/null; do :; done
-  while ip -6 rule del table main pref 9001 2>/dev/null; do :; done
-  while ip rule del pref 9010 2>/dev/null; do :; done
-  while ip -6 rule del pref 9010 2>/dev/null; do :; done
+  ip_rule_del_all table main pref 8990
+  ip_rule_del_all table main pref 9001
+  ip_rule_del_all pref 9000
+  ip_rule_del_all pref 9010
 
   local t=201
   while [ $t -le 232 ]; do
-    ip route flush table "$t" 2>/dev/null || true
-    ip -6 route flush table "$t" 2>/dev/null || true
+    ip_rule_del_all table "$t"
+    ip route flush table "$t" 2>/dev/null || true # глушение-обосновано: таблица может быть уже пуста
+    ip -6 route flush table "$t" 2>/dev/null || true # глушение-обосновано: таблица может быть уже пуста
     t=$((t + 1))
   done
 
-  rm -rf "$RUN_DIR"/* "$TMP_DIR"/* "/dev/wireguard"/awg*.sock 2>/dev/null || true
+  rm -rf "$RUN_DIR"/* "$TMP_DIR"/* "/dev/wireguard"/awg*.sock 2>/dev/null # глушение-обосновано: каталоги уже могут быть пусты
   log_i "Полная очистка завершена."
 }
 
@@ -783,58 +1226,111 @@ show_status() {
   WG_UAPI_DIR="$RUN_DIR" AMNEZIAWG_UAPI_DIR="$RUN_DIR" "$BIN_DIR/awg" status "$format"
 }
 
+# Запись флага автозапуска в профиль. Раньше здесь стоял sed -i по
+# регулярному выражению: он зависел от форматирования JSON и молча
+# не срабатывал на файле, записанном в другом стиле.
+set_enabled() {
+  local prof_name="$1"
+  local value="$2"
+  local json="$PROFILES_DIR/${prof_name}.json"
+  [ -f "$json" ] || return 0
+  "$BIN_DIR/awg" set-opt "$json" "enabled" "$value" || \
+    log_e "[$prof_name] Не удалось записать enabled=$value в $json."
+}
+
+# Перечисление включенных профилей
+list_enabled() {
+  local c p opts en
+  for c in "$PROFILES_DIR"/*.conf; do
+    [ -f "$c" ] || continue
+    p="$(basename "$c" .conf)"
+    validate_profile_name "$p" || continue
+    opts="$PROFILES_DIR/${p}.json"
+    [ -f "$opts" ] || opts="$PROFILES_DIR/${p}.opts"
+    en="$(get_opt_val "$opts" "enabled" "false")"
+    if [ "$en" = "true" ] || [ "$en" = "1" ]; then
+      printf '%s\n' "$p"
+    fi
+  done
+}
+
+# Удаление профиля целиком. Раньше это делал WebUI строкой
+# rm -f .../${name}* - шаблон без точки задевал соседние профили с общим
+# префиксом имени вместе с их приватными ключами.
+delete_profile() {
+  local prof_name="$1"
+  validate_profile_name "$prof_name" || return 1
+  stop_profile "$prof_name" --release
+  rm -f "$PROFILES_DIR/${prof_name}.conf" \
+        "$PROFILES_DIR/${prof_name}.json" \
+        "$PROFILES_DIR/${prof_name}.opts" 2>/dev/null # глушение-обосновано: часть файлов профиля может отсутствовать
+  rm -f "$RUN_DIR/${prof_name}.uids" "$RUN_DIR/${prof_name}.mode" \
+        "$RUN_DIR/${prof_name}.killswitch" "$RUN_DIR/${prof_name}.failed" \
+        "$RUN_DIR/${prof_name}.fails" "$RUN_DIR/${prof_name}.nextchk" 2>/dev/null # глушение-обосновано: файлы состояния создаются не для каждого профиля
+  rm -f "$STATE_DIR/${prof_name}.uids" "$STATE_DIR/${prof_name}.mode" 2>/dev/null # глушение-обосновано: снимков может не быть, если профиль ни разу не запускался
+  log_i "[$prof_name] Профиль удален."
+}
+
+# Сброс счетчиков неудачных попыток восстановления.
+reset_failures() {
+  local target="$1"
+  if [ -z "$target" ] || [ "$target" = "all" ]; then
+    rm -f "$RUN_DIR"/*.failed "$RUN_DIR"/*.fails "$RUN_DIR"/*.nextchk 2>/dev/null # глушение-обосновано: счетчиков может не быть ни у одного профиля
+    log_i "Счетчики неудачных попыток сброшены для всех профилей."
+  else
+    rm -f "$RUN_DIR/${target}.failed" "$RUN_DIR/${target}.fails" \
+          "$RUN_DIR/${target}.nextchk" 2>/dev/null # глушение-обосновано: у профиля может не быть ни одной неудачной попытки
+    log_i "[$target] Счетчики неудачных попыток сброшены."
+  fi
+}
+
 case "$1" in
-  start)
+  start|enable)
+    acquire_lock || { log_e "Не удалось получить блокировку состояния, операция start отменена."; exit 1; }
     # Явный запуск снимает блокировку watchdog: пользователь решил попробовать снова
-    "$0" reset-failures "${2:-all}" >/dev/null 2>&1
+    reset_failures "${2:-all}"
     if [ -z "$2" ] || [ "$2" = "all" ]; then
-      # Обработка только канонических .conf файлов
-      for c in "$PROFILES_DIR"/*.conf; do
-        [ -f "$c" ] || continue
-        p="$(basename "$c" .conf)"
-        opts="$PROFILES_DIR/${p}.json"
-        [ -f "$opts" ] || opts="$PROFILES_DIR/${p}.opts"
-        en="$(get_opt_val "$opts" "enabled" "false")"
-        if [ "$en" = "true" ] || [ "$en" = "1" ]; then
-          start_profile "$p"
-        fi
+      for prof in $(list_enabled); do
+        start_profile "$prof"
       done
     else
-      local json="$PROFILES_DIR/${2}.json"
-      if [ -f "$json" ]; then
-        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*false/"enabled": true/g' "$json"
-      fi
+      set_enabled "$2" true
       start_profile "$2"
-    fi
-    ;;
-  enable)
-    "$0" reset-failures "${2:-all}" >/dev/null 2>&1
-    if [ -n "$2" ] && [ "$2" != "all" ]; then
-      local json="$PROFILES_DIR/${2}.json"
-      if [ -f "$json" ]; then
-        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*false/"enabled": true/g' "$json"
-      fi
-      start_profile "$2"
-    else
-      "$0" start all
     fi
     ;;
   stop|disable|stop-all)
+    acquire_lock || { log_e "Не удалось получить блокировку состояния, операция stop отменена."; exit 1; }
     if [ -z "$2" ] || [ "$2" = "all" ] || [ "$1" = "stop-all" ]; then
       cleanup_all
     else
-      local json="$PROFILES_DIR/${2}.json"
-      if [ -f "$json" ]; then
-        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*true/"enabled": false/g' "$json"
-      fi
+      set_enabled "$2" false
+      # Остановка по решению пользователя: блокировка KillSwitch снимается,
+      # трафик приложений возвращается в обычную сеть.
+      stop_profile "$2" --release
+    fi
+    ;;
+  fail)
+    # Остановка по решению watchdog: туннель не восстановлен. KillSwitch,
+    # если он включен в профиле, остается в режиме блокировки.
+    acquire_lock || exit 1
+    if [ -n "$2" ]; then
       stop_profile "$2"
     fi
     ;;
+  delete)
+    acquire_lock || { log_e "Не удалось получить блокировку состояния, удаление отменено."; exit 1; }
+    if [ -n "$2" ]; then
+      delete_profile "$2"
+    fi
+    ;;
   restart)
+    acquire_lock || { log_e "Не удалось получить блокировку состояния, перезапуск отменен."; exit 1; }
     if [ -z "$2" ] || [ "$2" = "all" ]; then
       cleanup_all
       sleep 0.5
-      "$0" start all
+      for prof in $(list_enabled); do
+        start_profile "$prof"
+      done
     else
       stop_profile "$2"
       sleep 0.5
@@ -844,13 +1340,46 @@ case "$1" in
   sync-rules)
     sync_rules
     ;;
+  route-down)
+    # Вызывается проверкой живости: участник группы признан нездоровым.
+    if [ -n "$2" ]; then
+      route_down "$2"
+    fi
+    ;;
+  route-up)
+    if [ -n "$2" ]; then
+      route_up "$2"
+    fi
+    ;;
+  group-check)
+    "$BIN_DIR/awg" group-check "$GROUPS_FILE" "$PROFILES_DIR"
+    ;;
+  group-members)
+    if [ -n "$2" ]; then
+      "$BIN_DIR/awg" group-members "$GROUPS_FILE" "$2"
+    else
+      "$BIN_DIR/awg" group-list "$GROUPS_FILE"
+    fi
+    ;;
+  group-state)
+    # Состав групп с рантайм-состоянием участников для WebUI.
+    "$BIN_DIR/awg" group-state "$GROUPS_FILE" "$RUN_DIR"
+    ;;
+  group-file)
+    # Путь к файлу групп: WebUI пишет его напрямую и не должен знать
+    # расположение каталога данных.
+    printf '%s
+' "$GROUPS_FILE"
+    ;;
   pause)
     if [ -n "$2" ]; then
+      acquire_lock || exit 1
       pause_profile "$2"
     fi
     ;;
   resume)
     if [ -n "$2" ]; then
+      acquire_lock || exit 1
       resume_profile "$2"
     fi
     ;;
@@ -866,20 +1395,15 @@ case "$1" in
   check-conflicts)
     "$BIN_DIR/awg" audit-conflicts "$PROFILES_DIR"
     ;;
+  init-profiles)
+    "$BIN_DIR/awg" init-profiles "$PROFILES_DIR"
+    ;;
   cleanup)
+    acquire_lock || { log_e "Не удалось получить блокировку состояния, очистка отменена."; exit 1; }
     cleanup_all
     ;;
   list-enabled)
-    for c in "$PROFILES_DIR"/*.conf; do
-      [ -f "$c" ] || continue
-      p="$(basename "$c" .conf)"
-      opts="$PROFILES_DIR/${p}.json"
-      [ -f "$opts" ] || opts="$PROFILES_DIR/${p}.opts"
-      en="$(get_opt_val "$opts" "enabled" "false")"
-      if [ "$en" = "true" ] || [ "$en" = "1" ]; then
-        printf '%s\n' "$p"
-      fi
-    done
+    list_enabled
     ;;
   get-opt-val)
     get_opt_val "$2" "$3" "$4"
@@ -889,18 +1413,15 @@ case "$1" in
     log_msg "WATCHDOG" "$*"
     ;;
   reset-failures)
-    if [ -z "$2" ] || [ "$2" = "all" ]; then
-      rm -f "$RUN_DIR"/*.failed "$RUN_DIR"/*.fails "$RUN_DIR"/*.nextchk \
-            "$RUN_DIR"/*.rxmark "$RUN_DIR"/*.txmark 2>/dev/null || true
-      log_i "Счетчики неудачных попыток сброшены для всех профилей."
-    else
-      rm -f "$RUN_DIR/${2}.failed" "$RUN_DIR/${2}.fails" "$RUN_DIR/${2}.nextchk" \
-            "$RUN_DIR/${2}.rxmark" "$RUN_DIR/${2}.txmark" 2>/dev/null || true
-      log_i "[$2] Счетчики неудачных попыток сброшены."
-    fi
+    reset_failures "${2:-all}"
     ;;
   *)
-    echo "Использование: awg-controller {start [prof|all]|stop [prof|all]|restart [prof|all]|sync-rules|status [json]|list-apps|check-conflicts|cleanup|reset-failures [prof|all]}"
+    echo "Использование: awg-controller {start|enable [prof|all]|stop|disable [prof|all]|fail <prof>|"
+    echo "                               delete <prof>|restart [prof|all]|sync-rules|pause <prof>|resume <prof>|"
+    echo "                               route-down <prof>|route-up <prof>|group-check|group-members [группа]|"
+    echo "                               group-state|group-file|"
+    echo "                               status [json]|list-apps|list-enabled|check-conflicts|init-profiles|"
+    echo "                               cleanup|reset-failures [prof|all]}"
     exit 1
     ;;
 esac

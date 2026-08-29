@@ -30,16 +30,26 @@ case "$ARCH" in
     ;;
 esac
 
-mkdir -p "$MODPATH/bin" 2>/dev/null
-if [ -d "$SRC_DIR" ]; then
-  ui_print "- Установка исполняемых файлов из $SRC_DIR..."
-  cp -f "$SRC_DIR"/amneziawg-go "$MODPATH/bin/" 2>/dev/null
-  cp -f "$SRC_DIR"/awg "$MODPATH/bin/" 2>/dev/null
-else
-  ui_print "! Каталог скомпилированных файлов $SRC_DIR не найден, используем дефолтные..."
+mkdir -p "$MODPATH/bin" 2>/dev/null # глушение-обосновано: каталог уже есть в архиве модуля
+if [ ! -d "$SRC_DIR" ]; then
+  ui_print "! Каталог бинарных файлов $SRC_DIR отсутствует в архиве."
+  abort "! Установка прервана: нет исполняемых файлов для архитектуры $ARCH."
 fi
 
-rm -rf "$MODPATH/binaries" 2>/dev/null
+# Неудачное копирование означает неработоспособный модуль, поэтому ошибка
+# не подавляется, а прерывает установку. Прежняя редакция гасила ее в
+# /dev/null и завершалась сообщением об успехе с пустым каталогом bin.
+ui_print "- Установка исполняемых файлов из $SRC_DIR..."
+for f in amneziawg-go awg; do
+  if ! cp -f "$SRC_DIR/$f" "$MODPATH/bin/$f"; then
+    abort "! Установка прервана: не удалось скопировать $f."
+  fi
+  if [ ! -s "$MODPATH/bin/$f" ]; then
+    abort "! Установка прервана: файл $f скопирован пустым."
+  fi
+done
+
+rm -rf "$MODPATH/binaries" 2>/dev/null # глушение-обосновано: каталог удаляется после копирования и мог отсутствовать при повторном запуске
 
 ui_print "- Настройка прав доступа (0755)..."
 set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
@@ -50,8 +60,19 @@ set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 
 DATA_DIR="/data/adb/amneziawg"
-mkdir -p "$DATA_DIR/profiles" "$DATA_DIR/run" "$DATA_DIR/logs" 2>/dev/null
-chmod 755 "$DATA_DIR" "$DATA_DIR/profiles" "$DATA_DIR/run" "$DATA_DIR/logs" 2>/dev/null
+mkdir -p "$DATA_DIR/profiles" "$DATA_DIR/run" "$DATA_DIR/logs" "$DATA_DIR/state" 2>/dev/null # глушение-обосновано: при обновлении каталоги уже существуют
+chmod 755 "$DATA_DIR" "$DATA_DIR/run" "$DATA_DIR/logs" "$DATA_DIR/state" 2>/dev/null # глушение-обосновано: права уже выставлены прошлой установкой
+# Каталог профилей содержит PrivateKey интерфейсов: доступ только владельцу.
+chmod 700 "$DATA_DIR/profiles" 2>/dev/null # глушение-обосновано: см. выше
+chmod 600 "$DATA_DIR/profiles"/*.conf "$DATA_DIR/profiles"/*.json 2>/dev/null # глушение-обосновано: при первой установке профилей еще нет
+
+# Создание недостающих .conf и .json для конфигураций, положенных в каталог
+# вручную. Раньше это делалось внутри пути чтения (audit-conflicts), который
+# WebUI вызывает каждые несколько секунд.
+if [ -x "$MODPATH/bin/awg" ]; then
+  "$MODPATH/bin/awg" init-profiles "$DATA_DIR/profiles" >/dev/null 2>&1 || \
+    ui_print "! Инициализация профилей не выполнена, каталог пуст или недоступен."
+fi
 
 
 # Горячий перезапуск мониторов: обновление подменяет файлы скриптов под

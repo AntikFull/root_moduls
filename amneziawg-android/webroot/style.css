@@ -651,6 +651,70 @@ nav.m3-nav-bar {
 .m3-app-pkg { font-size: 10px; color: var(--md-sys-color-on-surface-variant); font-family: var(--md-ref-typeface-mono); }
 .m3-apps-loading { padding: 16px; text-align: center; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
 
+/* Группы резервирования */
+.m3-members-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.m3-member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--md-sys-shape-sm);
+  background: var(--md-sys-color-surface-container-high);
+}
+.m3-member-rank {
+  flex: 0 0 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+.m3-member-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m3-badge-warn {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-error);
+}
+.m3-switch-sm { transform: scale(0.8); flex: 0 0 auto; }
+.m3-app-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--md-sys-shape-sm);
+}
+.m3-app-row:hover { background: var(--md-sys-color-surface-container-high); }
+.m3-app-row .m3-app-name { flex: 1 1 auto; }
+.m3-chips-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.m3-chip-x {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 0 0 6px;
+}
+
 /* Snackbar Toast */
 #m3-snackbar {
   position: fixed;

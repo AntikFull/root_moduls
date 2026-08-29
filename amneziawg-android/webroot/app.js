@@ -11,6 +11,13 @@ const STATE = {
   activeTab: 'main'
 };
 
+// Единая точка пути к контроллеру: раньше он был вписан строкой в каждый
+// вызов, и любая правка требовала обхода полутора десятков мест.
+const CTRL = '/data/adb/modules/amneziawg-android/bin/awg-controller';
+const AWG_BIN = '/data/adb/modules/amneziawg-android/bin/awg';
+// Согласовано с AWG_MAX_PROFILE_NAME в awg-controller.
+const MAX_PROFILE_NAME = 22;
+
 let asyncExecSeq = 0;
 let isRefreshing = false;
 let isActionRunning = false;
@@ -21,12 +28,20 @@ function getKsuBridge() {
   return window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk || (typeof ksu !== 'undefined' ? ksu : null);
 }
 
+// Таймауты выполнения команд.
+// Прежняя редакция использовала единые 8 секунд на любую команду, тогда как
+// запуск нескольких профилей штатно занимает дольше: ожидание сокета до 3 с
+// на профиль плюс резолв эндпоинта и контрольный пинг. Команда успевала
+// отработать, но интерфейс уже считал ее провалившейся.
+const SH_TIMEOUT_FAST = 8000;
+const SH_TIMEOUT_LONG = 60000;
+
 // Android Root Shell Wrapper (Compatible with KernelSU / APatch / Magisk)
-function sh(cmd) {
+function sh(cmd, timeoutMs) {
   const k = getKsuBridge();
   if (!k || typeof k.exec !== 'function') {
     console.warn('[No Root Bridge]:', cmd);
-    return Promise.resolve({ code: 0, stdout: '', stderr: 'No root manager bridge' });
+    return Promise.resolve({ code: -1, stdout: '', stderr: 'Мост root-менеджера недоступен' });
   }
 
   return new Promise((resolve) => {
@@ -38,8 +53,8 @@ function sh(cmd) {
       done = true;
       delete window[id];
       delete window['window.' + id];
-      resolve({ code: -1, stdout: '', stderr: 'Exec timeout' });
-    }, 8000);
+      resolve({ code: -1, stdout: '', stderr: 'Превышено время выполнения команды' });
+    }, timeoutMs || SH_TIMEOUT_FAST);
 
     const callbackHandler = (code, stdout, stderr) => {
       if (done) return;
@@ -157,7 +172,7 @@ function copyText(text, successMsg = 'Скопировано!') {
 // External Intent Execution
 function openUrl(url) {
   if (!url) return;
-  sh(`am start -a android.intent.action.VIEW -d "${url}" 2>/dev/null`);
+  sh(`am start -a android.intent.action.VIEW -d "${url}" 2>/dev/null`); // глушение-обосновано: отсутствие подходящего приложения для ссылки не является сбоем модуля
 }
 
 function openChannel() {
@@ -189,6 +204,11 @@ function switchTabByName(tabName) {
   }
   if (tabName === 'main' || tabName === 'profiles') {
     refreshAllData();
+  }
+  if (tabName === 'groups') {
+    // Список профилей нужен для выбора участников, список приложений - для
+    // выбора приложений группы: оба подгружаются при открытии вкладки.
+    refreshAllData().then(loadInstalledApps).then(refreshGroupsTab);
   }
 }
 
@@ -252,6 +272,15 @@ function initEventHandlers() {
   on('btn-master-restart', 'click', restartAll);
   on('btn-master-stop', 'click', stopAll);
   on('btn-add-profile', 'click', () => openProfileModal(null));
+  on('btn-add-group', 'click', () => openGroupModal(null));
+  on('btn-check-groups', 'click', checkGroups);
+  on('btn-group-save', 'click', saveGroup);
+  on('btn-group-cancel', 'click', closeGroupModal);
+  on('btn-group-modal-close', 'click', closeGroupModal);
+  on('grp-app-search', 'input', (e) => {
+    GROUPS_STATE.search = e.target.value || '';
+    renderGroupApps();
+  });
 
   const triggerQrImport = () => {
     const inp = document.getElementById('qr-file-input');
@@ -348,7 +377,7 @@ async function refreshAllData() {
 }
 
 async function loadProfiles() {
-  const combinedCmd = '/data/adb/modules/amneziawg-android/bin/awg-controller check-conflicts; echo "___AWG_DELIM___"; for f in /data/adb/amneziawg/run/*.paused; do [ -f "$f" ] && echo "$(basename "$f" .paused)=$(cat "$f")"; done; echo "___AWG_DELIM___"; for f in /data/adb/amneziawg/run/*.failed; do [ -f "$f" ] && basename "$f" .failed; done';
+  const combinedCmd = CTRL + ' check-conflicts; echo "___AWG_DELIM___"; for f in /data/adb/amneziawg/run/*.paused; do [ -f "$f" ] && echo "$(basename "$f" .paused)=$(cat "$f")"; done; echo "___AWG_DELIM___"; for f in /data/adb/amneziawg/run/*.failed; do [ -f "$f" ] && basename "$f" .failed; done';
   const res = await sh(combinedCmd);
   const parts = (res.stdout || '').split('___AWG_DELIM___');
   const confRaw = (parts[0] || '').trim();
@@ -381,9 +410,10 @@ async function loadProfiles() {
 }
 
 async function loadStatus() {
-  let res = await sh('WG_UAPI_DIR=/data/adb/amneziawg/run AMNEZIAWG_UAPI_DIR=/data/adb/amneziawg/run /data/adb/modules/amneziawg-android/bin/awg status json 2>/dev/null');
+  const env = 'WG_UAPI_DIR=/data/adb/amneziawg/run AMNEZIAWG_UAPI_DIR=/data/adb/amneziawg/run';
+  let res = await sh(`${env} ${AWG_BIN} status json`);
   if (!res.stdout || !res.stdout.trim().startsWith('[')) {
-    res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller status json');
+    res = await sh(`${CTRL} status json`);
   }
   try {
     let raw = (res.stdout || '').trim();
@@ -532,9 +562,9 @@ function renderDashboard() {
         </div>
 
         <div class="m3-btn-group">
-          ${isFailed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${prof.name}')">Сбросить сбой</button>` : ''}
-          <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg> QR-код</button>
-          <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg> Настроить</button>
+          ${isFailed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${escapeAttr(prof.name)}')">Сбросить сбой</button>` : ''}
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${escapeAttr(prof.name)}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg> QR-код</button>
+          <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${escapeAttr(prof.name)}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg> Настроить</button>
         </div>
       `;
       container.appendChild(card);
@@ -582,13 +612,13 @@ function renderProfilesList() {
       <p style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 10px;">
         Режим: ${prof.routing_mode === 'include_apps' ? 'Выбранные' : (prof.routing_mode === 'exclude_apps' ? 'Исключая' : 'Полный')} &bull; 
         Приложений: ${prof.apps ? prof.apps.length : 0} &bull; 
-        KillSwitch: ${prof.killswitch ? 'Вкл' : 'Выкл'}${prof.lan_bypass === false ? ' &bull; LAN: Маршрутизировать' : ''}${prof.trusted_wifi ? ` &bull; Доверенные Wi-Fi: <span style="color:var(--md-sys-color-primary);">${prof.trusted_wifi}</span>` : ''}
+        KillSwitch: ${prof.killswitch ? 'Вкл' : 'Выкл'}${prof.lan_bypass === false ? ' &bull; LAN: Маршрутизировать' : ''}${prof.trusted_wifi ? ` &bull; Доверенные Wi-Fi: <span style="color:var(--md-sys-color-primary);">${escapeHtml(prof.trusted_wifi)}</span>` : ''}
       </p>
       <div class="m3-btn-group">
-        ${prof.is_failed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${prof.name}')">Сбросить сбой</button>` : ''}
-        <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')">QR-код</button>
-        <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${prof.name}')">Настроить</button>
-        <button class="m3-btn m3-btn-danger-outlined m3-btn-sm" onclick="deleteProfile('${prof.name}')">Удалить</button>
+        ${prof.is_failed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${escapeAttr(prof.name)}')">Сбросить сбой</button>` : ''}
+        <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${escapeAttr(prof.name)}')">QR-код</button>
+        <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${escapeAttr(prof.name)}')">Настроить</button>
+        <button class="m3-btn m3-btn-danger-outlined m3-btn-sm" onclick="deleteProfile('${escapeAttr(prof.name)}')">Удалить</button>
       </div>
     `;
     container.appendChild(item);
@@ -600,8 +630,11 @@ async function resetProfileFailure(name) {
   isActionRunning = true;
   showToast(`Сброс сбоя watchdog для ${name}...`);
   try {
-    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller reset-failures "${name}"`);
-    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller start "${name}"`);
+    await sh(`${CTRL} reset-failures "${name}"`);
+    const res = await sh(`${CTRL} start "${name}"`, SH_TIMEOUT_LONG);
+    if (res.code !== 0) {
+      showToast(`Запуск не выполнен: ${res.stderr || 'код ' + res.code}`);
+    }
     await loadProfiles();
     await loadStatus();
     renderDashboard();
@@ -622,7 +655,10 @@ async function toggleProfile(name, enable) {
   showToast(enable ? `Включение ${name}...` : `Отключение ${name}...`);
   const action = enable ? 'enable' : 'disable';
   try {
-    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller ${action} "${name}"`);
+    const res = await sh(`${CTRL} ${action} "${name}"`, SH_TIMEOUT_LONG);
+    if (res.code !== 0) {
+      showToast(`Команда ${action} завершилась с ошибкой: ${res.stderr || 'код ' + res.code}`);
+    }
     await loadProfiles();
     await loadStatus();
     renderDashboard();
@@ -640,13 +676,14 @@ async function restartAll() {
   isActionRunning = true;
   showToast('Перезапуск всех профилей...');
   try {
-    await sh('/data/adb/modules/amneziawg-android/bin/awg-controller restart');
+    const res = await sh(`${CTRL} restart`, SH_TIMEOUT_LONG);
     await loadProfiles();
     await loadStatus();
     renderDashboard();
     renderProfilesList();
     updateSystemSummary();
-    showToast('Все профили перезапущены');
+    showToast(res.code === 0 ? 'Все профили перезапущены'
+                             : `Перезапуск завершился с ошибкой: ${res.stderr || 'код ' + res.code}`);
   } catch (err) {
     showToast(`Ошибка перезапуска: ${err}`);
   } finally {
@@ -659,13 +696,14 @@ async function stopAll() {
   isActionRunning = true;
   showToast('Остановка всех профилей...');
   try {
-    await sh('/data/adb/modules/amneziawg-android/bin/awg-controller stop all');
+    const res = await sh(`${CTRL} stop all`, SH_TIMEOUT_LONG);
     await loadProfiles();
     await loadStatus();
     renderDashboard();
     renderProfilesList();
     updateSystemSummary();
-    showToast('Все туннели остановлены');
+    showToast(res.code === 0 ? 'Все туннели остановлены'
+                             : `Остановка завершилась с ошибкой: ${res.stderr || 'код ' + res.code}`);
   } catch (err) {
     showToast(`Ошибка остановки: ${err}`);
   } finally {
@@ -754,7 +792,7 @@ async function loadInstalledApps() {
   isLoadingApps = true;
   try {
     try {
-      const cliRes = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller list-apps');
+      const cliRes = await sh(`${CTRL} list-apps`);
     if (cliRes.stdout && cliRes.stdout.trim().startsWith('[')) {
       const parsed = JSON.parse(cliRes.stdout.trim());
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -767,7 +805,9 @@ async function loadInstalledApps() {
         return;
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn('Список приложений через awg-controller недоступен:', err);
+  }
 
   try {
     const res = await sh('pm list packages -U -3; pm list packages -U -s');
@@ -797,7 +837,9 @@ async function loadInstalledApps() {
         return;
       }
     }
-  } catch (e) {}
+  } catch (err) {
+    console.warn('Разбор вывода pm list packages не удался:', err);
+  }
 
   if (STATE.installedApps.length === 0) {
     STATE.installedApps = [
@@ -918,7 +960,7 @@ function deselectAllApps() {
 
 async function insertCurrentWifiSsid() {
   try {
-    const res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller get-current-ssid');
+    const res = await sh(`${CTRL} get-current-ssid`);
     const ssid = (res.stdout || '').trim();
     if (!ssid) {
       showToast('Wi-Fi не подключен или имя сети не определено');
@@ -962,7 +1004,7 @@ async function openProfileModal(name) {
     nameInput.value = name;
     nameInput.disabled = false;
 
-    const resJson = await sh(`cat /data/adb/amneziawg/profiles/${name}.json 2>/dev/null`);
+    const resJson = await sh(`cat /data/adb/amneziawg/profiles/${name}.json 2>/dev/null`); // глушение-обосновано: у нового профиля файла опций еще нет, случай обработан ниже
     try {
       const data = JSON.parse(resJson.stdout || '{}');
       autostartInput.checked = data.enabled !== false;
@@ -974,9 +1016,12 @@ async function openProfileModal(name) {
       if (data.apps && Array.isArray(data.apps)) {
         data.apps.forEach(p => STATE.selectedApps.add(p));
       }
-    } catch (e) {}
+    } catch (err) {
+      showToast('Профиль сохранен в поврежденном формате JSON, поля не заполнены');
+      console.error('Разбор JSON профиля не удался:', err);
+    }
 
-    const resConf = await sh(`cat /data/adb/amneziawg/profiles/${name}.conf 2>/dev/null`);
+    const resConf = await sh(`cat /data/adb/amneziawg/profiles/${name}.conf 2>/dev/null`); // глушение-обосновано: у нового профиля конфигурации еще нет, случай обработан ниже
     rawTextarea.value = resConf.stdout || '';
   } else {
     title.innerText = 'Новый профиль AWG';
@@ -1036,6 +1081,13 @@ async function saveProfile() {
     showToast('Имя профиля может содержать только латинские буквы, цифры, _ и -');
     return;
   }
+  // Предел имени цепочки iptables - 28 символов, префикс "AWG_M_" занимает 6.
+  // Более длинное имя приводило к молчаливому отказу создания цепочки и к
+  // профилю без единого правила маршрутизации.
+  if (name.length > MAX_PROFILE_NAME) {
+    showToast('Имя профиля не длиннее ' + MAX_PROFILE_NAME + ' символов');
+    return;
+  }
   if (!rawConf) {
     showToast('Введите конфигурацию AWG .conf!');
     return;
@@ -1061,20 +1113,35 @@ async function saveProfile() {
 
   if (isRename) {
     showToast(`Переименование ${oldName} -> ${name}...`);
-    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller stop "${oldName}" 2>/dev/null; rm -f /data/adb/amneziawg/profiles/${oldName}.*`);
+    // Удаление выполняет контроллер по точному списку файлов профиля.
+    const del = await sh(`${CTRL} delete "${oldName}"`, SH_TIMEOUT_LONG);
+    if (del.code !== 0) {
+      showToast(`Не удалось удалить старый профиль: ${del.stderr || 'код ' + del.code}`);
+      return;
+    }
   }
 
-  await sh(`
+  const res = await sh(`
+    set -e
     mkdir -p /data/adb/amneziawg/profiles
-    echo '${escConf}' > /data/adb/amneziawg/profiles/${name}.conf
-    echo '${escJson}' > /data/adb/amneziawg/profiles/${name}.json
+    umask 077
+    printf '%s
+' '${escConf}' > /data/adb/amneziawg/profiles/${name}.conf
+    printf '%s
+' '${escJson}' > /data/adb/amneziawg/profiles/${name}.json
     chmod 600 /data/adb/amneziawg/profiles/${name}.conf /data/adb/amneziawg/profiles/${name}.json
     if [ -f "/data/adb/amneziawg/run/${name}.iface" ] || [ "${isRename ? '1' : '0'}" = "1" ]; then
-      /data/adb/modules/amneziawg-android/bin/awg-controller restart "${name}" 2>/dev/null || /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
+      ${CTRL} restart "${name}"
     else
-      /data/adb/modules/amneziawg-android/bin/awg-controller sync-rules
+      ${CTRL} sync-rules
     fi
-  `);
+  `, SH_TIMEOUT_LONG);
+
+  if (res.code !== 0) {
+    showToast(`Сохранение завершилось с ошибкой: ${res.stderr || 'код ' + res.code}`);
+    await refreshAllData();
+    return;
+  }
 
   STATE.editingProfileName = null;
   closeProfileModal();
@@ -1094,9 +1161,17 @@ async function deleteProfile(name) {
   renderProfilesList();
   updateSystemSummary();
 
-  await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller stop "${name}" 2>/dev/null; rm -f /data/adb/amneziawg/profiles/${name}*`);
+  // Удаление делает контроллер по точному списку файлов профиля.
+  // Прежняя редакция выполняла здесь rm -f по шаблону ${name}* - без точки
+  // перед расширением, из-за чего удаление профиля "wg" уносило вместе с ним
+  // "wg2" и любой другой профиль с тем же началом имени вместе с ключами.
+  const res = await sh(`${CTRL} delete "${name}"`, SH_TIMEOUT_LONG);
   await refreshAllData();
-  showToast(`Профиль "${name}" удален`);
+  if (res.code === 0) {
+    showToast(`Профиль "${name}" удален`);
+  } else {
+    showToast(`Удаление не выполнено: ${res.stderr || 'код ' + res.code}`);
+  }
 }
 
 // QR Image Decoder
@@ -1282,7 +1357,9 @@ function stopLiveQrScanner() {
   if (qrMediaStream) {
     try {
       qrMediaStream.getTracks().forEach(t => t.stop());
-    } catch (e) {}
+    } catch (err) {
+      console.warn('Остановка потока камеры вернула ошибку:', err);
+    }
     qrMediaStream = null;
   }
   const video = document.getElementById('qr-video');
@@ -1336,7 +1413,14 @@ function startLiveScanningLoop() {
         handleQrDecodedText(codeText);
         return;
       }
-    } catch (e) {}
+    } catch (err) {
+      // Кадр не разобран: это штатная ситуация для видеопотока, следующий
+      // кадр запрашивается ниже. В журнал пишется только первый случай.
+      if (!scanFrame.errorLogged) {
+        scanFrame.errorLogged = true;
+        console.warn('Кадр сканера не разобран:', err);
+      }
+    }
 
     qrScanAnimFrame = requestAnimationFrame(scanFrame);
   };
@@ -1348,7 +1432,13 @@ function startLiveScanningLoop() {
 async function handleQrImageFile(e) {
   const input = e.target;
   const file = input.files && input.files[0];
-  const reset = () => { try { input.value = ''; } catch (err) {} };
+  const reset = () => {
+    try {
+      input.value = '';
+    } catch (err) {
+      console.warn('Сброс поля выбора файла не удался:', err);
+    }
+  };
   if (!file) { reset(); return; }
 
   showToast('Анализ изображения...');
@@ -1364,7 +1454,9 @@ async function handleQrImageFile(e) {
           if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
             text = barcodes[0].rawValue;
           }
-        } catch (e) {}
+        } catch (err) {
+          qrLog('BarcodeDetector не справился, переход к jsQR: ' + err);
+        }
       }
 
       if (!text) {
@@ -1464,7 +1556,7 @@ async function showProfileQr(name) {
   title.innerText = `QR-код: ${name}`;
   container.innerHTML = '';
 
-  const res = await sh(`cat /data/adb/amneziawg/profiles/${name}.conf 2>/dev/null`);
+  const res = await sh(`cat /data/adb/amneziawg/profiles/${name}.conf 2>/dev/null`); // глушение-обосновано: пустой вывод обрабатывается как отсутствие конфигурации для QR
   const confText = (res.stdout || '').trim();
 
   if (!confText) {
@@ -1505,7 +1597,7 @@ async function loadLogs() {
   const viewer = document.getElementById('log-viewer');
   if (!viewer) return;
   viewer.innerText = 'Загрузка журнала...';
-  const res = await sh('tail -n 100 /data/adb/amneziawg/logs/awg-controller.log 2>/dev/null || echo "Лог пуст."');
+  const res = await sh('tail -n 100 /data/adb/amneziawg/logs/awg-controller.log 2>/dev/null || echo "Лог пуст."'); // глушение-обосновано: до первого запуска журнала не существует, подставляется текст-заглушка
   viewer.innerText = res.stdout || 'Лог пуст.';
 }
 
@@ -1521,7 +1613,7 @@ async function runUAPIDump() {
   const out = document.getElementById('tools-output');
   out.style.display = 'block';
   out.innerText = 'Запрос UAPI данных...';
-  const res = await sh('/data/adb/modules/amneziawg-android/bin/awg status');
+  const res = await sh(`${AWG_BIN} status`);
   out.innerText = res.stdout || res.stderr;
 }
 
@@ -1529,12 +1621,358 @@ async function runIPRulesDump() {
   const out = document.getElementById('tools-output');
   out.style.display = 'block';
   out.innerText = 'Получение таблицы IP правил...';
-  const res = await sh('ip rule show; echo ""; ip route show table 200 2>/dev/null; ip route show table 201 2>/dev/null');
+  const res = await sh('ip rule show; echo ""; ip route show table 201 2>/dev/null; ip route show table 202 2>/dev/null'); // глушение-обосновано: незанятая таблица маршрутизации выводит пустой список, это штатное состояние
   out.innerText = res.stdout || res.stderr;
+}
+
+// ============================================================
+// Группы резервирования
+// ============================================================
+//
+// Отображение и редактирование групп. Переключение между туннелями выполняет
+// ядро по правилам с разными приоритетами, поэтому интерфейс не управляет
+// выбором активного участника: он показывает, кто им стал, и позволяет
+// снять или вернуть маршрут вручную.
+
+const GROUPS_STATE = {
+  groups: [],
+  editing: null,
+  members: [],
+  selectedApps: new Set(),
+  search: ''
+};
+
+async function loadGroupsState() {
+  const res = await sh(`${CTRL} group-state`);
+  try {
+    const raw = (res.stdout || '').trim();
+    const match = raw.match(/\[[\s\S]*\]/);
+    GROUPS_STATE.groups = match ? JSON.parse(match[0]) : [];
+  } catch (err) {
+    GROUPS_STATE.groups = [];
+    console.warn('Разбор состояния групп не удался:', err);
+  }
+}
+
+function memberBadge(m) {
+  if (!m.running) return '<span class="m3-badge m3-badge-idle">Не запущен</span>';
+  if (m.route_down) return '<span class="m3-badge m3-badge-warn">Маршрут снят</span>';
+  if (m.active) return '<span class="m3-badge m3-badge-success">Принимает трафик</span>';
+  return '<span class="m3-badge m3-badge-idle">В резерве</span>';
+}
+
+function renderGroups() {
+  const container = document.getElementById('groups-list');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (!GROUPS_STATE.groups.length) {
+    container.innerHTML = '<div class="m3-card"><div class="m3-card-body">'
+      + '<p style="color:var(--md-sys-color-on-surface-variant);font-size:13px;">'
+      + 'Групп нет. Группа нужна, когда одно приложение должно переключаться '
+      + 'между несколькими туннелями при блокировке эндпоинта. Для одного '
+      + 'туннеля группа не требуется.</p></div></div>';
+    return;
+  }
+
+  GROUPS_STATE.groups.forEach(g => {
+    const card = document.createElement('div');
+    card.className = 'm3-profile-card';
+    const rows = g.members.map(m => `
+      <div class="m3-member-row">
+        <span class="m3-member-rank">${m.rank + 1}</span>
+        <span class="m3-member-name">${escapeHtml(m.name)}</span>
+        ${memberBadge(m)}
+        <button class="m3-btn m3-btn-outlined m3-btn-sm"
+          onclick="toggleMemberRoute('${escapeAttr(m.name)}', ${m.route_down ? 'false' : 'true'})">
+          ${m.route_down ? 'Вернуть' : 'Снять'}
+        </button>
+      </div>`).join('');
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span class="m3-profile-name">${escapeHtml(g.name)}</span>
+        <span class="m3-badge ${g.killswitch ? 'm3-badge-warn' : 'm3-badge-idle'}">
+          ${g.killswitch ? 'KillSwitch' : 'Прямой канал'}
+        </span>
+      </div>
+      <p style="font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-bottom:10px;">
+        Приложений: ${g.apps ? g.apps.length : 0} &bull;
+        DNS: ${g.dns ? escapeHtml(g.dns) : 'по умолчанию'} &bull;
+        Возврат: ${g.failback_after_sec > 0 ? g.failback_after_sec + ' с' : 'отключен'}
+      </p>
+      <div class="m3-members-list">${rows}</div>
+      <div class="m3-btn-group" style="margin-top:10px;">
+        <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="openGroupModal('${escapeAttr(g.name)}')">Настроить</button>
+        <button class="m3-btn m3-btn-danger-outlined m3-btn-sm" onclick="deleteGroup('${escapeAttr(g.name)}')">Удалить</button>
+      </div>`;
+    container.appendChild(card);
+  });
+}
+
+// Ручное снятие и возврат маршрута участника.
+async function toggleMemberRoute(name, down) {
+  if (isActionRunning) return;
+  isActionRunning = true;
+  showToast(down ? `Снятие маршрута ${name}...` : `Возврат маршрута ${name}...`);
+  try {
+    const cmd = down ? 'route-down' : 'route-up';
+    const res = await sh(`${CTRL} ${cmd} "${name}"`, SH_TIMEOUT_LONG);
+    if (res.code !== 0) {
+      showToast(`Команда ${cmd} завершилась с ошибкой: ${res.stderr || 'код ' + res.code}`);
+    }
+    await loadGroupsState();
+    renderGroups();
+  } finally {
+    isActionRunning = false;
+  }
+}
+
+// Чтение файла групп для редактирования.
+async function readGroupsFile() {
+  const res = await sh(`cat "$(${CTRL} group-file)" 2>/dev/null`); // глушение-обосновано: до создания первой группы файла не существует, пустой вывод обрабатывается ниже
+  const raw = (res.stdout || '').trim();
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    showToast('Файл групп поврежден, будет перезаписан при сохранении');
+    console.error('Разбор groups.json не удался:', err);
+    return [];
+  }
+}
+
+function openGroupModal(name) {
+  GROUPS_STATE.editing = name || null;
+  GROUPS_STATE.selectedApps = new Set();
+  GROUPS_STATE.search = '';
+
+  const profileNames = STATE.profiles.map(p => p.name);
+  document.getElementById('modal-group-title').innerText =
+    name ? `Группа "${name}"` : 'Новая группа';
+  document.getElementById('grp-name').value = name || '';
+  document.getElementById('grp-dns').value = '';
+  document.getElementById('grp-failback').value = '600';
+  document.getElementById('grp-killswitch').checked = false;
+  document.getElementById('grp-lan-bypass').checked = true;
+
+  const g = GROUPS_STATE.groups.find(x => x.name === name);
+  if (g) {
+    document.getElementById('grp-dns').value = g.dns || '';
+    document.getElementById('grp-failback').value = String(g.failback_after_sec ?? 600);
+    document.getElementById('grp-killswitch').checked = !!g.killswitch;
+    document.getElementById('grp-lan-bypass').checked = g.lan_bypass !== false;
+    (g.apps || []).forEach(a => GROUPS_STATE.selectedApps.add(a));
+    // Участники группы идут первыми в своем порядке, остальные профили следом.
+    const chosen = g.members.map(m => m.name);
+    GROUPS_STATE.members = chosen
+      .map(n => ({ name: n, checked: true }))
+      .concat(profileNames.filter(n => !chosen.includes(n)).map(n => ({ name: n, checked: false })));
+  } else {
+    GROUPS_STATE.members = profileNames.map(n => ({ name: n, checked: false }));
+  }
+
+  renderGroupMembers();
+  renderGroupApps();
+  document.getElementById('modal-group').style.display = 'flex';
+}
+
+function closeGroupModal() {
+  document.getElementById('modal-group').style.display = 'none';
+  GROUPS_STATE.editing = null;
+}
+
+function renderGroupMembers() {
+  const box = document.getElementById('grp-members');
+  if (!box) return;
+  box.innerHTML = '';
+  GROUPS_STATE.members.forEach((m, idx) => {
+    const row = document.createElement('div');
+    row.className = 'm3-member-row';
+    row.innerHTML = `
+      <label class="m3-switch m3-switch-sm">
+        <input type="checkbox" ${m.checked ? 'checked' : ''}
+          onchange="setGroupMember(${idx}, this.checked)"><span class="m3-slider"></span>
+      </label>
+      <span class="m3-member-name">${escapeHtml(m.name)}</span>
+      <button class="m3-btn m3-btn-outlined m3-btn-sm" ${idx === 0 ? 'disabled' : ''}
+        onclick="moveGroupMember(${idx}, -1)">Выше</button>
+      <button class="m3-btn m3-btn-outlined m3-btn-sm" ${idx === GROUPS_STATE.members.length - 1 ? 'disabled' : ''}
+        onclick="moveGroupMember(${idx}, 1)">Ниже</button>`;
+    box.appendChild(row);
+  });
+}
+
+function setGroupMember(idx, checked) {
+  if (GROUPS_STATE.members[idx]) GROUPS_STATE.members[idx].checked = checked;
+}
+
+function moveGroupMember(idx, delta) {
+  const to = idx + delta;
+  const list = GROUPS_STATE.members;
+  if (to < 0 || to >= list.length) return;
+  const tmp = list[idx];
+  list[idx] = list[to];
+  list[to] = tmp;
+  renderGroupMembers();
+}
+
+function renderGroupApps() {
+  const chips = document.getElementById('grp-selected-chips');
+  const list = document.getElementById('grp-apps-list');
+  if (!chips || !list) return;
+
+  chips.innerHTML = '';
+  Array.from(GROUPS_STATE.selectedApps).forEach(pkg => {
+    const app = STATE.installedApps.find(a => a.package === pkg);
+    const tag = document.createElement('span');
+    tag.className = 'm3-chip';
+    tag.innerHTML = `${escapeHtml(app ? app.name : pkg)}
+      <button class="m3-chip-x" onclick="toggleGroupApp('${escapeAttr(pkg)}')">x</button>`;
+    chips.appendChild(tag);
+  });
+
+  const q = GROUPS_STATE.search.toLowerCase();
+  const items = STATE.installedApps
+    .filter(a => !q || a.name.toLowerCase().includes(q) || a.package.toLowerCase().includes(q))
+    .slice(0, 120);
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="m3-apps-loading">Приложения не найдены</div>';
+    return;
+  }
+  items.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'm3-app-row';
+    row.innerHTML = `
+      <label class="m3-switch m3-switch-sm">
+        <input type="checkbox" ${GROUPS_STATE.selectedApps.has(a.package) ? 'checked' : ''}
+          onchange="toggleGroupApp('${escapeAttr(a.package)}')"><span class="m3-slider"></span>
+      </label>
+      <span class="m3-app-name">${escapeHtml(a.name)}</span>
+      <span class="m3-app-pkg">${escapeHtml(a.package)}</span>`;
+    list.appendChild(row);
+  });
+}
+
+function toggleGroupApp(pkg) {
+  if (GROUPS_STATE.selectedApps.has(pkg)) {
+    GROUPS_STATE.selectedApps.delete(pkg);
+  } else {
+    GROUPS_STATE.selectedApps.add(pkg);
+  }
+  renderGroupApps();
+}
+
+// Запись файла групп с откатом при неудачной проверке.
+// Конфигурация с противоречиями (участник в двух группах, один участник,
+// несуществующий профиль) не должна попадать на диск: она сломала бы
+// маршрутизацию уже работающих профилей.
+async function writeGroups(groups) {
+  const json = JSON.stringify(groups, null, 2);
+  const esc = json.replace(/'/g, "'\\''");
+  const res = await sh(`
+    set -e
+    F="$(${CTRL} group-file)"
+    umask 077
+    [ -f "$F" ] && cp -f "$F" "$F.bak"
+    printf '%s\\n' '${esc}' > "$F"
+    chmod 600 "$F"
+    if ! ${CTRL} group-check; then
+      if [ -f "$F.bak" ]; then cp -f "$F.bak" "$F"; else rm -f "$F"; fi
+      # Временная копия убирается и на пути отката: иначе она оставалась бы
+      # в каталоге данных после каждой неудачной попытки сохранения.
+      rm -f "$F.bak"
+      echo "ОТКАТ: конфигурация групп не прошла проверку"
+      exit 1
+    fi
+    rm -f "$F.bak"
+    ${CTRL} sync-rules
+  `, SH_TIMEOUT_LONG);
+  return res;
+}
+
+async function saveGroup() {
+  const name = document.getElementById('grp-name').value.trim();
+  if (!name) { showToast('Введите имя группы'); return; }
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    showToast('Имя группы: только латиница, цифры, _ и -');
+    return;
+  }
+  if (name.length > MAX_PROFILE_NAME) {
+    showToast('Имя группы не длиннее ' + MAX_PROFILE_NAME + ' символов');
+    return;
+  }
+  const members = GROUPS_STATE.members.filter(m => m.checked).map(m => m.name);
+  if (members.length < 2) {
+    showToast('В группе нужно не меньше двух участников, иначе резервировать нечем');
+    return;
+  }
+  const apps = Array.from(GROUPS_STATE.selectedApps);
+  if (!apps.length) { showToast('Выберите хотя бы одно приложение'); return; }
+
+  const failback = parseInt(document.getElementById('grp-failback').value, 10);
+  const entry = {
+    name: name,
+    apps: apps,
+    members: members,
+    dns: document.getElementById('grp-dns').value.trim(),
+    failback_after_sec: isNaN(failback) ? 600 : Math.max(0, failback),
+    killswitch: document.getElementById('grp-killswitch').checked,
+    lan_bypass: document.getElementById('grp-lan-bypass').checked
+  };
+
+  const all = await readGroupsFile();
+  const old = GROUPS_STATE.editing;
+  const kept = all.filter(g => g.name !== name && g.name !== old);
+  kept.push(entry);
+
+  showToast('Сохранение группы...');
+  const res = await writeGroups(kept);
+  if (res.code !== 0) {
+    showToast(`Не сохранено: ${(res.stdout || res.stderr || 'код ' + res.code).trim().split('\n').pop()}`);
+    return;
+  }
+  closeGroupModal();
+  showToast(`Группа "${name}" сохранена`);
+  await refreshGroupsTab();
+}
+
+async function deleteGroup(name) {
+  if (!confirm(`Удалить группу "${name}"? Приложения вернутся к правилам своих профилей.`)) return;
+  const all = await readGroupsFile();
+  const res = await writeGroups(all.filter(g => g.name !== name));
+  if (res.code !== 0) {
+    showToast(`Не удалено: ${(res.stdout || res.stderr || 'код ' + res.code).trim().split('\n').pop()}`);
+    return;
+  }
+  showToast(`Группа "${name}" удалена`);
+  await refreshGroupsTab();
+}
+
+async function checkGroups() {
+  const res = await sh(`${CTRL} group-check`, SH_TIMEOUT_LONG);
+  if (res.code === 0) {
+    showToast((res.stdout || 'Противоречий не найдено').trim());
+  } else {
+    showToast('Найдены противоречия: ' + (res.stderr || res.stdout || '').trim().split('\n')[0]);
+  }
+}
+
+async function refreshGroupsTab() {
+  await loadGroupsState();
+  renderGroups();
 }
 
 function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Экранирование для подстановки в строковый литерал внутри атрибута onclick.
+// Имена профилей приходят не только из формы WebUI, но и из имен файлов
+// каталога профилей, поэтому проверка формата на входе не является гарантией.
+function escapeAttr(str) {
+  return escapeHtml(String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
 }
 
 function formatBytes(bytes) {
