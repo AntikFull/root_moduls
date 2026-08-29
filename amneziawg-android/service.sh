@@ -26,18 +26,20 @@ done
 log_s "Система загружена (sys.boot_completed=1). Ожидание готовности сети..."
 sleep 2
 
-# 2. Запуск активных профилей через awg-controller
-if [ -x "$BIN_DIR/awg-controller" ]; then
-  log_s "Запуск профилей AmneziaWG..."
-  "$BIN_DIR/awg-controller" start all >> "$LOG_FILE" 2>&1 &
-fi
+chmod 755 "$BIN_DIR"/* 2>/dev/null || true
 
-# 3. Запуск фоновых мониторов через единую точку (setsid, ppid=1)
+# 2. Запуск фоновых мониторов через единую точку (setsid, ppid=1)
 if [ -f "$BIN_DIR/awg-daemons.sh" ]; then
   # shellcheck disable=SC1090
   . "$BIN_DIR/awg-daemons.sh"
   log_s "Запуск мониторов awg-netmon и awg-appmon..."
   restart_monitors
+fi
+
+# 3. Запуск активных профилей через awg-controller
+if [ -x "$BIN_DIR/awg-controller" ]; then
+  log_s "Запуск профилей AmneziaWG..."
+  "$BIN_DIR/awg-controller" start all >> "$LOG_FILE" 2>&1 &
 fi
 
 log_s "Сервис AmneziaWG успешно инициализирован."

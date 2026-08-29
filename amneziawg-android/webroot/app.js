@@ -12,6 +12,10 @@ const STATE = {
 };
 
 let asyncExecSeq = 0;
+let isRefreshing = false;
+let isActionRunning = false;
+let lastProfilesSig = '';
+let isLoadingApps = false;
 
 function getKsuBridge() {
   return window.ksu || window.KernelSU || window.apatch || window.mmrl || window.magisk || (typeof ksu !== 'undefined' ? ksu : null);
@@ -157,7 +161,7 @@ function openUrl(url) {
 }
 
 function openChannel() {
-  openUrl('https://t.me/eCubzPlugins');
+  openUrl('https://t.me/module_ecubz');
 }
 
 
@@ -218,20 +222,22 @@ async function initWebUI() {
     console.error('refreshAllData error:', err);
   }
 
-  try {
-    await loadInstalledApps();
-  } catch (err) {
-    console.error('loadInstalledApps error:', err);
-  }
-
-  // Periodic Auto-refresh every 4 seconds for live handshakes/traffic
+  // Периодический опрос каждые 4 секунды с защитой от наложения и блокировок
   setInterval(async () => {
+    if (isRefreshing || isActionRunning) return;
     if (STATE.activeTab === 'main' || STATE.activeTab === 'profiles') {
-      await loadProfiles();
-      await loadStatus();
-      renderDashboard();
-      renderProfilesList();
-      updateSystemSummary();
+      isRefreshing = true;
+      try {
+        await loadProfiles();
+        await loadStatus();
+        renderDashboard();
+        renderProfilesList();
+        updateSystemSummary();
+      } catch (err) {
+        console.error('Periodic refresh error:', err);
+      } finally {
+        isRefreshing = false;
+      }
     }
   }, 4000);
 }
@@ -328,35 +334,45 @@ function initEventHandlers() {
 
 // Data Refresh
 async function refreshAllData() {
-  await loadProfiles();
-  await loadStatus();
-  renderDashboard();
-  renderProfilesList();
-  updateSystemSummary();
+  if (isRefreshing || isActionRunning) return;
+  isRefreshing = true;
+  try {
+    await loadProfiles();
+    await loadStatus();
+    renderDashboard();
+    renderProfilesList();
+    updateSystemSummary();
+  } finally {
+    isRefreshing = false;
+  }
 }
 
 async function loadProfiles() {
-  const res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller check-conflicts');
+  const combinedCmd = '/data/adb/modules/amneziawg-android/bin/awg-controller check-conflicts; echo "___AWG_DELIM___"; for f in /data/adb/amneziawg/run/*.paused; do [ -f "$f" ] && echo "$(basename "$f" .paused)=$(cat "$f")"; done; echo "___AWG_DELIM___"; for f in /data/adb/amneziawg/run/*.failed; do [ -f "$f" ] && basename "$f" .failed; done';
+  const res = await sh(combinedCmd);
+  const parts = (res.stdout || '').split('___AWG_DELIM___');
+  const confRaw = (parts[0] || '').trim();
+  const pausedRaw = (parts[1] || '').trim();
+  const failedRaw = (parts[2] || '').trim();
+
   try {
-    let raw = (res.stdout || '').trim();
+    let raw = confRaw;
     const match = raw.match(/\{[\s\S]*"profiles"[\s\S]*\}/);
     if (match) raw = match[0];
     const data = JSON.parse(raw);
     STATE.profiles = Array.isArray(data.profiles) ? data.profiles : [];
   } catch (e) {
-    // If parse error, keep existing profiles
+    // При ошибке парсинга сохраняем текущие профили
   }
 
-  const pausedRes = await sh('for f in /data/adb/amneziawg/run/*.paused; do [ -f "$f" ] && echo "$(basename "$f" .paused)=$(cat "$f")"; done');
   const pausedMap = {};
-  (pausedRes.stdout || '').trim().split('\n').forEach(line => {
+  pausedRaw.split('\n').forEach(line => {
     if (!line) return;
-    const parts = line.split('=');
-    if (parts[0]) pausedMap[parts[0]] = parts[1] || 'Wi-Fi';
+    const p = line.split('=');
+    if (p[0]) pausedMap[p[0]] = p[1] || 'Wi-Fi';
   });
 
-  const failedRes = await sh('for f in /data/adb/amneziawg/run/*.failed; do [ -f "$f" ] && basename "$f" .failed; done');
-  const failedSet = new Set((failedRes.stdout || '').trim().split('\n').filter(Boolean));
+  const failedSet = new Set(failedRaw.split('\n').filter(Boolean));
 
   STATE.profiles.forEach(p => {
     p.paused_ssid = pausedMap[p.name] || null;
@@ -365,7 +381,7 @@ async function loadProfiles() {
 }
 
 async function loadStatus() {
-  let res = await sh('/data/adb/modules/amneziawg-android/bin/awg status json');
+  let res = await sh('WG_UAPI_DIR=/data/adb/amneziawg/run AMNEZIAWG_UAPI_DIR=/data/adb/amneziawg/run /data/adb/modules/amneziawg-android/bin/awg status json 2>/dev/null');
   if (!res.stdout || !res.stdout.trim().startsWith('[')) {
     res = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller status json');
   }
@@ -394,11 +410,10 @@ function updateSystemSummary() {
   if (totalEl) totalEl.innerText = profiles.length;
 }
 
-// Render Dashboard Cards
+// Render Dashboard Cards (точечное обновление без тотального уничтожения DOM)
 function renderDashboard() {
   const container = document.getElementById('dashboard-cards');
   if (!container) return;
-  container.innerHTML = '';
 
   const tunnels = Array.isArray(STATE.activeTunnels) ? STATE.activeTunnels : [];
   const profiles = Array.isArray(STATE.profiles) ? STATE.profiles : [];
@@ -407,6 +422,23 @@ function renderDashboard() {
     container.innerHTML = '<div class="m3-card"><div class="m3-card-body"><p style="color:var(--md-sys-color-on-surface-variant);font-size:13px;">Профили загружаются или еще не созданы. Перейдите во вкладку "Профили" для добавления.</p></div></div>';
     return;
   }
+
+  // Удаляем плейсхолдер пустого списка, если он есть
+  const placeholder = container.querySelector('.m3-card');
+  if (placeholder && !placeholder.id) {
+    container.innerHTML = '';
+  }
+
+  // Набор актуальных профилей для очистки удаленных
+  const profNames = new Set(profiles.map(p => p.name));
+  Array.from(container.children).forEach(child => {
+    if (child.id && child.id.startsWith('dash-card-')) {
+      const pName = child.id.substring('dash-card-'.length);
+      if (!profNames.has(pName)) {
+        child.remove();
+      }
+    }
+  });
 
   profiles.forEach(prof => {
     const tunnel = tunnels.find(t => 
@@ -443,53 +475,93 @@ function renderDashboard() {
       badgeHtml = '<span class="m3-badge" style="background:rgba(255,82,82,0.15);color:#ff5252;border:1px solid rgba(255,82,82,0.3);">Сбой Watchdog</span>';
     }
 
-    const card = document.createElement('div');
-    card.className = `m3-profile-card ${isPaused ? 'paused' : (isUp ? 'active' : (isFailed ? 'failed' : ''))}`;
-    card.innerHTML = `
-      <div class="m3-profile-header">
-        <div class="m3-profile-title-box">
-          <span class="m3-profile-name">${escapeHtml(prof.name)}</span>
-          ${badgeHtml}
-        </div>
-        <label class="m3-switch">
-          <input type="checkbox" ${(isUp || isPaused) ? 'checked' : ''} onchange="toggleProfile('${prof.name}', this.checked)">
-          <span class="m3-slider"></span>
-        </label>
-      </div>
+    const cardId = 'dash-card-' + prof.name;
+    let card = document.getElementById(cardId);
+    const cardClass = `m3-profile-card ${isPaused ? 'paused' : (isUp ? 'active' : (isFailed ? 'failed' : ''))}`;
 
-      <div class="m3-stats-grid">
-        <div class="m3-stat-item">
-          <span>Режим</span>
-          <span>${prof.routing_mode === 'include_apps' ? 'Только выбранные' : (prof.routing_mode === 'exclude_apps' ? 'Исключая выбранные' : 'Весь трафик')}</span>
+    if (card) {
+      if (card.className !== cardClass) card.className = cardClass;
+      const badgeBox = card.querySelector('.m3-profile-title-box');
+      if (badgeBox) {
+        const nameSpan = badgeBox.querySelector('.m3-profile-name');
+        badgeBox.innerHTML = '';
+        if (nameSpan) badgeBox.appendChild(nameSpan);
+        badgeBox.insertAdjacentHTML('beforeend', badgeHtml);
+      }
+      const sw = card.querySelector('input[type="checkbox"]');
+      if (sw && sw.checked !== (isUp || isPaused)) {
+        sw.checked = (isUp || isPaused);
+      }
+      const epEl = card.querySelector('.stat-endpoint');
+      if (epEl) epEl.innerText = (peer && peer.endpoint ? peer.endpoint : 'Ожидание');
+      const trEl = card.querySelector('.stat-traffic');
+      if (trEl) trEl.innerText = (peer ? formatBytes(peer.rx_bytes) + ' / ' + formatBytes(peer.tx_bytes) : '0 B / 0 B');
+    } else {
+      card = document.createElement('div');
+      card.id = cardId;
+      card.className = cardClass;
+      card.innerHTML = `
+        <div class="m3-profile-header">
+          <div class="m3-profile-title-box">
+            <span class="m3-profile-name">${escapeHtml(prof.name)}</span>
+            ${badgeHtml}
+          </div>
+          <label class="m3-switch">
+            <input type="checkbox" ${(isUp || isPaused) ? 'checked' : ''} onchange="toggleProfile('${prof.name}', this.checked)">
+            <span class="m3-slider"></span>
+          </label>
         </div>
-        <div class="m3-stat-item">
-          <span>Приложений</span>
-          <span>${prof.apps ? prof.apps.length : 0}</span>
-        </div>
-        <div class="m3-stat-item">
-          <span>Эндпоинт</span>
-          <span>${peer && peer.endpoint ? escapeHtml(peer.endpoint) : 'Ожидание'}</span>
-        </div>
-        <div class="m3-stat-item">
-          <span>Трафик (RX/TX)</span>
-          <span>${peer ? formatBytes(peer.rx_bytes) + ' / ' + formatBytes(peer.tx_bytes) : '0 B / 0 B'}</span>
-        </div>
-      </div>
 
-      <div class="m3-btn-group">
-        ${isFailed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${prof.name}')">Сбросить сбой</button>` : ''}
-        <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg> QR-код</button>
-        <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg> Настроить</button>
-      </div>
-    `;
-    container.appendChild(card);
+        <div class="m3-stats-grid">
+          <div class="m3-stat-item">
+            <span>Режим</span>
+            <span>${prof.routing_mode === 'include_apps' ? 'Только выбранные' : (prof.routing_mode === 'exclude_apps' ? 'Исключая выбранные' : 'Весь трафик')}</span>
+          </div>
+          <div class="m3-stat-item">
+            <span>Приложений</span>
+            <span>${prof.apps ? prof.apps.length : 0}</span>
+          </div>
+          <div class="m3-stat-item">
+            <span>Эндпоинт</span>
+            <span class="stat-endpoint">${peer && peer.endpoint ? escapeHtml(peer.endpoint) : 'Ожидание'}</span>
+          </div>
+          <div class="m3-stat-item">
+            <span>Трафик (RX/TX)</span>
+            <span class="stat-traffic">${peer ? formatBytes(peer.rx_bytes) + ' / ' + formatBytes(peer.tx_bytes) : '0 B / 0 B'}</span>
+          </div>
+        </div>
+
+        <div class="m3-btn-group">
+          ${isFailed ? `<button class="m3-btn m3-btn-tonal m3-btn-sm" style="background:rgba(255,82,82,0.15);color:#ff5252;" onclick="resetProfileFailure('${prof.name}')">Сбросить сбой</button>` : ''}
+          <button class="m3-btn m3-btn-outlined m3-btn-sm" onclick="showProfileQr('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5v4h2V5h4V3H5c-1.1 0-2 .9-2 2zm2 10H3v4c0 1.1.9 2 2 2h4v-2H5v-4zm14 4h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zm0-16h-4v2h4v4h2V5c0-1.1-.9-2-2-2z"/></svg> QR-код</button>
+          <button class="m3-btn m3-btn-tonal m3-btn-sm" onclick="editProfile('${prof.name}')"><svg class="g-icon g-icon-sm" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg> Настроить</button>
+        </div>
+      `;
+      container.appendChild(card);
+    }
   });
 }
 
-// Render Profiles List in Tab 2
+// Render Profiles List in Tab 2 (только при фактическом изменении конфигурации)
 function renderProfilesList() {
   const container = document.getElementById('profiles-list');
   if (!container) return;
+
+  const curSig = JSON.stringify(STATE.profiles.map(p => ({
+    name: p.name,
+    enabled: p.enabled,
+    mode: p.routing_mode,
+    appsCount: p.apps ? p.apps.length : 0,
+    ks: p.killswitch,
+    lan: p.lan_bypass,
+    tw: p.trusted_wifi,
+    failed: p.is_failed
+  })));
+  if (curSig === lastProfilesSig && container.children.length > 0) {
+    return;
+  }
+  lastProfilesSig = curSig;
+
   container.innerHTML = '';
 
   if (STATE.profiles.length === 0) {
@@ -524,33 +596,81 @@ function renderProfilesList() {
 }
 
 async function resetProfileFailure(name) {
+  if (isActionRunning) return;
+  isActionRunning = true;
   showToast(`Сброс сбоя watchdog для ${name}...`);
-  await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller reset-failures "${name}"`);
-  await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller start "${name}"`);
-  await refreshAllData();
-  showToast(`Профиль "${name}" перезапущен`);
+  try {
+    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller reset-failures "${name}"`);
+    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller start "${name}"`);
+    await loadProfiles();
+    await loadStatus();
+    renderDashboard();
+    renderProfilesList();
+    updateSystemSummary();
+    showToast(`Профиль "${name}" перезапущен`);
+  } catch (err) {
+    showToast(`Ошибка: ${err}`);
+  } finally {
+    isActionRunning = false;
+  }
 }
 
-// Toggle Profile
+// Toggle Profile с защитой от одновременных вызовов
 async function toggleProfile(name, enable) {
+  if (isActionRunning) return;
+  isActionRunning = true;
   showToast(enable ? `Включение ${name}...` : `Отключение ${name}...`);
   const action = enable ? 'enable' : 'disable';
-  await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller ${action} "${name}"`);
-  await refreshAllData();
+  try {
+    await sh(`/data/adb/modules/amneziawg-android/bin/awg-controller ${action} "${name}"`);
+    await loadProfiles();
+    await loadStatus();
+    renderDashboard();
+    renderProfilesList();
+    updateSystemSummary();
+  } catch (err) {
+    showToast(`Ошибка переключения: ${err}`);
+  } finally {
+    isActionRunning = false;
+  }
 }
 
 async function restartAll() {
+  if (isActionRunning) return;
+  isActionRunning = true;
   showToast('Перезапуск всех профилей...');
-  await sh('/data/adb/modules/amneziawg-android/bin/awg-controller restart');
-  await refreshAllData();
-  showToast('Все профили перезапущены');
+  try {
+    await sh('/data/adb/modules/amneziawg-android/bin/awg-controller restart');
+    await loadProfiles();
+    await loadStatus();
+    renderDashboard();
+    renderProfilesList();
+    updateSystemSummary();
+    showToast('Все профили перезапущены');
+  } catch (err) {
+    showToast(`Ошибка перезапуска: ${err}`);
+  } finally {
+    isActionRunning = false;
+  }
 }
 
 async function stopAll() {
+  if (isActionRunning) return;
+  isActionRunning = true;
   showToast('Остановка всех профилей...');
-  await sh('/data/adb/modules/amneziawg-android/bin/awg-controller stop all');
-  await refreshAllData();
-  showToast('Все туннели остановлены');
+  try {
+    await sh('/data/adb/modules/amneziawg-android/bin/awg-controller stop all');
+    await loadProfiles();
+    await loadStatus();
+    renderDashboard();
+    renderProfilesList();
+    updateSystemSummary();
+    showToast('Все туннели остановлены');
+  } catch (err) {
+    showToast(`Ошибка остановки: ${err}`);
+  } finally {
+    isActionRunning = false;
+  }
 }
 
 const KNOWN_APPS = {
@@ -629,8 +749,12 @@ function formatAppLabel(pkg) {
 
 // Apps Loading via Native Package Manager & CLI
 async function loadInstalledApps() {
+  if (isLoadingApps) return;
+  if (STATE.installedApps && STATE.installedApps.length > 0) return;
+  isLoadingApps = true;
   try {
-    const cliRes = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller list-apps');
+    try {
+      const cliRes = await sh('/data/adb/modules/amneziawg-android/bin/awg-controller list-apps');
     if (cliRes.stdout && cliRes.stdout.trim().startsWith('[')) {
       const parsed = JSON.parse(cliRes.stdout.trim());
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -689,6 +813,9 @@ async function loadInstalledApps() {
       { package: 'com.android.chrome', name: 'Google Chrome', uid: 10001, system: true },
       { package: 'org.mozilla.firefox', name: 'Firefox', uid: 10478, system: false }
     ];
+  }
+  } finally {
+    isLoadingApps = false;
   }
 }
 
@@ -867,8 +994,17 @@ async function openProfileModal(name) {
   const groupApps = document.getElementById('group-apps');
   if (groupApps) groupApps.style.display = (modeSelect.value === 'all_traffic') ? 'none' : 'block';
 
-  renderFilteredApps();
   modal.style.display = 'flex';
+
+  if (!STATE.installedApps || STATE.installedApps.length === 0) {
+    const appsBox = document.getElementById('apps-selection-container');
+    if (appsBox) appsBox.innerHTML = '<div class="m3-apps-loading">Загрузка списка приложений...</div>';
+    loadInstalledApps().then(() => {
+      renderFilteredApps();
+    });
+  } else {
+    renderFilteredApps();
+  }
 }
 
 function closeProfileModal() {

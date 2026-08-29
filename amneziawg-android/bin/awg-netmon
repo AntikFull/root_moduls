@@ -4,6 +4,7 @@
 # с ограничением числа попыток и экспоненциальной задержкой.
 
 RUN_DIR="/data/adb/amneziawg/run"
+PROFILES_DIR="/data/adb/amneziawg/profiles"
 BIN_DIR="${0%/*}"
 export PATH="/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:$BIN_DIR:/system/bin:/system/xbin:/apex/com.android.runtime/bin:$PATH"
 export WG_UAPI_DIR="$RUN_DIR"
@@ -24,7 +25,12 @@ log_wd() {
 }
 
 get_default_phys_iface() {
-  ip route show table main default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1
+  local dev
+  dev="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1)"
+  if [ -z "$dev" ]; then
+    dev="$(ip route get 8.8.8.8 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1)"
+  fi
+  printf '%s' "$dev"
 }
 
 get_current_ssid() {
@@ -141,6 +147,11 @@ check_tunnel_health() {
   done
 }
 
+# Немедленная синхронизация состояния и режима сна при старте монитора
+if [ -x "$BIN_DIR/awg-controller" ]; then
+  "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
+fi
+
 last_iface="$(get_default_phys_iface)"
 last_ssid="$(get_current_ssid)"
 counter=0
@@ -168,11 +179,11 @@ while true; do
     fi
   fi
 
-  # Каждые 36 секунд: проверка здоровья туннелей и синхронизация правил
+  # Каждые 36 секунд: сначала синхронизация правил (сон в доверенных сетях), затем проверка здоровья
   if [ $((counter % 12)) -eq 0 ]; then
-    check_tunnel_health
     if [ -x "$BIN_DIR/awg-controller" ]; then
       "$BIN_DIR/awg-controller" sync-rules >/dev/null 2>&1
     fi
+    check_tunnel_health
   fi
 done

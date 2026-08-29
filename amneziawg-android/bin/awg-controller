@@ -177,7 +177,7 @@ find_free_slot() {
 
 # Получение текущего Wi-Fi SSID
 get_current_ssid() {
-  if ! ip -4 addr show dev wlan0 2>/dev/null | grep -Fq 'inet '; then
+  if ! ip -4 addr show 2>/dev/null | grep -E 'wlan[0-9]*' | grep -Fq 'inet '; then
     printf ''
     return 0
   fi
@@ -210,6 +210,7 @@ is_ssid_trusted() {
 # Запуск одного профиля
 start_profile() {
   local prof_name="$1"
+  local force_flag="$2"
   local conf_file="$PROFILES_DIR/${prof_name}.conf"
   local opts_file="$PROFILES_DIR/${prof_name}.json"
   [ -f "$opts_file" ] || opts_file="$PROFILES_DIR/${prof_name}.opts"
@@ -217,6 +218,18 @@ start_profile() {
   if [ ! -f "$conf_file" ]; then
     log_e "Конфигурационный файл $conf_file не найден!"
     return 1
+  fi
+
+  # Проверка доверенной Wi-Fi сети: если текущий SSID входит в список доверенных
+  # и не передан флаг принудительного старта, профиль переводится в режим сна
+  if [ "$force_flag" != "--force" ]; then
+    local cur_ssid="$(get_current_ssid)"
+    local trusted="$(get_opt_val "$opts_file" "trusted_wifi" "")"
+    if [ -n "$cur_ssid" ] && is_ssid_trusted "$cur_ssid" "$trusted"; then
+      log_i "[$prof_name] Текущая сеть '$cur_ssid' является доверенной. Перевод профиля в режим ожидания (сон)..."
+      pause_profile "$prof_name" "$cur_ssid"
+      return 0
+    fi
   fi
 
   log_i "Запуск профиля: $prof_name..."
@@ -440,12 +453,12 @@ apply_profile_rules() {
       log_i "[$prof_name] Маршрутизация UIDs (Include): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
-        while ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
-        while ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
-        while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-        while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
-        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+        ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+        ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
         # 1. Приоритетный маршрут в туннель
         ip rule add uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
         if [ "$has_ipv6" = "1" ]; then
@@ -485,10 +498,10 @@ apply_profile_rules() {
       log_i "[$prof_name] Исключение UIDs (Exclude): $uids (LAN Bypass: $lan_bypass)"
       for uid in $uids; do
         [ -z "$uid" ] && continue
-        while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-        while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
-        while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+        ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+        ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+        [ "$has_ipv6" = "1" ] && ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
         ip rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
         if [ "$has_ipv6" = "1" ]; then
           ip -6 rule add uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
@@ -572,12 +585,12 @@ stop_profile() {
   fi
   for uid in $uids; do
     [ -z "$uid" ] && continue
-    while ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
-    while ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null; do :; done
-    while ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null; do :; done
-    while ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
-    while ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null; do :; done
+    ip rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+    ip -6 rule del uidrange "${uid}-${uid}" table "$table_id" pref 9000 2>/dev/null || true
+    ip rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+    ip -6 rule del uidrange "${uid}-${uid}" table main pref 8990 2>/dev/null || true
+    ip rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
+    ip -6 rule del uidrange "${uid}-${uid}" table main pref 9001 2>/dev/null || true
   done
 
   # 2. Очистка ip rule и ip route
@@ -629,7 +642,7 @@ resume_profile() {
   local prof_name="$1"
   log_i "[$prof_name] Пробуждение из режима сна (запуск туннеля)..."
   rm -f "$RUN_DIR/${prof_name}.paused" 2>/dev/null || true
-  start_profile "$prof_name"
+  start_profile "$prof_name" --force
 }
 # Синхронизация правил и умная пауза в доверенных сетях с защищенным файловым локом
 sync_rules() {
@@ -686,7 +699,7 @@ sync_rules() {
 
     if [ -n "$cur_ssid" ] && is_ssid_trusted "$cur_ssid" "$trusted"; then
       # Должен спать в доверенной сети
-      if [ $is_paused -eq 0 ]; then
+      if [ $is_paused -eq 0 ] || [ $is_running -eq 1 ]; then
         pause_profile "$p" "$cur_ssid"
       fi
     else

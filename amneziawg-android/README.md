@@ -69,5 +69,5 @@
 
 ## Контакты
 
-- **Официальный канал:** [t.me/eCubzPlugins](https://t.me/eCubzPlugins)
+- **Официальный канал:** [t.me/module_ecubz](https://t.me/module_ecubz)
 - **Разработчик:** eCubz
