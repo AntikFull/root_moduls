@@ -210,6 +210,9 @@ function switchTabByName(tabName) {
     // выбора приложений группы: оба подгружаются при открытии вкладки.
     refreshAllData().then(loadInstalledApps).then(refreshGroupsTab);
   }
+  if (tabName === 'domains') {
+    refreshAllData().then(refreshDomainsTab);
+  }
 }
 
 function on(id, evt, handler) {
@@ -277,6 +280,9 @@ function initEventHandlers() {
   on('btn-group-save', 'click', saveGroup);
   on('btn-group-cancel', 'click', closeGroupModal);
   on('btn-group-modal-close', 'click', closeGroupModal);
+  on('btn-preset-banks', 'click', applyBanksPreset);
+  on('btn-refresh-domains', 'click', triggerRefreshDomains);
+  on('btn-save-domains', 'click', saveAndApplyDomains);
   on('grp-app-search', 'input', (e) => {
     GROUPS_STATE.search = e.target.value || '';
     renderGroupApps();
@@ -785,6 +791,143 @@ function formatAppLabel(pkg) {
   return namePart.charAt(0).toUpperCase() + namePart.slice(1);
 }
 
+// Настоящие названия приложений через мост root-менеджера.
+//
+// Собственный список из awg-controller list-apps знает только имена пакетов,
+// а человекочитаемое название выводит эвристикой из последнего сегмента:
+// com.oplus.games превращается в "Games". Менеджер root знает настоящий
+// ярлык приложения и отдает его через getPackagesInfo.
+//
+// Контракт снят из исходников, а не из документации:
+// KernelSU manager/.../webui/WebViewInterface.kt и APatch .../WebViewInterface.kt
+// возвращают массив объектов с полями packageName, versionName, versionCode,
+// appLabel, isSystem, uid; для недоступного пакета - packageName и error.
+// Поля isUpdatedSystemApp в этом контракте НЕТ, полагаться на него нельзя.
+async function enrichAppLabels() {
+  const bridge = getKsuBridge();
+  if (!bridge || typeof bridge.getPackagesInfo !== 'function') {
+    // Менеджер без этого API: остаются эвристические названия.
+    return false;
+  }
+  const packages = STATE.installedApps.map(a => a.package).filter(Boolean);
+  if (!packages.length) return false;
+
+  let result;
+  try {
+    result = bridge.getPackagesInfo(JSON.stringify(packages));
+    if (typeof result === 'string') result = JSON.parse(result);
+  } catch (err) {
+    console.warn('Мост не отдал сведения о пакетах:', err);
+    return false;
+  }
+  if (!Array.isArray(result)) return false;
+
+  const byPackage = new Map();
+  for (const item of result) {
+    if (item && item.packageName && !item.error) byPackage.set(item.packageName, item);
+  }
+
+  let enriched = 0;
+  for (const app of STATE.installedApps) {
+    const info = byPackage.get(app.package);
+    if (!info) continue;
+    if (info.appLabel) {
+      app.name = info.appLabel;
+      enriched++;
+    }
+    if (typeof info.isSystem === 'boolean') app.system = info.isSystem;
+    // UID от менеджера точнее эвристики: он берется из ApplicationInfo.
+    if (typeof info.uid === 'number' && info.uid > 0) app.uid = info.uid;
+  }
+  sortApps();
+  return enriched > 0;
+}
+
+// Признак служебного пакета, который незачем показывать в списке выбора.
+// Оверлеи ресурсов и внутренние пакеты фреймворка сетевого трафика не создают,
+// а список замусоривают: на аппаратах Oplus их сотни.
+function isTechnicalPackage(pkg) {
+  return /\.overlay$|\.overlay\.|^com\.android\.internal\.|^com\.google\.android\.overlay\.|overlay$/.test(pkg);
+}
+
+// Системные приложения отдельным запросом.
+// Предпочитается listPackages моста: он не запускает процессов и берет данные
+// у самого менеджера. Запасной путь через pm нужен для менеджеров без этого API.
+async function fetchSystemApps() {
+  const bridge = getKsuBridge();
+  if (bridge && typeof bridge.listPackages === 'function') {
+    try {
+      let list = bridge.listPackages('system');
+      if (typeof list === 'string') list = JSON.parse(list);
+      if (Array.isArray(list) && list.length) {
+        return list
+          .map(p => (typeof p === 'string' ? p : p && p.packageName))
+          .filter(Boolean)
+          .map(pkg => ({ package: pkg, name: formatAppLabel(pkg), uid: 0, system: true }));
+      }
+    } catch (err) {
+      console.warn('listPackages моста недоступен, беру список через pm:', err);
+    }
+  }
+
+  const res = await sh('pm list packages -U -s');
+  if (res.code !== 0 || !res.stdout) {
+    console.warn('Список системных приложений не получен, код ' + res.code);
+    return [];
+  }
+  const apps = [];
+  const seen = new Set();
+  for (const line of res.stdout.trim().split('\n')) {
+    const m = line.match(/^package:(\S+?)(?:\s+uid:(\d+))?$/);
+    if (!m || seen.has(m[1])) continue;
+    seen.add(m[1]);
+    apps.push({
+      package: m[1],
+      name: formatAppLabel(m[1]),
+      uid: m[2] ? parseInt(m[2], 10) : 0,
+      system: true
+    });
+  }
+  return apps;
+}
+
+// Слияние двух списков без потери уже известных сведений.
+function mergeAppLists(base, extra) {
+  const map = new Map();
+  for (const app of base) map.set(app.package, app);
+  for (const app of extra) {
+    const known = map.get(app.package);
+    if (!known) {
+      map.set(app.package, app);
+    } else {
+      known.system = known.system || app.system;
+      if (!known.uid && app.uid) known.uid = app.uid;
+    }
+  }
+  return Array.from(map.values()).filter(a => !(a.system && isTechnicalPackage(a.package)));
+}
+
+// Пользовательские приложения выше системных, внутри групп - по алфавиту.
+function sortApps() {
+  STATE.installedApps.sort((a, b) => {
+    if (!!a.system !== !!b.system) return a.system ? 1 : -1;
+    return String(a.name).localeCompare(String(b.name), 'ru');
+  });
+}
+
+// Дополнение списка: системные приложения и настоящие названия.
+// Вызывается на каждом пути получения списка, потому что до этой правки
+// основной путь возвращался сразу и названия оставались эвристическими.
+async function finalizeAppList() {
+  try {
+    STATE.installedApps = mergeAppLists(STATE.installedApps, await fetchSystemApps());
+  } catch (err) {
+    console.warn('Системные приложения не добавлены:', err);
+  }
+  await enrichAppLabels();
+  sortApps();
+}
+
 // Apps Loading via Native Package Manager & CLI
 async function loadInstalledApps() {
   if (isLoadingApps) return;
@@ -800,8 +943,9 @@ async function loadInstalledApps() {
           package: it.package,
           name: KNOWN_APPS[it.package] || it.name || formatAppLabel(it.package),
           uid: it.uid,
-          system: !!it.system
+          system: !!it.system || it.uid < 10000
         }));
+        await finalizeAppList();
         return;
       }
     }
@@ -832,8 +976,8 @@ async function loadInstalledApps() {
         }
       }
       if (apps.length > 0) {
-        apps.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
         STATE.installedApps = apps;
+        await finalizeAppList();
         return;
       }
     }
@@ -1981,4 +2125,245 @@ function formatBytes(bytes) {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// =========================================================================
+// 8. ДОМЕННАЯ МАРШРУТИЗАЦИЯ (Domain-Based Routing)
+// =========================================================================
+
+const PRESET_BANKS_RU = [
+  "sberbank.ru", "*.sberbank.ru", "sber.ru", "sberdevices.ru", "online.sberbank.ru",
+  "tbank.ru", "*.tbank.ru", "tinkoff.ru", "*.tinkoff.ru", "id.tbank.ru",
+  "alfabank.ru", "*.alfabank.ru", "alfa-bank.ru",
+  "vtb.ru", "*.vtb.ru", "online.vtb.ru",
+  "gazprombank.ru", "*.gazprombank.ru",
+  "psbank.ru", "*.psbank.ru",
+  "raiffeisen.ru", "*.raiffeisen.ru",
+  "sovcombank.ru", "*.sovcombank.ru",
+  "gosuslugi.ru", "*.gosuslugi.ru", "esia.gosuslugi.ru",
+  "nalog.gov.ru", "*.nalog.gov.ru", "nalog.ru", "lkfl2.nalog.ru",
+  "mos.ru", "*.mos.ru",
+  "nspk.ru", "*.nspk.ru", "sbp.nspk.ru", "mironline.ru", "*.mironline.ru",
+  "yoomoney.ru", "*.yoomoney.ru",
+  "ozon.ru", "*.ozon.ru",
+  "wildberries.ru", "*.wildberries.ru",
+  "rustore.ru", "*.rustore.ru",
+  "pochta.ru", "*.pochta.ru"
+];
+
+const PRESET_GOOGLE_AI = [
+  "gemini.google.com",
+  "alkalimakersuite-pa.clients6.google.com",
+  "generativelanguage.googleapis.com",
+  "bard.google.com",
+  "proactivebackend-pa.googleapis.com"
+];
+
+const PRESET_OPENAI_CLAUDE = [
+  "chatgpt.com",
+  "*.openai.com",
+  "oaistatic.com",
+  "oaiusercontent.com",
+  "claude.ai",
+  "*.anthropic.com"
+];
+
+let DOMAINS_STATE = {
+  config: null,
+  rawExclude: ''
+};
+
+async function readDomainsFile() {
+  const pathRes = await sh(`${CTRL} domains-file`);
+  const path = pathRes.stdout.trim() || '/data/adb/amneziawg/domains.json';
+  const res = await sh(`cat "${path}"`);
+  if (res.code === 0 && res.stdout.trim()) {
+    try {
+      const parsed = JSON.parse(res.stdout);
+      return {
+        exclude: Array.isArray(parsed.exclude) ? parsed.exclude : PRESET_BANKS_RU,
+        rules: Array.isArray(parsed.rules) ? parsed.rules : [],
+        refresh_minutes: Number(parsed.refresh_minutes || 30)
+      };
+    } catch (_) { /* глушение-обосновано: поврежденный JSON приводит к шаблону по умолчанию */ }
+  }
+  return {
+    exclude: PRESET_BANKS_RU,
+    rules: [],
+    refresh_minutes: 30
+  };
+}
+
+async function writeDomainsFile(cfg) {
+  // Запись повторяет схему групп: копия, запись, проверка, откат при отказе.
+  // Без отката ошибочная конфигурация оставалась бы на диске и применялась
+  // при каждой последующей синхронизации.
+  const json = JSON.stringify(cfg, null, 2);
+  const esc = json.replace(/'/g, "'\\''");
+  return sh(`
+    set -e
+    F="$(${CTRL} domains-file)"
+    umask 077
+    [ -f "$F" ] && cp -f "$F" "$F.bak"
+    printf '%s\\n' '${esc}' > "$F"
+    chmod 600 "$F"
+    if ! ${CTRL} domains-check; then
+      if [ -f "$F.bak" ]; then cp -f "$F.bak" "$F"; else rm -f "$F"; fi
+      rm -f "$F.bak"
+      echo "ОТКАТ: конфигурация доменов не прошла проверку"
+      exit 1
+    fi
+    rm -f "$F.bak"
+  `, SH_TIMEOUT_LONG);
+}
+
+function applyBanksPreset() {
+  const inp = document.getElementById('domains-exclude-input');
+  if (!inp) return;
+  const current = inp.value.split('\n').map(s => s.trim()).filter(Boolean);
+  const merged = Array.from(new Set([...current, ...PRESET_BANKS_RU]));
+  inp.value = merged.join('\n');
+  showToast('Пакет "Банки и сервисы РФ" добавлен в Exclude');
+}
+
+function addPresetToTarget(targetId, presetList) {
+  const ta = document.getElementById(`dom-target-${targetId}`);
+  if (!ta) return;
+  const current = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  const merged = Array.from(new Set([...current, ...presetList]));
+  ta.value = merged.join('\n');
+}
+
+async function refreshDomainsTab() {
+  const cfg = await readDomainsFile();
+  DOMAINS_STATE.config = cfg;
+
+  const excludeInp = document.getElementById('domains-exclude-input');
+  if (excludeInp) {
+    excludeInp.value = (cfg.exclude || []).join('\n');
+  }
+
+  // Загружаем список групп и список профилей
+  await loadGroupsState();
+  const container = document.getElementById('domain-rules-list');
+  if (!container) return;
+
+  // Формируем список всех доступных целей (Группы + Профили)
+  const targets = [];
+  (GROUPS_STATE.groups || []).forEach(g => {
+    targets.push({ name: g.name, type: 'group', active: g.members && g.members.some(m => m.active) });
+  });
+  (STATE.profiles || []).forEach(p => {
+    targets.push({ name: p.name, type: 'profile', active: p.running });
+  });
+
+  if (targets.length === 0) {
+    container.innerHTML = '<div class="m3-card"><div class="m3-card-body" style="color:var(--md-sys-color-on-surface-variant);font-size:13px;">Создайте хотя бы один профиль или группу для настройки маршрутов доменов.</div></div>';
+    return;
+  }
+
+  // Создаем карту существующих правил
+  const ruleMap = new Map();
+  (cfg.rules || []).forEach(r => {
+    ruleMap.set(`${r.type}:${r.target}`, r.domains || []);
+  });
+
+  container.innerHTML = targets.map((tgt, idx) => {
+    const key = `${tgt.type}:${tgt.name}`;
+    const doms = ruleMap.get(key) || [];
+    const val = doms.join('\n');
+    const badgeText = tgt.type === 'group' ? 'Группа резервирования' : 'Туннель';
+    const statusDot = tgt.active ? '<span style="color:#2e7d32;font-weight:700;">[OK] Активен</span>' : '<span style="color:var(--md-sys-color-on-surface-variant);">Остановлен</span>';
+
+    return `
+      <div class="m3-card" style="margin-bottom:12px;">
+        <div class="m3-card-header">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;">
+            <span class="m3-card-title">${escapeHtml(tgt.name)}</span>
+            <span class="m3-badge-pill" style="font-size:10px;">${badgeText}</span>
+            <span style="font-size:11px;margin-left:auto;">${statusDot}</span>
+          </div>
+        </div>
+        <div class="m3-card-body pt-0">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" style="font-size:11px;padding:4px 8px;" onclick="addPresetToTarget('${idx}', PRESET_GOOGLE_AI)">+ Google Gemini / Claude</button>
+            <button class="m3-btn m3-btn-tonal m3-btn-sm" style="font-size:11px;padding:4px 8px;" onclick="addPresetToTarget('${idx}', PRESET_OPENAI_CLAUDE)">+ OpenAI / ChatGPT</button>
+          </div>
+          <div class="m3-text-field">
+            <label class="m3-label" for="dom-target-${idx}">Домены для отправки в ${escapeHtml(tgt.name)} (по одному на строку)</label>
+            <textarea id="dom-target-${idx}" data-target-name="${escapeAttr(tgt.name)}" data-target-type="${tgt.type}" class="m3-input m3-textarea domain-target-input" rows="3" placeholder="gemini.google.com&#10;chatgpt.com">${escapeHtml(val)}</textarea>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function saveAndApplyDomains() {
+  const inputs = document.querySelectorAll('.domain-target-input');
+  if (!DOMAINS_STATE.config) {
+    showToast('Конфигурация доменов еще не загружена');
+    return;
+  }
+  if (inputs.length === 0) {
+    // Список целей пуст, когда профили и группы не успели загрузиться.
+    // Сохранение в этот момент записало бы пустой список правил и стерло
+    // всю настроенную маршрутизацию доменов.
+    showToast('Список целей не загружен, сохранение отменено');
+    return;
+  }
+
+  const excludeInp = document.getElementById('domains-exclude-input');
+  const exclude = excludeInp ? excludeInp.value.split('\n').map(s => s.trim()).filter(Boolean) : [];
+
+  // Правила целей, которых сейчас нет на экране (остановленный профиль,
+  // удаленная группа), сохраняются как есть: иначе одно нажатие кнопки
+  // молча стирало бы настройки, которых пользователь даже не видел.
+  const shown = new Set();
+  const rules = [];
+  inputs.forEach(ta => {
+    const target = ta.getAttribute('data-target-name');
+    const type = ta.getAttribute('data-target-type');
+    const domains = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!target) return;
+    shown.add(`${type}:${target}`);
+    if (domains.length > 0) {
+      rules.push({ target, type, domains });
+    }
+  });
+  const kept = (DOMAINS_STATE.config.rules || []).filter(
+    r => r && r.target && !shown.has(`${r.type}:${r.target}`)
+  );
+  const allRules = rules.concat(kept);
+
+  const cfg = {
+    exclude,
+    rules: allRules,
+    refresh_minutes: DOMAINS_STATE.config.refresh_minutes || 30
+  };
+
+  showToast('Сохранение и резолв маршрутов...');
+  const res = await writeDomainsFile(cfg);
+  if (res.code !== 0) {
+    showToast(`Ошибка сохранения: ${res.stderr || res.stdout}`);
+    return;
+  }
+
+  const applyRes = await sh(`${CTRL} domains-apply`, SH_TIMEOUT_LONG);
+  if (applyRes.code === 0) {
+    showToast('Маршруты доменов сохранены и применены!');
+  } else {
+    showToast(`Маршруты сохранены, предупреждение: ${applyRes.stderr || applyRes.stdout}`);
+  }
+  await refreshDomainsTab();
+}
+
+async function triggerRefreshDomains() {
+  showToast('Обновление IP-адресов доменов...');
+  const res = await sh(`${CTRL} domains-apply`, SH_TIMEOUT_LONG);
+  if (res.code === 0) {
+    showToast('IP-адреса доменов успешно обновлены!');
+  } else {
+    showToast(`Ошибка обновления: ${res.stderr || res.stdout}`);
+  }
 }

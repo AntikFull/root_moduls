@@ -40,6 +40,7 @@ AWG_MARK_GROUP_MASK=0xe0000000
 # правил: заблокированный туннель остается поднятым, и без снятия маршрута
 # пакеты продолжали бы уходить в него.
 GROUPS_FILE="${AWG_GROUPS_FILE:-$AWG_DATA_DIR/groups.json}"
+DOMAINS_FILE="${AWG_DOMAINS_FILE:-$AWG_DATA_DIR/domains.json}"
 AWG_GROUP_PREF_BASE=9100
 AWG_GROUP_MAX_RANK=19
 # Прямой канал ниже всех участников группы: используется только при
@@ -175,6 +176,10 @@ init_iptables_root() {
   # Filter / Killswitch
   iptables -w 2 -t filter -N AWG_FILTER 2>/dev/null || true
   iptables -w 2 -t filter -C OUTPUT -j AWG_FILTER 2>/dev/null || iptables -w 2 -t filter -I OUTPUT 1 -j AWG_FILTER
+  # Корневая цепочка IPv6. Нужна, чтобы профиль без IPv6-адреса мог
+  # отклонять IPv6 своих приложений, а не выпускать его мимо туннеля.
+  ip6tables -w 2 -t filter -N AWG6_FILTER 2>/dev/null || true # глушение-обосновано: цепочка уже создана предыдущим запуском
+  ensure_jump6 filter OUTPUT AWG6_FILTER
 
   # Автоматический обход цепочек Zapret/NFQWS, если они активны в системе (IPv4 и IPv6)
   awg_nfqws_bypass add
@@ -183,6 +188,63 @@ init_iptables_root() {
   # NAT Masquerade для tun-интерфейсов
   iptables -w 2 -t nat -C POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || \
     iptables -w 2 -t nat -A POSTROUTING -o awg+ -j MASQUERADE 2>/dev/null || true # глушение-обосновано: правило уже есть либо цель недоступна в ядре
+}
+
+# Обход локальных сетей в таблице маршрутизации профиля.
+#
+# Прежняя реализация lan_bypass исключала приватные диапазоны только из
+# маркировки пакетов, а маршрутизация приложений идет по правилу uid, а не по
+# метке. В таблице профиля был только маршрут по умолчанию, поэтому пакет к
+# любому приватному адресу все равно уходил в туннель. Приложение теряло доступ
+# к локальной сети целиком, а на мобильной сети - еще и к резолверам оператора,
+# которые живут именно на приватных адресах (замер на PJA110: DnsAddresses
+# 10.104.241.50 и 10.104.241.34). Приложения с собственным DoH этого не замечают,
+# остальные остаются без разрешения имен.
+#
+# Собственная подсеть туннеля исключается: адрес вида 10.55.55.3 не должен
+# уходить мимо туннеля из-за общего правила на 10.0.0.0/8.
+awg_lan_bypass_routes() {
+  local op="$1" table_id="$2" iface="$3"
+  [ -n "$table_id" ] || return 0
+
+  local phys_line phys_dev phys_gw
+  phys_line="$(ip -4 route get 8.8.8.8 2>/dev/null)" # глушение-обосновано: без сети обход просто не ставится
+  phys_dev="$(printf '%s' "$phys_line" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')"
+  phys_gw="$(printf '%s' "$phys_line" | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}')"
+  [ -n "$phys_dev" ] || return 0
+
+  # Адрес самого туннеля остается за туннелем.
+  local self_ips=""
+  if [ -n "$iface" ]; then
+    self_ips="$(ip -4 addr show dev "$iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="inet") print $(i+1)}')" # глушение-обосновано: интерфейс мог быть снят
+  fi
+
+  local net
+  for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    if [ "$op" = "add" ]; then
+      if [ -n "$phys_gw" ]; then
+        ip -4 route replace "$net" via "$phys_gw" dev "$phys_dev" table "$table_id" 2>/dev/null || true # глушение-обосновано: маршрут применяется атомарно
+      else
+        ip -4 route replace "$net" dev "$phys_dev" table "$table_id" 2>/dev/null || true # глушение-обосновано: см. выше
+      fi
+    else
+      ip -4 route del "$net" table "$table_id" 2>/dev/null || true # глушение-обосновано: маршрут мог быть уже снят
+    fi
+  done
+
+  # Адрес туннеля возвращается в туннель более точным префиксом.
+  local sip
+  for sip in $self_ips; do
+    case "$sip" in
+      10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|192.168.*)
+        if [ "$op" = "add" ]; then
+          ip -4 route replace "$sip" dev "$iface" table "$table_id" 2>/dev/null || true # глушение-обосновано: собственный адрес мог уже присутствовать
+        else
+          ip -4 route del "$sip" table "$table_id" 2>/dev/null || true # глушение-обосновано: маршрут мог быть уже снят
+        fi
+        ;;
+    esac
+  done
 }
 
 # Обход цепочек соседних модулей Zapret/NFQWS для трафика туннеля.
@@ -480,8 +542,13 @@ start_profile() {
   log_i "[$prof_name] Настройка таблицы маршрутизации $table_id..."
   ip route flush table "$table_id" 2>/dev/null || true
   ip route add default dev "$iface" table "$table_id" 2>/dev/null || true
-  ip -6 route flush table "$table_id" 2>/dev/null || true
-  ip -6 route add default dev "$iface" table "$table_id" 2>/dev/null || true
+  ip -6 route flush table "$table_id" 2>/dev/null || true # глушение-обосновано: таблица могла быть пуста
+  # Маршрут IPv6 по умолчанию ставится, только если интерфейс получил
+  # IPv6-адрес. Иначе таблица профиля указывала бы в интерфейс,
+  # неспособный отправить ни одного IPv6-пакета.
+  if printf '%s' "$address_val" | grep -Fq ':'; then
+    ip -6 route add default dev "$iface" table "$table_id" 2>/dev/null || true # глушение-обосновано: маршрут мог остаться от предыдущего применения
+  fi
 
   # 5. Применение правил Policy Routing и iptables
   apply_profile_rules "$prof_name"
@@ -495,6 +562,12 @@ start_profile() {
   fi
 
   # Инициализация хендшейка отправкой пробного ICMP пакета через интерфейс
+  # Снимок фактического эндпоинта: доменная маршрутизация обязана исключать
+  # эти адреса, иначе маршрут "dev awgN" отправил бы пакеты самого туннеля
+  # внутрь другого туннеля. Эндпоинты туннелей и адреса доменов лежат в общих
+  # диапазонах CDN, поэтому совпадение возможно на ровном месте.
+  WG_UAPI_DIR="$TMP_DIR" AMNEZIAWG_UAPI_DIR="$TMP_DIR"     "$BIN_DIR/awg" show "$iface" endpoints 2>/dev/null     | awk '{if (NF >= 2) print $2}' > "$RUN_DIR/${prof_name}.endpoint" 2>/dev/null || true # глушение-обосновано: отсутствие пиров дает пустой снимок, это штатный случай
+
   ping -c 1 -W 1 -I "$iface" 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 -I "$iface" 8.8.8.8 >/dev/null 2>&1 || true
 
   log_i "[$prof_name] Профиль успешно запущен! Интерфейс: $iface, Таблица: $table_id, Марка: $fwmark"
@@ -531,6 +604,41 @@ ip_rule_add() {
 }
 
 # Гарантированная ссылка из корневой цепочки на цепочку профиля.
+# Подключение цепочки к корневой в ip6tables.
+# Отдельная функция: у ip6tables собственный набор таблиц.
+ensure_jump6() {
+  local table="$1" root="$2" chain="$3"
+  if ! ip6tables -w 2 -t "$table" -C "$root" -j "$chain" 2>/dev/null; then # глушение-обосновано: -C это проверка наличия, ее отрицательный код обрабатывается здесь же
+    ip6tables -w 2 -t "$table" -A "$root" -j "$chain"
+  fi
+}
+
+# Запрет IPv6 приложениям профиля, туннель которого несет только IPv4.
+#
+# Без запрета приложение, получившее от DNS адрес AAAA, уходит по IPv6
+# мимо туннеля прямо в сеть оператора: это утечка настоящего адреса.
+# Для сайтов за Cloudflare добавляется залипание - приложение ждет
+# ответа по IPv6, пока не свалится на IPv4 по таймауту. Явный отказ
+# возвращается сразу, и приложение переключается на IPv4 без задержки.
+awg_ipv6_reject() {
+  local chain="$1" mode="$2" uids="$3" lan="$4"
+  local uid
+  # Локальные и link-local адреса не трогаем: ими пользуется сама система.
+  ip6tables -w 2 -t filter -A "$chain" -d ::1/128 -j RETURN
+  ip6tables -w 2 -t filter -A "$chain" -d fe80::/10 -j RETURN
+  if [ "$lan" = "true" ] || [ "$lan" = "1" ]; then
+    ip6tables -w 2 -t filter -A "$chain" -d fc00::/7 -j RETURN
+  fi
+  if [ "$mode" = "all_traffic" ]; then
+    ip6tables -w 2 -t filter -A "$chain" -j REJECT --reject-with adm-prohibited
+    return 0
+  fi
+  for uid in $uids; do
+    [ -n "$uid" ] || continue
+    ip6tables -w 2 -t filter -A "$chain" -m owner --uid-owner "$uid" -j REJECT --reject-with adm-prohibited
+  done
+}
+
 ensure_jump() {
   local table="$1" root="$2" chain="$3"
   if ! iptables -w 2 -t "$table" -C "$root" -j "$chain" 2>/dev/null; then # глушение-обосновано: -C это проверка наличия, ее отрицательный код обрабатывается здесь же
@@ -559,15 +667,260 @@ awg_dns_redirect() {
   done
 }
 
+# Снятие одного маршрута домена по строке снимка.
+# Формат строки: "TUNNEL <семейство> <таблица> <префикс>"
+# либо "MAIN <семейство> main <интерфейс> <префикс>".
+awg_domains_route_del() {
+  local kind="$1" family="$2" target_val="$3" iface_val="$4" ip_cidr="$5"
+  local prefix=""
+  case "$kind" in
+    TUNNEL) prefix="$iface_val" ;;
+    MAIN) prefix="$ip_cidr" ;;
+    *) return 0 ;;
+  esac
+  [ -n "$prefix" ] || return 0
+  if [ "$family" = "6" ]; then
+    ip -6 route del "$prefix" table "$target_val" 2>/dev/null || true # глушение-обосновано: маршрут мог быть уже снят
+  else
+    ip -4 route del "$prefix" table "$target_val" 2>/dev/null || true # глушение-обосновано: маршрут мог быть уже снят
+  fi
+}
+
+# Полное снятие ранее примененных маршрутов доменов
+awg_domains_clear() {
+  local routes_snap="$RUN_DIR/domains.routes"
+  if [ -f "$routes_snap" ]; then
+    local kind family target_val iface_val ip_cidr
+    while read -r kind family target_val iface_val ip_cidr || [ -n "$kind" ]; do
+      [ -n "$kind" ] || continue
+      awg_domains_route_del "$kind" "$family" "$target_val" "$iface_val" "$ip_cidr"
+    done < "$routes_snap"
+    rm -f "$routes_snap" 2>/dev/null # глушение-обосновано: удаление временного снимка
+  fi
+  rm -f "$RUN_DIR/domains.applied" "$RUN_DIR/domains.sig" 2>/dev/null # глушение-обосновано: следующее применение должно быть полным
+}
+
+# Снятие только устаревших маршрутов: все, что есть в новом наборе,
+# остается нетронутым. Именно это делает повторное применение бесшовным:
+# без разницы каждый цикл сначала сносил все маршруты, и на время резолва
+# трафик банков уходил в туннель, а трафик туннельных доменов - напрямую.
+awg_domains_prune() {
+  local routes_new="$1"
+  local routes_snap="$RUN_DIR/domains.routes"
+  [ -f "$routes_snap" ] || return 0
+  local line kind family target_val iface_val ip_cidr
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    grep -Fxq "$line" "$routes_new" 2>/dev/null && continue
+    # shellcheck disable=SC2086
+    set -- $line
+    kind="$1"; family="$2"; target_val="$3"; iface_val="$4"; ip_cidr="$5"
+    awg_domains_route_del "$kind" "$family" "$target_val" "$iface_val" "$ip_cidr"
+  done < "$routes_snap"
+}
+
+# Подпись топологии: состав поднятых туннелей и состояние их маршрутов.
+# Интервал обновления не должен задерживать реакцию на запуск нового
+# профиля: у его таблицы еще нет маршрутов доменов.
+awg_domains_signature() {
+  local f prof down
+  # Маршруты Exclude ведут через физический шлюз. При переходе Wi-Fi -> LTE
+  # он меняется, и без пересчета трафик банков ушел бы в несуществующий
+  # интерфейс. Запрос к ядру дешев и не трогает резолвер.
+  ip -4 route get 8.8.8.8 2>/dev/null | head -n 1 # глушение-обосновано: отсутствие маршрута по умолчанию дает пустую подпись
+  for f in "$RUN_DIR"/*.table; do
+    [ -f "$f" ] || continue
+    prof="$(basename "$f" .table)"
+    down=0
+    [ -f "$RUN_DIR/${prof}.routedown" ] && down=1
+    printf '%s:%s:%s:%s\n' "$prof" "$(cat "$f" 2>/dev/null)" \
+      "$(read_state "${prof}.iface")" "$down"
+  done | sort
+}
+
+# Установка одного маршрута домена с записью в снимок ТОЛЬКО при успехе.
+#
+# Прежняя редакция писала строку снимка независимо от кода возврата ip route.
+# На устройстве это дало снимок из 803 строк при отсутствующих в ядре маршрутах:
+# применение попало на перезапуск профиля, интерфейса в тот момент не было.
+# Модуль при этом считал маршруты установленными и откладывал повтор на целый
+# интервал обновления - до получаса без точечной маршрутизации и молча.
+awg_domains_route_add() {
+  local family="$1" prefix="$2" target_val="$3" snap_line="$4" snap_file="$5"
+  local via_gw="$6" via_dev="$7"
+  local rc=0
+  if [ "$family" = "6" ]; then
+    if [ -n "$via_gw" ]; then
+      ip -6 route replace "$prefix" via "$via_gw" dev "$via_dev" table "$target_val" 2>/dev/null || rc=$? # глушение-обосновано: код возврата проверяется ниже
+    else
+      ip -6 route replace "$prefix" dev "$via_dev" table "$target_val" 2>/dev/null || rc=$? # глушение-обосновано: см. выше
+    fi
+  else
+    if [ -n "$via_gw" ]; then
+      ip -4 route replace "$prefix" via "$via_gw" dev "$via_dev" table "$target_val" 2>/dev/null || rc=$? # глушение-обосновано: см. выше
+    else
+      ip -4 route replace "$prefix" dev "$via_dev" table "$target_val" 2>/dev/null || rc=$? # глушение-обосновано: см. выше
+    fi
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$snap_line" >> "$snap_file"
+    return 0
+  fi
+  # Неудача запоминается: отметка времени не будет записана, и следующий
+  # такт повторит применение немедленно, а не через интервал обновления.
+  printf '1' > "$RUN_DIR/domains.partial" 2>/dev/null || true # глушение-обосновано: отсутствие метки означает повтор на следующем такте
+  return 1
+}
+
+# Применение маршрутов доменов на основе domains.json.
+# Без --force повторный резолв выполняется не чаще refresh_minutes.
+# sync_rules вызывается раз в полминуты, и резолв сотен доменов на каждом
+# такте стоил бы батареи и грузил резолвер. Изменение конфигурации или
+# состава поднятых туннелей применяется немедленно, без ожидания интервала.
+awg_domains_apply() {
+  local force=0
+  [ "$1" = "--force" ] && force=1
+
+  if [ ! -f "$DOMAINS_FILE" ] || [ ! -x "$BIN_DIR/awg" ]; then
+    # Конфигурация убрана: ранее поставленные маршруты не должны жить вечно.
+    awg_domains_clear
+    return 0
+  fi
+
+  local sig_file="$RUN_DIR/domains.sig"
+  local stamp="$RUN_DIR/domains.applied"
+  local cur_sig
+  cur_sig="$(awg_domains_signature)"
+
+  if [ $force -eq 0 ] && [ -f "$stamp" ] && [ -f "$RUN_DIR/domains.routes" ] && \
+     [ ! "$DOMAINS_FILE" -nt "$stamp" ] && \
+     [ "$cur_sig" = "$(cat "$sig_file" 2>/dev/null)" ]; then
+    local refresh_sec now last
+    refresh_sec="$("$BIN_DIR/awg" domains-refresh "$DOMAINS_FILE" 2>/dev/null)" # глушение-обосновано: нечитаемый ответ заменяется значением по умолчанию
+    case "$refresh_sec" in ''|*[!0-9]*) refresh_sec=1800 ;; esac
+    now="$(date +%s)"
+    last="$(cat "$stamp" 2>/dev/null)"
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    if [ $((now - last)) -lt "$refresh_sec" ]; then
+      return 0
+    fi
+  fi
+
+  local resolve_lines
+  resolve_lines="$("$BIN_DIR/awg" resolve-domains "$DOMAINS_FILE" "$GROUPS_FILE" "$RUN_DIR" --line 2>/dev/null)"
+  if [ -z "$resolve_lines" ]; then
+    # Пустой результат бывает по двум причинам: доменов не настроено
+    # вовсе либо резолвер сейчас недоступен. Снимать маршруты во втором
+    # случае нельзя: трафик банков ушел бы в туннель на все время сбоя
+    # DNS, поэтому прежний набор сохраняется до следующей попытки.
+    local dom_count
+    dom_count="$("$BIN_DIR/awg" domains-count "$DOMAINS_FILE" 2>/dev/null)" # глушение-обосновано: нечитаемый ответ трактуется как отказ резолва
+    case "$dom_count" in ''|*[!0-9]*) dom_count=-1 ;; esac
+    if [ "$dom_count" = "0" ]; then
+      awg_domains_clear
+    else
+      log_w "Резолв доменов не дал результата: прежние маршруты сохранены."
+    fi
+    return 0
+  fi
+
+  local active_tables="" tf t_id
+  for tf in "$RUN_DIR"/*.table; do
+    [ -f "$tf" ] || continue
+    t_id="$(cat "$tf" 2>/dev/null)"
+    [ -n "$t_id" ] && active_tables="$active_tables $t_id"
+  done
+
+  local phys_v4 phys_v6 phys_dev phys_gw phys_dev6 phys_gw6
+  phys_v4="$(ip -4 route get 8.8.8.8 2>/dev/null)"
+  phys_gw="$(printf '%s' "$phys_v4" | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}')"
+  phys_dev="$(printf '%s' "$phys_v4" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')"
+
+  phys_v6="$(ip -6 route get 2001:4860:4860::8888 2>/dev/null)"
+  phys_gw6="$(printf '%s' "$phys_v6" | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}')"
+  phys_dev6="$(printf '%s' "$phys_v6" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')"
+
+  local routes_snap="$RUN_DIR/domains.routes.new"
+  : > "$routes_snap"
+  rm -f "$RUN_DIR/domains.partial" 2>/dev/null # глушение-обосновано: метка ставится заново при неудаче
+
+  local type_tag fam iface_or_ip ip_val
+  printf '%s\n' "$resolve_lines" | while read -r type_tag fam iface_or_ip ip_val || [ -n "$type_tag" ]; do
+    [ -n "$type_tag" ] || continue
+    case "$type_tag" in
+      EXCLUDE)
+        local ex_ip="$iface_or_ip"
+        if [ "$fam" = "4" ] && [ -n "$phys_dev" ]; then
+          for t in $active_tables; do
+            awg_domains_route_add 4 "${ex_ip}/32" "$t"               "TUNNEL 4 $t ${ex_ip}/32" "$routes_snap" "$phys_gw" "$phys_dev"
+          done
+        elif [ "$fam" = "6" ] && [ -n "$phys_dev6" ]; then
+          for t in $active_tables; do
+            awg_domains_route_add 6 "${ex_ip}/128" "$t"               "TUNNEL 6 $t ${ex_ip}/128" "$routes_snap" "$phys_gw6" "$phys_dev6"
+          done
+        fi
+        ;;
+      ROUTE)
+        local rt_iface="$iface_or_ip"
+        local rt_ip="$ip_val"
+        if [ -n "$rt_iface" ] && [ -n "$rt_ip" ]; then
+          if [ "$fam" = "4" ]; then
+            awg_domains_route_add 4 "${rt_ip}/32" main               "MAIN 4 main $rt_iface ${rt_ip}/32" "$routes_snap" "" "$rt_iface"
+            for t in $active_tables; do
+              awg_domains_route_add 4 "${rt_ip}/32" "$t"                 "TUNNEL 4 $t ${rt_ip}/32" "$routes_snap" "" "$rt_iface"
+            done
+          elif [ "$fam" = "6" ]; then
+            awg_domains_route_add 6 "${rt_ip}/128" main               "MAIN 6 main $rt_iface ${rt_ip}/128" "$routes_snap" "" "$rt_iface"
+            for t in $active_tables; do
+              awg_domains_route_add 6 "${rt_ip}/128" "$t"                 "TUNNEL 6 $t ${rt_ip}/128" "$routes_snap" "" "$rt_iface"
+            done
+          fi
+        fi
+        ;;
+    esac
+  done
+
+  # Сначала снимаются только исчезнувшие маршруты, и лишь потом снимок
+  # замещается: при обратном порядке старые маршруты остались бы в ядре навсегда.
+  awg_domains_prune "$routes_snap"
+  mv -f "$routes_snap" "$RUN_DIR/domains.routes" 2>/dev/null || true # глушение-обосновано: при недоступном каталоге следующий цикл повторит применение
+  printf '%s' "$cur_sig" > "$sig_file" 2>/dev/null || true # глушение-обосновано: запись подписи топологии
+  # Отметка времени разрешает пропускать применение до истечения интервала.
+  # Если хотя бы один маршрут не встал, пропускать нельзя.
+  if [ -f "$RUN_DIR/domains.partial" ]; then
+    log_w "Маршруты доменов применены не полностью: повтор на следующем такте."
+    rm -f "$stamp" 2>/dev/null # глушение-обосновано: отсутствие отметки и есть требование повтора
+  else
+    date +%s > "$stamp" 2>/dev/null || true # глушение-обосновано: запись отметки времени
+  fi
+}
+
 # Снятие правил uidrange по снимку прошлого применения.
 # Список приложений профиля мог измениться: правила для убранных UID указывают
 # на table main и групповой очисткой по номеру таблицы не снимаются.
 awg_drop_uid_rules() {
   local prof_name="$1"
   local table_id="$2"
-  local uid grp_pref grp_rank
+  local uid grp_pref grp_rank grp_name
+  grp_name="$(read_state "${prof_name}.group")"
   grp_pref="$(read_state "${prof_name}.grouppref")"
   grp_rank="$(read_state "${prof_name}.grouprank")"
+
+  # Проверяем, есть ли другие активные участники этой же группы
+  local has_other_group_member=0
+  if [ -n "$grp_name" ]; then
+    local gf other_prof
+    for gf in "$RUN_DIR"/*.group; do
+      [ -f "$gf" ] || continue
+      other_prof="$(basename "$gf" .group)"
+      [ "$other_prof" = "$prof_name" ] && continue
+      if [ "$(cat "$gf" 2>/dev/null)" = "$grp_name" ]; then
+        has_other_group_member=1
+        break
+      fi
+    done
+  fi
+
   for uid in $(read_state "${prof_name}.uids"); do
     [ -n "$uid" ] || continue
     if [ -n "$table_id" ]; then
@@ -577,12 +930,9 @@ awg_drop_uid_rules() {
     fi
     ip_rule_del_all uidrange "${uid}-${uid}" table main pref 8990
     ip_rule_del_all uidrange "${uid}-${uid}" table main pref 9001
-    # Прямой канал группы принадлежит участнику нулевого ранга: он один его
-    # ставит, он один и снимает. Иначе очистка участника ранга 1 удаляла бы
-    # правило, поставленное рангом 0, а тот переставлял бы его лишь на
-    # следующем цикле - где оно снова удалялось бы. В итоге прямой канал
-    # не переживал ни одного полного цикла синхронизации.
-    if [ -z "$grp_rank" ] || [ "$grp_rank" = "0" ]; then
+    # Прямой канал группы (pref 9120) снимается ТОЛЬКО если профиль состоял в
+    # группе и в этой же группе больше нет ни одного запущенного участника.
+    if [ -n "$grp_name" ] && [ "$has_other_group_member" = "0" ]; then
       ip_rule_del_all uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
     fi
   done
@@ -623,7 +973,7 @@ apply_profile_rules() {
   # и поведение при переключении зависело бы от того, кто сейчас активен.
   local grp_name="" grp_rank="" grp_uids="" grp_info=""
   if [ -f "$GROUPS_FILE" ] && [ -x "$BIN_DIR/awg" ]; then
-    if grp_info="$("$BIN_DIR/awg" group-info "$GROUPS_FILE" "$prof_name" 2>/dev/null)"; then # глушение-обосновано: код возврата 1 означает "профиль не состоит в группе", это штатный случай
+    if grp_info="$("$BIN_DIR/awg" group-info "$GROUPS_FILE" "$prof_name" "$PROFILES_DIR" 2>/dev/null)"; then # глушение-обосновано: код возврата 1 означает "профиль не состоит в группе", это штатный случай
       grp_name="$(printf '%s\n' "$grp_info" | sed -n 's/^group=//p')"
       grp_rank="$(printf '%s\n' "$grp_info" | sed -n 's/^rank=//p')"
       grp_uids="$(printf '%s\n' "$grp_info" | sed -n 's/^uids=//p')"
@@ -644,6 +994,9 @@ apply_profile_rules() {
   local ch_mangle="AWG_M_${prof_name}"
   local ch_nat="AWG_N_${prof_name}"
   local ch_kill="AWG_K_${prof_name}"
+  # Цепочка IPv6 профиля. Префикс короче остальных, поэтому предел
+  # длины имени профиля она не нарушает.
+  local ch_v6="AWG6_${prof_name}"
 
   # Отказ создания цепочки означает профиль без единого правила маршрутизации,
   # поэтому он не заглушается, а прекращает применение с записью в журнал.
@@ -659,16 +1012,28 @@ apply_profile_rules() {
     fi
   done
 
+  if ! ip6tables -w 2 -t filter -N "$ch_v6" 2>/dev/null; then # глушение-обосновано: цепочка уже создана предыдущим применением
+    ip6tables -w 2 -t filter -F "$ch_v6" 2>/dev/null || true # глушение-обосновано: без IPv6 в ядре цепочки не будет, это штатно
+  fi
+  ensure_jump6 filter AWG6_FILTER "$ch_v6"
+
   ensure_jump mangle AWG_MANGLE "$ch_mangle"
   ensure_jump nat AWG_NAT "$ch_nat"
   ensure_jump filter AWG_FILTER "$ch_kill"
 
-  # Проверка наличия IPv6 в конфигурации профиля
+  # Признак IPv6 у профиля.
+  #
+  # Берется ТОЛЬКО из Address, то есть из адреса самого интерфейса.
+  # Прежняя редакция учитывала еще и AllowedIPs, но это разные вещи:
+  # AllowedIPs = ::/0 говорит лишь о том, какой трафик согласен принять
+  # пир, а нести IPv6 туннель способен только при собственном
+  # IPv6-адресе. Из-за смешения понятий профиль с адресом IPv4 и ::/0
+  # в AllowedIPs получал правила и маршрут IPv6, ведущие в интерфейс
+  # без IPv6-адреса, то есть в никуда.
   local has_ipv6=0
-  local conf_addrs conf_aips
+  local conf_addrs
   conf_addrs="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "Address")"
-  conf_aips="$(get_conf_val "$PROFILES_DIR/${prof_name}.conf" "AllowedIPs")"
-  if printf '%s\n%s' "$conf_addrs" "$conf_aips" | grep -Fq ':'; then
+  if printf '%s' "$conf_addrs" | grep -Fq ':'; then
     has_ipv6=1
   fi
 
@@ -694,6 +1059,11 @@ apply_profile_rules() {
     iptables -w 2 -t mangle -A "$ch_mangle" -d 10.0.0.0/8 -j RETURN
     iptables -w 2 -t mangle -A "$ch_mangle" -d 172.16.0.0/12 -j RETURN
     iptables -w 2 -t mangle -A "$ch_mangle" -d 192.168.0.0/16 -j RETURN
+    # Маркировка - не единственный путь в туннель: приложения маршрутизуются
+    # правилом uid, поэтому обход обязан быть и в таблице маршрутизации.
+    awg_lan_bypass_routes add "$table_id" "$iface"
+  else
+    awg_lan_bypass_routes del "$table_id" "$iface"
   fi
   iptables -w 2 -t mangle -A "$ch_mangle" -d 224.0.0.0/4 -j RETURN
   iptables -w 2 -t mangle -A "$ch_mangle" -d 255.255.255.255/32 -j RETURN
@@ -729,6 +1099,30 @@ apply_profile_rules() {
     rm -f "$RUN_DIR/${prof_name}.group" "$RUN_DIR/${prof_name}.grouprank"           "$RUN_DIR/${prof_name}.grouppref" 2>/dev/null # глушение-обосновано: профиль мог никогда не состоять в группе
   fi
 
+  # Профиль без IPv6-адреса не может нести IPv6, поэтому его
+  # приложениям IPv6 запрещается: иначе он уходит мимо туннеля.
+  if [ "$has_ipv6" != "1" ]; then
+    awg_ipv6_reject "$ch_v6" "$routing_mode" "$uids" "$lan_bypass"
+  fi
+
+  # Пустой результат резолва при режиме, которому нужны приложения, означает
+  # не "приложений нет", а "менеджер пакетов сейчас недоступен": так бывает на
+  # ранней стадии загрузки и при разовом сбое pm. Затирать снимок в этот момент
+  # нельзя - профиль остался бы вовсе без правил, а все его приложения без
+  # маршрутизации, причем молча.
+  if [ -z "$uids" ]; then
+    case "$routing_mode" in
+      include_apps|exclude_apps|group)
+        local prev_uids
+        prev_uids="$(read_state "${prof_name}.uids")"
+        if [ -n "$prev_uids" ]; then
+          uids="$prev_uids"
+          log_w "[$prof_name] Резолв UID не дал результата, взят прежний снимок."
+        fi
+        ;;
+    esac
+  fi
+
   write_state "${prof_name}.uids" "$uids"
   write_state "${prof_name}.mode" "$routing_mode"
   write_state "${prof_name}.killswitch" "$killswitch"
@@ -753,12 +1147,33 @@ apply_profile_rules() {
         ip_rule_add 4 uidrange "${uid}-${uid}" table "$table_id" pref "$grp_pref"
         [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table "$table_id" pref "$grp_pref"
 
-        # Прямой канал ниже всех участников группы. Ставит его только
-        # участник нулевого ранга: правило одно на группу, и дублировать
-        # его у каждого участника незачем.
-        if [ "$grp_rank" = "0" ] && [ "$killswitch" != "true" ] && [ "$killswitch" != "1" ]; then
-          ip_rule_add 4 uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
-          [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
+        # Прямой канал ниже всех участников группы (pref 9120 -> table main).
+        # Добавляется только один раз на группу (участником ранга 0 или активным лидером)
+        # при выключенном KillSwitch.
+        if [ "$killswitch" != "true" ] && [ "$killswitch" != "1" ]; then
+          local should_add_direct=0
+          if [ "$grp_rank" = "0" ]; then
+            should_add_direct=1
+          else
+            local has_rank0=0 gf g_prof g_rank
+            for gf in "$RUN_DIR"/*.grouprank; do
+              [ -f "$gf" ] || continue
+              g_prof="$(basename "$gf" .grouprank)"
+              [ "$(read_state "${g_prof}.group")" = "$grp_name" ] || continue
+              g_rank="$(read_state "${g_prof}.grouprank")"
+              if [ "$g_rank" = "0" ] && [ -f "$RUN_DIR/${g_prof}.pid" ]; then
+                has_rank0=1
+                break
+              fi
+            done
+            [ $has_rank0 -eq 0 ] && should_add_direct=1
+          fi
+
+          if [ $should_add_direct -eq 1 ]; then
+            ip_rule_del_all uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
+            ip_rule_add 4 uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
+            [ "$has_ipv6" = "1" ] && ip_rule_add 6 uidrange "${uid}-${uid}" table main pref "$AWG_GROUP_PREF_DIRECT"
+          fi
         fi
 
         # Маркировка пакетов в групповом режиме не ставится: маршрут уже
@@ -978,6 +1393,9 @@ awg_killswitch_release() {
   iptables -w 2 -t filter -D AWG_FILTER -j "$ch_kill" 2>/dev/null || true # глушение-обосновано: ссылки на цепочку может не быть
   iptables -w 2 -t filter -F "$ch_kill" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
   iptables -w 2 -t filter -X "$ch_kill" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  ip6tables -w 2 -t filter -D AWG6_FILTER -j "AWG6_${prof_name}" 2>/dev/null || true # глушение-обосновано: ссылки на цепочку может не быть
+  ip6tables -w 2 -t filter -F "AWG6_${prof_name}" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  ip6tables -w 2 -t filter -X "AWG6_${prof_name}" 2>/dev/null || true # глушение-обосновано: цепочки может не быть
   rm -f "$RUN_DIR/${prof_name}.locked" 2>/dev/null # глушение-обосновано: маркера может не быть
 }
 
@@ -1049,7 +1467,7 @@ stop_profile() {
 
   rm -f "$RUN_DIR/${prof_name}.iface" "$RUN_DIR/${prof_name}.table" "$RUN_DIR/${prof_name}.mark" \
         "$RUN_DIR/${prof_name}.prio" "$RUN_DIR/${prof_name}.pid" "$RUN_DIR/${prof_name}.paused" \
-        "$RUN_DIR/${prof_name}.rulesig" "$RUN_DIR/${prof_name}.ipv6" 2>/dev/null # глушение-обосновано: часть файлов состояния могла не создаваться
+        "$RUN_DIR/${prof_name}.rulesig" "$RUN_DIR/${prof_name}.ipv6" "$RUN_DIR/${prof_name}.endpoint" 2>/dev/null # глушение-обосновано: часть файлов состояния могла не создаваться
   log_i "[$prof_name] Профиль остановлен."
 }
 
@@ -1151,6 +1569,9 @@ sync_rules() {
     fi
   done
 
+  # Синхронизация точечных маршрутов доменов
+  awg_domains_apply
+
   release_lock
 }
 
@@ -1159,6 +1580,9 @@ sync_rules() {
 # именно ее, а не собственную копию списка правил.
 cleanup_all() {
   log_i "Полная очистка всех профилей и правил AmneziaWG..."
+
+  # Снятие маршрутов доменов
+  awg_domains_clear
 
   local f p
   for f in "$RUN_DIR"/*.profile; do
@@ -1176,6 +1600,13 @@ cleanup_all() {
   killall -9 amneziawg-go 2>/dev/null || true # глушение-обосновано: живых процессов демона может не быть
 
   local tbl root chain
+  # Корневая цепочка IPv6 снимается вместе с остальными: правило
+  # в OUTPUT, оставленное после удаления модуля, продолжало бы
+  # отклонять IPv6 приложений, которые к модулю уже не относятся.
+  ip6tables -w 2 -t filter -D OUTPUT -j AWG6_FILTER 2>/dev/null || true # глушение-обосновано: ссылки может не быть
+  ip6tables -w 2 -t filter -F AWG6_FILTER 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+  ip6tables -w 2 -t filter -X AWG6_FILTER 2>/dev/null || true # глушение-обосновано: цепочки может не быть
+
   for tbl in "mangle:AWG_MANGLE" "nat:AWG_NAT" "filter:AWG_FILTER"; do
     t="${tbl%%:*}"
     chain="${tbl#*:}"
@@ -1368,8 +1799,28 @@ case "$1" in
   group-file)
     # Путь к файлу групп: WebUI пишет его напрямую и не должен знать
     # расположение каталога данных.
-    printf '%s
-' "$GROUPS_FILE"
+    printf '%s\n' "$GROUPS_FILE"
+    ;;
+  domains-apply)
+    # Явный вызов (кнопка WebUI, переключение группы) обновляет маршруты
+    # сразу, не дожидаясь истечения refresh_minutes.
+    acquire_lock || exit 1
+    awg_domains_apply --force
+    release_lock
+    ;;
+  domains-clear)
+    acquire_lock || exit 1
+    awg_domains_clear
+    release_lock
+    ;;
+  domains-file)
+    printf '%s\n' "$DOMAINS_FILE"
+    ;;
+  domains-check)
+    "$BIN_DIR/awg" domains-check "$DOMAINS_FILE" "$GROUPS_FILE" "$PROFILES_DIR"
+    ;;
+  domains-resolve)
+    "$BIN_DIR/awg" resolve-domains "$DOMAINS_FILE" "$GROUPS_FILE" "$RUN_DIR" --json
     ;;
   pause)
     if [ -n "$2" ]; then
