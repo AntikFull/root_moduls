@@ -1,0 +1,15 @@
+#!/system/bin/sh
+UMASK=022
+umask $UMASK
+OUTFD=$2
+ZIPFILE=$3
+export OUTFD ZIPFILE
+if [ -f /data/adb/ksu/bin/busybox ]; then
+    exec /data/adb/ksu/bin/busybox sh -c ". /dev/stdin" < "$0"
+elif [ -f /data/adb/ap/bin/busybox ]; then
+    exec /data/adb/ap/bin/busybox sh -c ". /dev/stdin" < "$0"
+elif [ -f /data/adb/magisk/busybox ]; then
+    exec /data/adb/magisk/busybox sh -c ". /dev/stdin" < "$0"
+else
+    exec sh -c ". /dev/stdin" < "$0"
+fi

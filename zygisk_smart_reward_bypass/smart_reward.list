@@ -1,0 +1,57 @@
+# Список целевых пакетов для автоматического начисления наград и обхода рекламы
+# Автор: eCubz (https://t.me/eCubz)
+
+# Все пользовательские игры с устройства пользователя и Едадил:
+com.edadeal.android
+com.chillyroom.soulknightprequel
+com.impossibleapps.walkinghero
+com.ustwo.monumentvalley2
+com.ea.BejeweledBlitz_na
+com.pid.turnipboy
+com.ecubz.jewelhunter
+com.pockethaven.roguelegend
+com.notdoppler.earntodie2
+com.crunchyroll.gv.shantae7sirens.game
+com.cloudycastlegames.wordline
+com.ubisoft.princeofpersia.thelostcrown.mobile.action.adventure.platform
+com.epicoro.castleclashers
+ru.ecubz.roguehack
+com.mobile.legends.usa
+com.vicontout.benben
+com.ironhidegames.android.kingdomrush
+com.TornadoBear.WayofKings
+com.xctfqbqzvaykoti
+
+# Универсальный режим (автоматический перехват всех пользовательских игр и приложений):
+*
+
+# Список исключений (браузеры, мессенджеры, видео, инструменты):
+!com.microsoft.emmx
+!com.android.chrome
+!com.chrome.beta
+!com.yandex.browser
+!ru.yandex.searchplugin
+!org.mozilla.firefox
+!org.mozilla.fenix
+!com.opera.browser
+!com.brave.browser
+!org.telegram.messenger
+!org.telegram.messenger.web
+!org.telegram.plus
+!com.exteragram.messenger
+!com.exteragram
+!org.thunderdog.challegram
+!nekox.messenger
+!com.iMe.android
+!com.whatsapp
+!com.vkontakte.android
+!ru.vk.messenger
+!com.viber.voip
+!com.discord
+!org.thoughtcrime.securesms
+!com.google.android.youtube
+!app.revanced.android.youtube
+!com.termux
+!bin.mt.plus
+
+

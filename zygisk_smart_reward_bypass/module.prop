@@ -1,0 +1,8 @@
+id=zygisk_smart_reward_bypass
+name=Zygisk - Smart Reward & Ad Bypass
+version=v4.3.2
+versionCode=433
+author=eCubz (https://t.me/eCubz)
+description=Умный пропуск рекламы со 100% получением наград. Полная поддержка всех рекламных сетей и агрегаторов (AppLovin MAX, AdMob, Unity Ads, IronSource LevelPlay, Yandex, Mintegral, Vungle, Pangle). Мгновенный сброс экранов и начисление бонусов с 1-го клика. Поддержка: https://t.me/module_ecubz
+updateJson=https://raw.githubusercontent.com/AntikFull/root_moduls/main/zygisk_smart_reward_bypass/update.json
+minMagisk=24000
